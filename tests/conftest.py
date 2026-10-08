@@ -5,12 +5,15 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from pydantic_ai import models
 from sqlalchemy import create_engine, make_url, text
 from testcontainers.community.postgres import PostgresContainer
 
 from frontdesk.db.migrate import upgrade_to_head
 from frontdesk.tenancy.loader import load_pack
 from frontdesk.tenancy.pack import BusinessPack
+
+models.ALLOW_MODEL_REQUESTS = False
 
 PGVECTOR_IMAGE = "pgvector/pgvector:pg16"
 APP_ROLE = "frontdesk_app"

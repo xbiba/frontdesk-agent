@@ -7,10 +7,12 @@ license = "MIT"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "alembic>=1.20.0",
+    "anthropic[vertex]>=1.12.1",
     "fastapi>=0.143.0",
     "pgvector>=0.5.0",
     "psycopg[binary]>=3.3.6",
     "pydantic>=2.14.0",
+    "pydantic-ai-slim[anthropic]>=2.54.0",
     "pydantic-settings>=2.15.0",
     "pyyaml>=6.0.3",
     "sqlalchemy>=2.1.4",
@@ -71,6 +73,7 @@ ignore_missing_imports = true
 
 [tool.importlinter]
 root_package = "frontdesk"
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "Core packages never import entrypoints"
@@ -87,6 +90,31 @@ source_modules = [
   "frontdesk.tenancy",
 ]
 forbidden_modules = ["frontdesk.api", "frontdesk.cli", "frontdesk.worker"]
+
+[[tool.importlinter.contracts]]
+name = "Only the model gateway imports provider SDKs"
+type = "forbidden"
+source_modules = [
+  "frontdesk.agent",
+  "frontdesk.api",
+  "frontdesk.cli",
+  "frontdesk.conversation",
+  "frontdesk.db",
+  "frontdesk.knowledge",
+  "frontdesk.observability",
+  "frontdesk.safety",
+  "frontdesk.shop",
+  "frontdesk.tenancy",
+  "frontdesk.worker",
+]
+forbidden_modules = ["anthropic"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Safety rules and business packs stay framework-free"
+type = "forbidden"
+source_modules = ["frontdesk.safety", "frontdesk.tenancy"]
+forbidden_modules = ["pydantic_ai", "fastapi", "temporalio", "sqlalchemy"]
 
 [dependency-groups]
 dev = [
