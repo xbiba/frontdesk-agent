@@ -16,5 +16,12 @@ services:
       timeout: 3s
       retries: 30
 
+  temporal:
+    image: temporalio/temporal:latest  # pin a version in the M3 plan, when Temporal Cloud is chosen
+    command: ["server", "start-dev", "--ip", "0.0.0.0"]
+    ports:
+      - "127.0.0.1:7233:7233"
+      - "127.0.0.1:8233:8233"
+
 volumes:
   pgdata:
