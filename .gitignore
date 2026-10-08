@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+.env
+*.env.local
+evals/reports/
+requirements-audit.txt
+.fastembed_cache/
+.DS_Store

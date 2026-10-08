@@ -1,0 +1,89 @@
+[project]
+name = "frontdesk-agent"
+version = "0.1.0"
+description = "Messaging agent for small businesses: grounded answers and safe handoff to staff. Synthetic demo data only."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pydantic>=2.14.0",
+    "pydantic-settings>=2.15.0",
+    "pyyaml>=6.0.3",
+    "typer>=0.27.3",
+]
+
+[project.scripts]
+frontdesk = "frontdesk.cli.main:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/frontdesk"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+  "db: needs Docker (Postgres via testcontainers)",
+  "temporal: starts the Temporal test server",
+  "slow: downloads models or takes several seconds",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "S", "PT", "N", "ASYNC"]
+ignore = ["E501"]  # the formatter owns line length; long string literals stay whole
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S311", "S608"]
+"migrations/**" = ["N999", "S608"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+packages = ["frontdesk"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["fastembed.*", "pgvector.*"]
+ignore_missing_imports = true
+
+[tool.importlinter]
+root_package = "frontdesk"
+
+[[tool.importlinter.contracts]]
+name = "Core packages never import entrypoints"
+type = "forbidden"
+source_modules = [
+  "frontdesk.agent",
+  "frontdesk.conversation",
+  "frontdesk.db",
+  "frontdesk.knowledge",
+  "frontdesk.model_gateway",
+  "frontdesk.observability",
+  "frontdesk.safety",
+  "frontdesk.shop",
+  "frontdesk.tenancy",
+]
+forbidden_modules = ["frontdesk.api", "frontdesk.cli", "frontdesk.worker"]
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.168.5",
+    "import-linter>=2.15",
+    "mypy>=2.4.0",
+    "pre-commit>=4.6.2",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.10",
+    "types-pyyaml>=6.0.12.20260906",
+]
