@@ -28,6 +28,13 @@ def test_env_file_selects_one_business(tmp_path: Path) -> None:
     assert settings.require_business_pack() == Path("businesses/demo-clinic")
 
 
+def test_load_settings_without_a_file_reads_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FRONTDESK_BUSINESS_PACK", "businesses/demo-shop")
+    assert load_settings().require_business_pack() == Path("businesses/demo-shop")
+
+
 def test_missing_business_pack_is_a_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("FRONTDESK_BUSINESS_PACK", raising=False)
     with pytest.raises(ValueError, match="FRONTDESK_BUSINESS_PACK"):
