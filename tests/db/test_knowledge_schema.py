@@ -54,7 +54,7 @@ def _insert_as(factory: sessionmaker[Session], scope: str, business_id: str) -> 
 def test_app_role_cannot_write_for_another_business(database: tuple[str, str]) -> None:
     _, app_url = database
     factory = make_session_factory(make_engine(app_url))
-    with pytest.raises(DBAPIError):
+    with pytest.raises(DBAPIError, match="row-level security"):
         _insert_as(factory, "alpha", "beta")
 
 
