@@ -1,13 +1,11 @@
-import shutil
-from collections.abc import Callable
+import re
 from pathlib import Path
-from typing import Any
 
 import pytest
-import yaml
 
 from frontdesk.tenancy.loader import PackError, load_pack
 from frontdesk.tenancy.pack import BusinessPack, FixedTextKey, Profile
+from tests.tenancy.helpers import SHOP, copy_pack, edit_yaml
 
 PROMISES = (
     "contatter",
@@ -22,18 +20,6 @@ PROMISES = (
     "po ia kaloj",
     "do ta shohë",
 )
-
-
-def _copy(businesses_dir: Path, name: str, tmp_path: Path) -> Path:
-    target = tmp_path / name
-    shutil.copytree(businesses_dir / name, target)
-    return target
-
-
-def _edit(path: Path, change: Callable[[Any], None]) -> None:
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    change(data)
-    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
 def test_demo_clinic_loads(clinic_pack: BusinessPack) -> None:
@@ -64,8 +50,8 @@ def test_demo_texts_promise_nothing_and_handoff_gives_a_contact(
 
 
 def test_opening_days_use_day_codes(businesses_dir: Path, tmp_path: Path) -> None:
-    pack_dir = _copy(businesses_dir, "demo-shop", tmp_path)
-    _edit(
+    pack_dir = copy_pack(businesses_dir, "demo-shop", tmp_path)
+    edit_yaml(
         pack_dir / "data" / "location.yaml",
         lambda data: data["opening_hours"][0].update(days="weekdays"),
     )
@@ -76,8 +62,8 @@ def test_opening_days_use_day_codes(businesses_dir: Path, tmp_path: Path) -> Non
 def test_missing_fixed_text_names_business_language_and_key(
     businesses_dir: Path, tmp_path: Path
 ) -> None:
-    pack_dir = _copy(businesses_dir, "demo-clinic", tmp_path)
-    _edit(pack_dir / "business.yaml", lambda data: data["fixed_texts"]["it"].pop("handoff"))
+    pack_dir = copy_pack(businesses_dir, "demo-clinic", tmp_path)
+    edit_yaml(pack_dir / "business.yaml", lambda data: data["fixed_texts"]["it"].pop("handoff"))
     with pytest.raises(
         PackError, match=r"demo-clinic.*missing fixed text 'handoff' for language 'it'"
     ):
@@ -85,8 +71,8 @@ def test_missing_fixed_text_names_business_language_and_key(
 
 
 def test_unknown_service_reference_is_rejected(businesses_dir: Path, tmp_path: Path) -> None:
-    pack_dir = _copy(businesses_dir, "demo-clinic", tmp_path)
-    _edit(
+    pack_dir = copy_pack(businesses_dir, "demo-clinic", tmp_path)
+    edit_yaml(
         pack_dir / "data" / "doctors.yaml", lambda data: data[0]["service_ids"].append("cardiology")
     )
     with pytest.raises(PackError, match="unknown service 'cardiology'"):
@@ -94,8 +80,8 @@ def test_unknown_service_reference_is_rejected(businesses_dir: Path, tmp_path: P
 
 
 def test_orientation_needs_the_receptionist_profile(businesses_dir: Path, tmp_path: Path) -> None:
-    pack_dir = _copy(businesses_dir, "demo-shop", tmp_path)
-    _edit(pack_dir / "business.yaml", lambda data: data["features"].update(orientation=True))
+    pack_dir = copy_pack(businesses_dir, "demo-shop", tmp_path)
+    edit_yaml(pack_dir / "business.yaml", lambda data: data["features"].update(orientation=True))
     with pytest.raises(PackError, match="feature 'orientation'"):
         load_pack(pack_dir)
 
@@ -103,8 +89,8 @@ def test_orientation_needs_the_receptionist_profile(businesses_dir: Path, tmp_pa
 def test_calendar_integration_needs_the_receptionist_profile(
     businesses_dir: Path, tmp_path: Path
 ) -> None:
-    pack_dir = _copy(businesses_dir, "demo-shop", tmp_path)
-    _edit(
+    pack_dir = copy_pack(businesses_dir, "demo-shop", tmp_path)
+    edit_yaml(
         pack_dir / "business.yaml",
         lambda data: data.update(
             integrations={"calendar": {"credentials_ref": "secret/x", "calendars": {"a": "b"}}}
@@ -115,7 +101,7 @@ def test_calendar_integration_needs_the_receptionist_profile(
 
 
 def test_knowledge_document_needs_front_matter(businesses_dir: Path, tmp_path: Path) -> None:
-    pack_dir = _copy(businesses_dir, "demo-shop", tmp_path)
+    pack_dir = copy_pack(businesses_dir, "demo-shop", tmp_path)
     (pack_dir / "knowledge" / "broken.md").write_text("# No front matter\n", encoding="utf-8")
     with pytest.raises(PackError, match="front matter"):
         load_pack(pack_dir)
@@ -124,3 +110,177 @@ def test_knowledge_document_needs_front_matter(businesses_dir: Path, tmp_path: P
 def test_missing_directory_is_a_pack_error(tmp_path: Path) -> None:
     with pytest.raises(PackError, match="not found"):
         load_pack(tmp_path / "nowhere")
+
+
+# --- the shipped demo packs expose every data file -----------------------------------------------
+
+
+def test_demo_clinic_exposes_every_data_file(clinic_pack: BusinessPack) -> None:
+    assert clinic_pack.location.phone == "+355 00 000 0000"
+    assert [h.days for h in clinic_pack.location.opening_hours] == ["mon-fri", "sat"]
+    assert [d.id for d in clinic_pack.doctors] == [
+        "dr-arben-demo",
+        "dr-giulia-esempio",
+        "ft-elira-shembull",
+    ]
+    assert {p.service_id: p.amount for p in clinic_pack.prices} == {
+        "orthopedics-visit": "40",
+        "physiotherapy": "30",
+        "dermatology-visit": "35",
+    }
+    assert [o.id for o in clinic_pack.orientation] == ["back", "knee", "skin"]
+    assert [d.key for d in clinic_pack.documents] == [
+        "first-visit-it",
+        "parking-en",
+        "payments-sq",
+        "physiotherapy-it",
+        "physiotherapy-sq",
+    ]
+
+
+def test_demo_shop_exposes_every_data_file(shop_pack: BusinessPack) -> None:
+    assert shop_pack.location.phone == "+39 00 0000 0000"
+    assert [h.days for h in shop_pack.location.opening_hours] == ["tue-sat"]
+    assert [d.key for d in shop_pack.documents] == ["returns-en", "returns-it", "shipping-it"]
+    assert shop_pack.orders[0].status == {"it": "spedito", "en": "shipped"}
+
+
+# --- file errors name the file (path inside the pack), and the line and column for YAML ---------
+
+
+def test_missing_business_file_is_named(businesses_dir: Path, tmp_path: Path) -> None:
+    pack_dir = copy_pack(businesses_dir, SHOP, tmp_path)
+    (pack_dir / "business.yaml").unlink()
+    with pytest.raises(PackError, match=r"^missing file: business\.yaml$"):
+        load_pack(pack_dir)
+
+
+@pytest.mark.parametrize("content", ["", "- a\n- b\n", "just text\n"])
+def test_business_file_must_be_a_mapping(
+    businesses_dir: Path, tmp_path: Path, content: str
+) -> None:
+    pack_dir = copy_pack(businesses_dir, SHOP, tmp_path)
+    (pack_dir / "business.yaml").write_text(content, encoding="utf-8")
+    with pytest.raises(PackError, match=r"^business\.yaml: expected a mapping$"):
+        load_pack(pack_dir)
+
+
+@pytest.mark.parametrize(
+    ("file", "content", "message"),
+    [
+        pytest.param(
+            "business.yaml",
+            "id: demo-shop\nname: Bottega Demo: the shop\n",
+            "business.yaml: invalid YAML at line 2, column 19: mapping values are not allowed here",
+            id="business-file",
+        ),
+        pytest.param(
+            "data/location.yaml",
+            "address: Via Roma 1\nphone: +39: 00\n",
+            "data/location.yaml: invalid YAML at line 2, column 11: "
+            "mapping values are not allowed here",
+            id="data-file",
+        ),
+        pytest.param(
+            "data/orders.yaml",
+            "- reference: ORD-10427\n---\n- reference: ORD-10458\n",
+            "data/orders.yaml: invalid YAML at line 2, column 1: "
+            "expected a single document in the stream, but found another document",
+            id="context-and-problem",
+        ),
+    ],
+)
+def test_invalid_yaml_names_the_file_line_and_column(
+    businesses_dir: Path, tmp_path: Path, file: str, content: str, message: str
+) -> None:
+    pack_dir = copy_pack(businesses_dir, SHOP, tmp_path)
+    (pack_dir / file).write_text(content, encoding="utf-8")
+    with pytest.raises(PackError, match=f"^{re.escape(message)}$"):
+        load_pack(pack_dir)
+
+
+def test_yaml_error_without_a_position_still_names_the_file(
+    businesses_dir: Path, tmp_path: Path
+) -> None:
+    pack_dir = copy_pack(businesses_dir, SHOP, tmp_path)
+    (pack_dir / "data" / "location.yaml").write_text("address: \x00x\n", encoding="utf-8")
+    with pytest.raises(
+        PackError, match=r"^data/location\.yaml: invalid YAML: unacceptable character #x0000"
+    ):
+        load_pack(pack_dir)
+
+
+def test_invalid_front_matter_names_the_file_and_the_line_in_it(
+    businesses_dir: Path, tmp_path: Path
+) -> None:
+    pack_dir = copy_pack(businesses_dir, SHOP, tmp_path)
+    document = "---\ntitle: Returns: how to\nlanguage: en\n---\nBody\n"
+    (pack_dir / "knowledge" / "returns-en.md").write_text(document, encoding="utf-8")
+    message = (
+        "knowledge/returns-en.md: invalid YAML at line 2, column 15: "
+        "mapping values are not allowed here"
+    )
+    with pytest.raises(PackError, match=f"^{re.escape(message)}$"):
+        load_pack(pack_dir)
+
+
+@pytest.mark.parametrize(
+    ("file", "text"),
+    [
+        pytest.param(
+            "knowledge/returns-it.md",
+            "---\ntitle: Resi\nlanguage: it\n---\nPerché\n",
+            id="knowledge-document",
+        ),
+        pytest.param(
+            "data/location.yaml",
+            "address: Perché\nphone: x\nemail: y\nopening_hours: []\n",
+            id="data-file",
+        ),
+    ],
+)
+def test_file_that_is_not_utf8_is_named(
+    businesses_dir: Path, tmp_path: Path, file: str, text: str
+) -> None:
+    pack_dir = copy_pack(businesses_dir, SHOP, tmp_path)
+    (pack_dir / file).write_bytes(text.encode("latin-1"))
+    with pytest.raises(PackError, match=rf"^{re.escape(file)}: not valid UTF-8 text"):
+        load_pack(pack_dir)
+
+
+def test_byte_order_mark_is_ignored(businesses_dir: Path, tmp_path: Path) -> None:
+    pack_dir = copy_pack(businesses_dir, SHOP, tmp_path)
+    for relative in ("business.yaml", "data/orders.yaml", "knowledge/returns-en.md"):
+        path = pack_dir / relative
+        path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+    assert load_pack(pack_dir) == load_pack(businesses_dir / SHOP)
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        pytest.param("Intro\n---\ntitle: X\nlanguage: it\n---\nBody\n", id="no-opening-delimiter"),
+        pytest.param(
+            "---\ntitle: X\nlanguage: it\nBody, never closed\n", id="no-closing-delimiter"
+        ),
+    ],
+)
+def test_front_matter_needs_an_opening_and_a_closing_delimiter(
+    businesses_dir: Path, tmp_path: Path, document: str
+) -> None:
+    pack_dir = copy_pack(businesses_dir, SHOP, tmp_path)
+    (pack_dir / "knowledge" / "shipping-it.md").write_text(document, encoding="utf-8")
+    message = r"^knowledge/shipping-it\.md: knowledge documents start with YAML front matter$"
+    with pytest.raises(PackError, match=message):
+        load_pack(pack_dir)
+
+
+@pytest.mark.parametrize("front", ["- a\n- b\n", ""], ids=["a-list", "empty"])
+def test_front_matter_must_be_a_mapping(businesses_dir: Path, tmp_path: Path, front: str) -> None:
+    pack_dir = copy_pack(businesses_dir, SHOP, tmp_path)
+    (pack_dir / "knowledge" / "shipping-it.md").write_text(
+        f"---\n{front}---\nBody\n", encoding="utf-8"
+    )
+    message = r"^knowledge/shipping-it\.md: front matter must be a mapping$"
+    with pytest.raises(PackError, match=message):
+        load_pack(pack_dir)

@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable
 from datetime import date
+from decimal import Decimal
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 Language = Literal["sq", "it", "en"]
 
@@ -17,6 +18,16 @@ _TIME = r"^([01]\d|2[0-3]):[0-5]\d$"
 _DAY = "(mon|tue|wed|thu|fri|sat|sun)"
 _DAYS = rf"^{_DAY}(-{_DAY})?$"
 _AMOUNT = r"^\d+(\.\d{2})?$"
+
+
+def _not_blank(value: str) -> str:
+    if not value.strip():
+        raise ValueError("must not be blank")
+    return value
+
+
+# Text that is shown to people (contacts, names, an order's status) must say something.
+NonBlankStr = Annotated[str, AfterValidator(_not_blank)]
 
 
 class Profile(StrEnum):
@@ -61,15 +72,15 @@ class OpeningHours(Frozen):
 
 
 class Location(Frozen):
-    address: str
-    phone: str
-    email: str
+    address: NonBlankStr
+    phone: NonBlankStr
+    email: NonBlankStr
     opening_hours: list[OpeningHours] = Field(min_length=1)
 
 
 class Service(Frozen):
     id: str = Field(pattern=_ID)
-    names: dict[Language, str]
+    names: dict[Language, NonBlankStr]
     duration_minutes: int = Field(gt=0, le=480)
     bookable_online: bool = False
     requires_consult: bool = False
@@ -77,7 +88,7 @@ class Service(Frozen):
 
 class Doctor(Frozen):
     id: str = Field(pattern=_ID)
-    name: str
+    name: NonBlankStr
     service_ids: list[str] = Field(min_length=1)
 
 
@@ -90,6 +101,16 @@ class Price(Frozen):
     valid_from: date | None = None
     valid_until: date | None = None
 
+    @model_validator(mode="after")
+    def _check_ranges(self) -> Price:
+        problems: list[str] = []
+        if self.max_amount is not None and Decimal(self.max_amount) < Decimal(self.amount):
+            problems.append(f"max_amount {self.max_amount} is below amount {self.amount}")
+        problems += _window_problems(self.valid_from, self.valid_until)
+        if problems:
+            raise ValueError(f"price for '{self.service_id}': " + "; ".join(problems))
+        return self
+
 
 class OrientationEntry(Frozen):
     id: str = Field(pattern=_ID)
@@ -100,7 +121,7 @@ class OrientationEntry(Frozen):
 class Order(Frozen):
     reference: str = Field(pattern=r"^ORD-\d{4,8}$")
     postal_code: str = Field(pattern=r"^\d{4,6}$")
-    status: dict[Language, str]
+    status: dict[Language, NonBlankStr] = Field(min_length=1)
     eta: date | None = None
 
 
@@ -113,10 +134,17 @@ class KnowledgeDocument(Frozen):
     valid_from: date | None = None
     valid_until: date | None = None
 
+    @model_validator(mode="after")
+    def _check_window(self) -> KnowledgeDocument:
+        problems = _window_problems(self.valid_from, self.valid_until)
+        if problems:
+            raise ValueError(f"document '{self.key}': " + "; ".join(problems))
+        return self
+
 
 class BusinessPack(Frozen):
     id: str = Field(pattern=_ID)
-    name: str
+    name: NonBlankStr
     profile: Profile
     isolation_level: Literal["T1", "T2", "T3"]
     default_language: Language
@@ -229,3 +257,9 @@ def _profile_problems(pack: BusinessPack) -> list[str]:
 
 def _duplicates(values: Iterable[str]) -> list[str]:
     return sorted(value for value, count in Counter(values).items() if count > 1)
+
+
+def _window_problems(valid_from: date | None, valid_until: date | None) -> list[str]:
+    if valid_from is not None and valid_until is not None and valid_from > valid_until:
+        return [f"valid_from {valid_from} is after valid_until {valid_until}"]
+    return []
