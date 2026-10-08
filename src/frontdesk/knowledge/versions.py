@@ -9,12 +9,14 @@ models are never compared (ADR-0005).
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from itertools import groupby
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, select, update
@@ -27,7 +29,7 @@ from frontdesk.safety.normalize import normalize
 from frontdesk.tenancy.pack import BusinessPack
 
 _KNOWLEDGE_FIELDS = {"location", "services", "doctors", "prices", "orientation", "documents"}
-_TEXT = "text"  # the body hash of a document: reported as "text changed", never shown
+_TEXT_INDENT = " " * 6  # deeper than any report line, so a line of text cannot pass for one
 
 
 class VersionStatus(StrEnum):
@@ -199,6 +201,12 @@ def reembed_active(session: Session, business_id: str, embedder: Embedder) -> in
 
 
 def review_report(session: Session, version_id: uuid.UUID) -> str:
+    """What the owner reads before approving: the version against the active one.
+
+    An added or removed document or record is listed with all its values, a changed one with each
+    changed value before and after. A document's text is shown whole when the document is added or
+    removed and as a unified diff when it changed; its metadata stays ordinary fields.
+    """
     version = session.get(KnowledgeVersion, version_id)
     if version is None:
         raise KnowledgeStateError(f"knowledge version {version_id} does not exist")
@@ -319,30 +327,74 @@ def _embed_chunks(session: Session, version_id: uuid.UUID, embedder: Embedder) -
     return len(rows)
 
 
-def _documents(session: Session, version_id: uuid.UUID) -> dict[str, dict[str, str]]:
+@dataclass(frozen=True)
+class _Entry:
+    """A document or a record as stored, ready to be compared with its other version."""
+
+    fields: dict[str, str]
+    wording: str | None = None  # a document's text as its chunks hold it
+    content_hash: str | None = None  # a document's content hash
+
+
+def _documents(session: Session, version_id: uuid.UUID) -> dict[str, _Entry]:
+    chunks = _chunks_by_document(session, version_id)
     rows = session.scalars(select(Document).where(Document.knowledge_version_id == version_id))
     return {
-        row.doc_key: _flatten(
-            {
-                "title": row.title,
-                "language": row.language,
-                "public_url": row.public_url,
-                "valid_from": row.valid_from,
-                "valid_until": row.valid_until,
-                _TEXT: row.content_hash,
-            }
+        row.doc_key: _Entry(
+            fields=_flatten(
+                {
+                    "title": row.title,
+                    "language": row.language,
+                    "public_url": row.public_url,
+                    "valid_from": row.valid_from,
+                    "valid_until": row.valid_until,
+                }
+            ),
+            wording=_wording(row.title, chunks.get(row.id, [])),
+            content_hash=row.content_hash,
         )
         for row in rows
     }
 
 
-def _records(session: Session, version_id: uuid.UUID) -> dict[str, dict[str, str]]:
+def _chunks_by_document(
+    session: Session, version_id: uuid.UUID
+) -> dict[uuid.UUID, list[tuple[str, str]]]:
+    rows = session.execute(
+        select(Chunk.document_id, Chunk.heading, Chunk.content)
+        .where(Chunk.knowledge_version_id == version_id)
+        .order_by(Chunk.document_id, Chunk.ordinal)
+    ).all()
+    return {
+        document_id: [(row.heading, row.content) for row in group]
+        for document_id, group in groupby(rows, key=lambda row: row.document_id)
+    }
+
+
+def _wording(title: str, chunks: list[tuple[str, str]]) -> str:
+    """A document's text as its chunks hold it: a '## section' line per section, then paragraphs.
+
+    The chunker keeps no heading levels and no extra blank lines, so this is the text the bot can
+    quote, not a byte-for-byte copy of the file; a paragraph that was cut in the middle shows the
+    cut as a paragraph break.
+    """
+    blocks: list[str] = []
+    previous = ""
+    for heading, content in chunks:
+        section = "" if heading == title else heading.removeprefix(f"{title} > ")
+        starts_section = section != "" and section != previous
+        blocks.append(f"## {section}\n{content}" if starts_section else content)
+        previous = section
+    return "\n\n".join(blocks)
+
+
+def _records(session: Session, version_id: uuid.UUID) -> dict[str, _Entry]:
     rows = session.execute(
         select(Record.kind, Record.record_key, Record.payload).where(
             Record.knowledge_version_id == version_id
         )
     ).all()
-    return {f"{row.kind}:{row.record_key}": _flatten(row.payload) for row in rows}
+    return {f"{row.kind}:{row.record_key}": _Entry(fields=_flatten(row.payload)) for row in rows}
 
 
 def _flatten(value: Any, path: str = "") -> dict[str, str]:
@@ -361,32 +413,65 @@ def _flatten(value: Any, path: str = "") -> dict[str, str]:
     return flat
 
 
-def _diff_lines(old: dict[str, dict[str, str]], new: dict[str, dict[str, str]]) -> list[str]:
-    """What the owner approves: every changed field with its value before and after."""
+def _diff_lines(old: dict[str, _Entry], new: dict[str, _Entry]) -> list[str]:
+    """What the owner approves: what is added or removed, with its values, and what changed."""
     lines: list[str] = []
     for key in sorted(old.keys() | new.keys()):
         if key not in old:
-            lines.append(f"- added: {key}")
-            lines += [
-                f"  - {field}: {_shown(value)}"
-                for field, value in sorted(new[key].items())
-                if field != _TEXT
-            ]
+            lines += _listing("added", key, new[key])
         elif key not in new:
-            lines.append(f"- removed: {key}")
+            lines += _listing("removed", key, old[key])
         elif old[key] != new[key]:
-            before, after = old[key], new[key]
-            lines.append(f"- changed: {key}")
-            for field in sorted(before.keys() | after.keys()):
-                if before.get(field) == after.get(field):
-                    continue
-                if field == _TEXT:
-                    lines.append("  - text changed")
-                else:
-                    lines.append(
-                        f"  - {field}: {_shown(before.get(field))} → {_shown(after.get(field))}"
-                    )
+            lines += _changes(key, old[key], new[key])
     return lines or ["- no changes"]
+
+
+def _listing(verb: str, key: str, entry: _Entry) -> list[str]:
+    """An added or removed item: every value and, for a document, its text."""
+    lines = [f"- {verb}: {key}"]
+    lines += [f"  - {field}: {_shown(value)}" for field, value in sorted(entry.fields.items())]
+    if entry.wording is not None:
+        lines += _text_lines(entry.wording)
+    return lines
+
+
+def _text_lines(wording: str) -> list[str]:
+    """A document's text under its values; a document without text says so."""
+    if not wording:
+        return ["  - text: —"]
+    return ["  - text:", *_indented(wording.splitlines())]
+
+
+def _changes(key: str, before: _Entry, after: _Entry) -> list[str]:
+    """A changed item: each changed value before and after, then what happened to its text."""
+    lines = [f"- changed: {key}"]
+    for field in sorted(before.fields.keys() | after.fields.keys()):
+        if before.fields.get(field) != after.fields.get(field):
+            lines.append(
+                f"  - {field}: {_shown(before.fields.get(field))} → {_shown(after.fields.get(field))}"
+            )
+    return lines + _text_changes(before, after)
+
+
+def _text_changes(before: _Entry, after: _Entry) -> list[str]:
+    if before.wording == after.wording and before.content_hash == after.content_hash:
+        return []
+    diff = list(
+        difflib.unified_diff(
+            (before.wording or "").splitlines(),
+            (after.wording or "").splitlines(),
+            fromfile="active version",
+            tofile="this version",
+            lineterm="",
+        )
+    )
+    if not diff:
+        return ["  - text changed (only formatting: the wording is the same)"]
+    return ["  - text changed:", *_indented(diff)]
+
+
+def _indented(lines: list[str]) -> list[str]:
+    return [f"{_TEXT_INDENT}{line}".rstrip() for line in lines]
 
 
 def _shown(value: str | None) -> str:

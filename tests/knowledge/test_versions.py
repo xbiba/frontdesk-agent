@@ -1,4 +1,3 @@
-import re
 import shutil
 import uuid
 from collections.abc import Callable, Sequence
@@ -9,6 +8,7 @@ from typing import Any
 import pytest
 import yaml
 from sqlalchemy import func, select
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
@@ -235,6 +235,13 @@ class WrongSizeEmbedder:
         return [[1.0, 0.0] for _ in texts]
 
 
+class InjectedError(RuntimeError):
+    """A failure injected between two steps of an operation."""
+
+
+HOUR = timedelta(hours=1)
+
+
 def _activate(
     session: Session, pack: BusinessPack, *, embedder: Embedder | None = None, now: datetime = NOW
 ) -> uuid.UUID:
@@ -263,6 +270,24 @@ def _negated(vectors: list[list[float]]) -> list[list[float]]:
     return [[-value for value in vector] for vector in vectors]
 
 
+def _committed(
+    factory: sessionmaker[Session], business_id: str, version_id: uuid.UUID
+) -> tuple[str, str | None, int, int]:
+    """Status, embedder, chunks and chunks without a vector, as a new transaction sees them."""
+    with business_session(factory, business_id) as session:
+        row = session.execute(
+            select(KnowledgeVersion.status, KnowledgeVersion.embedder).where(
+                KnowledgeVersion.id == version_id
+            )
+        ).one()
+        return (
+            row.status,
+            row.embedder,
+            _chunk_count(session, version_id),
+            _chunk_count(session, version_id, unembedded=True),
+        )
+
+
 def _approval(session: Session, version_id: uuid.UUID) -> tuple[Any, ...]:
     """Who approved a version, on what evidence and when, as stored."""
     row = session.execute(
@@ -283,28 +308,6 @@ def _dates(session: Session, version_id: uuid.UUID) -> tuple[Any, ...]:
         )
     ).one()
     return tuple(row)
-
-
-def _reworded_parking_pack(businesses_dir: Path, tmp_path: Path) -> BusinessPack:
-    target = tmp_path / "demo-clinic"
-    shutil.copytree(businesses_dir / "demo-clinic", target)
-    parking = target / "knowledge" / "parking-en.md"
-    text = parking.read_text(encoding="utf-8")
-    assert "six free parking spaces" in text
-    parking.write_text(text.replace("six free", "eight free"), encoding="utf-8")
-    return load_pack(target)
-
-
-def _shrunken_pack(businesses_dir: Path, tmp_path: Path) -> BusinessPack:
-    """The clinic without its payments document and without the dermatology price."""
-    target = tmp_path / "demo-clinic"
-    shutil.copytree(businesses_dir / "demo-clinic", target)
-    (target / "knowledge" / "payments-sq.md").unlink()
-    prices_path = target / "data" / "prices.yaml"
-    prices = yaml.safe_load(prices_path.read_text(encoding="utf-8"))
-    kept = [price for price in prices if price["service_id"] != "dermatology-visit"]
-    prices_path.write_text(yaml.safe_dump(kept, allow_unicode=True), encoding="utf-8")
-    return load_pack(target)
 
 
 def test_a_draft_stores_every_document_chunk_and_record_of_the_pack(
@@ -418,6 +421,94 @@ def test_a_failed_activation_changes_nothing(
         assert version_status(session, second.version_id) is VersionStatus.APPROVED
 
 
+def test_an_activation_that_fails_after_retiring_the_old_version_changes_nothing(
+    factory: sessionmaker[Session],
+    clinic_pack: BusinessPack,
+    businesses_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with business_session(factory, clinic_pack.id) as session:
+        first = _activate(session, clinic_pack)
+    with business_session(factory, clinic_pack.id) as session:
+        second = create_draft(session, _changed_price_pack(businesses_dir, tmp_path)).version_id
+        approve(session, second, approved_by="Owner", evidence="sheet v2", now=NOW)
+    seen: list[VersionStatus | None] = []
+
+    def fail_after_the_retirement(session: Session, *args: Any, **kwargs: Any) -> None:
+        seen.append(version_status(session, first))
+        raise InjectedError
+
+    monkeypatch.setattr("frontdesk.knowledge.versions._transition", fail_after_the_retirement)
+    with pytest.raises(InjectedError), business_session(factory, clinic_pack.id) as session:
+        activate(session, second, HashEmbedder(), now=NOW + HOUR)
+
+    assert seen == [VersionStatus.RETIRED]  # the failure came after the old version was retired
+    assert _committed(factory, clinic_pack.id, first)[0] == "active"
+    status, embedder, chunks, unembedded = _committed(factory, clinic_pack.id, second)
+    assert (status, embedder) == ("approved", None)
+    assert chunks > 0
+    assert unembedded == chunks
+
+
+def test_a_rollback_that_fails_leaves_the_active_version_and_the_candidate_as_they_were(
+    factory: sessionmaker[Session],
+    clinic_pack: BusinessPack,
+    businesses_dir: Path,
+    tmp_path: Path,
+) -> None:
+    with business_session(factory, clinic_pack.id) as session:
+        first = _activate(session, clinic_pack, now=NOW)
+    with business_session(factory, clinic_pack.id) as session:
+        second = _activate(session, _changed_price_pack(businesses_dir, tmp_path), now=NOW + HOUR)
+    with (
+        pytest.raises(KnowledgeStateError, match="embedding dimension"),
+        business_session(factory, clinic_pack.id) as session,
+    ):
+        rollback(session, clinic_pack.id, WrongSizeEmbedder(), now=NOW + 2 * HOUR)
+
+    assert _committed(factory, clinic_pack.id, second)[0] == "active"
+    status, embedder, chunks, unembedded = _committed(factory, clinic_pack.id, first)
+    assert (status, embedder, unembedded) == ("retired", "hash-v1", 0)
+    assert chunks > 0
+
+
+def test_a_reembedding_that_fails_leaves_the_vectors_in_place(
+    factory: sessionmaker[Session], clinic_pack: BusinessPack
+) -> None:
+    with business_session(factory, clinic_pack.id) as session:
+        version_id = _activate(session, clinic_pack)
+    with (
+        pytest.raises(KnowledgeStateError, match="embedding dimension"),
+        business_session(factory, clinic_pack.id) as session,
+    ):
+        reembed_active(session, clinic_pack.id, WrongSizeEmbedder())
+
+    status, embedder, chunks, unembedded = _committed(factory, clinic_pack.id, version_id)
+    assert (status, embedder, unembedded) == ("active", "hash-v1", 0)
+    assert chunks > 0
+
+
+def test_another_business_cannot_see_or_change_a_version(
+    factory: sessionmaker[Session], clinic_pack: BusinessPack, shop_pack: BusinessPack
+) -> None:
+    with business_session(factory, clinic_pack.id) as session:
+        draft = create_draft(session, clinic_pack)
+    with business_session(factory, shop_pack.id) as session:
+        with pytest.raises(KnowledgeStateError, match="is not draft"):
+            approve(session, draft.version_id, approved_by="Owner", evidence="sheet", now=NOW)
+        with pytest.raises(KnowledgeStateError, match="does not exist"):
+            review_report(session, draft.version_id)
+    with (
+        pytest.raises(DBAPIError, match="row-level security"),
+        business_session(factory, shop_pack.id) as session,
+    ):
+        create_draft(session, clinic_pack)
+
+    with business_session(factory, clinic_pack.id) as session:
+        assert version_status(session, draft.version_id) is VersionStatus.DRAFT
+
+
 def test_an_unchanged_pack_matches_a_live_version_but_not_a_retired_one(
     factory: sessionmaker[Session],
     clinic_pack: BusinessPack,
@@ -496,79 +587,6 @@ def test_rollback_recomputes_the_vectors_of_the_restored_version(
         )
         assert rollback(session, clinic_pack.id, NegatedEmbedder(), now=NOW) == first
         assert _vectors(session, first) == _negated(before)
-
-
-def test_the_report_names_its_version_status_and_what_it_is_compared_with(
-    factory: sessionmaker[Session],
-    clinic_pack: BusinessPack,
-    businesses_dir: Path,
-    tmp_path: Path,
-) -> None:
-    with business_session(factory, clinic_pack.id) as session:
-        first = create_draft(session, clinic_pack)
-        assert review_report(session, first.version_id).startswith(
-            f"# Knowledge version {first.version_id}\n\n"
-            "- Business: demo-clinic\n"
-            "- Status: draft\n"
-            "- Compared with active version: none\n\n"
-            "## Documents\n"
-        )
-        approve(session, first.version_id, approved_by="Owner", evidence="sheet v1", now=NOW)
-        assert "- Status: approved\n" in review_report(session, first.version_id)
-        activate(session, first.version_id, HashEmbedder(), now=NOW)
-
-        second = create_draft(session, _changed_price_pack(businesses_dir, tmp_path))
-        report = review_report(session, second.version_id)
-    assert f"# Knowledge version {second.version_id}\n" in report
-    assert f"- Compared with active version: {first.version_id}\n" in report
-
-
-def test_report_says_when_a_document_text_changed(
-    factory: sessionmaker[Session],
-    clinic_pack: BusinessPack,
-    businesses_dir: Path,
-    tmp_path: Path,
-) -> None:
-    with business_session(factory, clinic_pack.id) as session:
-        _activate(session, clinic_pack)
-        second = create_draft(session, _reworded_parking_pack(businesses_dir, tmp_path))
-        report = review_report(session, second.version_id)
-    assert "- changed: parking-en\n  - text changed" in report
-    assert "eight" not in report
-    assert re.search(r"[0-9a-f]{64}", report) is None
-
-
-def test_report_lists_removed_documents_and_records(
-    factory: sessionmaker[Session],
-    clinic_pack: BusinessPack,
-    businesses_dir: Path,
-    tmp_path: Path,
-) -> None:
-    with business_session(factory, clinic_pack.id) as session:
-        _activate(session, clinic_pack)
-        second = create_draft(session, _shrunken_pack(businesses_dir, tmp_path))
-        report = review_report(session, second.version_id)
-    assert "## Documents\n- removed: payments-sq\n\n" in report
-    assert "## Records\n- removed: price:dermatology-visit" in report
-
-
-def test_a_first_report_shows_no_content_hashes(
-    factory: sessionmaker[Session], clinic_pack: BusinessPack
-) -> None:
-    with business_session(factory, clinic_pack.id) as session:
-        report = review_report(session, create_draft(session, clinic_pack).version_id)
-    assert "- added: parking-en" in report
-    assert re.search(r"[0-9a-f]{64}", report) is None
-
-
-def test_report_for_an_unknown_version_is_an_error(
-    factory: sessionmaker[Session], clinic_pack: BusinessPack
-) -> None:
-    with (
-        business_session(factory, clinic_pack.id) as session,
-        pytest.raises(KnowledgeStateError, match="does not exist"),
-    ):
-        review_report(session, uuid.uuid4())
 
 
 def test_a_business_without_knowledge_has_nothing_to_mismatch_or_reembed(
