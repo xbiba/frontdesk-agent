@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+_PARAGRAPH_BREAK = re.compile(r"\n\s*\n")
 MAX_CHUNK_CHARS = 1200
 
 
@@ -45,7 +46,7 @@ def _sections(body: str) -> list[tuple[str, str]]:
 def _split(text: str, max_chars: int) -> list[str]:
     pieces: list[str] = []
     current = ""
-    for paragraph in (p.strip() for p in text.split("\n\n")):
+    for paragraph in (p.strip() for p in _PARAGRAPH_BREAK.split(text)):
         if not paragraph:
             continue
         candidate = f"{current}\n\n{paragraph}" if current else paragraph
