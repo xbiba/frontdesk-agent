@@ -6,12 +6,12 @@ services:
       POSTGRES_PASSWORD: frontdesk
       POSTGRES_DB: frontdesk
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - ./deploy/postgres-init:/docker-entrypoint-initdb.d:ro
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U frontdesk -d frontdesk"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U frontdesk -d frontdesk"]
       interval: 2s
       timeout: 3s
       retries: 30
