@@ -1,0 +1,21 @@
+- id: orthopedics-visit
+  names: {sq: "Vizitë ortopedike", it: "Visita ortopedica", en: "Orthopedic visit"}
+  duration_minutes: 30
+  bookable_online: true
+- id: physiotherapy
+  names: {sq: "Fizioterapi", it: "Fisioterapia", en: "Physiotherapy"}
+  duration_minutes: 45
+  bookable_online: true
+- id: osteopathy
+  names: {sq: "Osteopati", it: "Osteopatia", en: "Osteopathy"}
+  duration_minutes: 45
+  bookable_online: true
+- id: dermatology-visit
+  names: {sq: "Vizitë dermatologjike", it: "Visita dermatologica", en: "Dermatology visit"}
+  duration_minutes: 20
+  bookable_online: true
+- id: ultrasound
+  names: {sq: "Ekografi", it: "Ecografia", en: "Ultrasound scan"}
+  duration_minutes: 20
+  bookable_online: false
+  requires_consult: true

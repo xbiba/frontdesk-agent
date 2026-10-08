@@ -1,0 +1,41 @@
+id: demo-clinic
+name: Klinika Demo
+profile: receptionist
+isolation_level: T1  # demo data; a real clinic deployment declares T3
+default_language: sq
+languages: [sq, it, en]
+timezone: Europe/Tirane
+features:
+  orientation: true
+  order_status: false
+fixed_texts:
+  sq:
+    disclosure: "Përshëndetje! Ju shkruan asistenti automatik i Klinikës Demo. Nëse doni të flisni me një person, shkruani \"operator\"."
+    greeting: "Si mund t'ju ndihmoj? Mund të pyesni për shërbimet, mjekët, çmimet, oraret ose adresën."
+    emergency: "Nëse është urgjencë, telefononi menjëherë numrin e urgjencës ose shkoni në urgjencën më të afërt."
+    clinical: "Nuk mund të jap këshilla mjekësore përmes mesazheve. Nëse është urgjencë, telefononi menjëherë numrin e urgjencës."
+    personal_data: "Ju lutem mos dërgoni të dhëna personale ose shëndetësore këtu: nuk mund t'i përdor. Për të folur me një person, telefononi recepsionin në +355 00 000 0000."
+    handoff: "Për të folur me një person, telefononi recepsionin në +355 00 000 0000."
+    no_information: "Nuk e kam këtë informacion."
+    clarification: "Mund të më tregoni pak më shumë se çfarë ju nevojitet? Mund t'ju ndihmoj me shërbimet, mjekët, çmimet, oraret ose adresën."
+    attachment: "Nuk mund të hap bashkëngjitje. Për të folur me një person, telefononi recepsionin në +355 00 000 0000."
+  it:
+    disclosure: "Ciao! Ti risponde l'assistente automatico di Klinika Demo. Se vuoi parlare con una persona, scrivi \"operatore\"."
+    greeting: "Come posso aiutarti? Puoi chiedere di servizi, medici, prezzi, orari o indirizzo."
+    emergency: "Se è un'emergenza, chiama subito il numero di emergenza o vai al pronto soccorso più vicino."
+    clinical: "Non posso dare consigli medici via messaggio. Se è un'emergenza, chiama subito il numero di emergenza."
+    personal_data: "Per favore non inviare qui dati personali o sanitari: non posso usarli. Per parlare con una persona, chiama la reception al +355 00 000 0000."
+    handoff: "Per parlare con una persona, chiama la reception al +355 00 000 0000."
+    no_information: "Non ho questa informazione."
+    clarification: "Puoi dirmi meglio di cosa hai bisogno? Posso aiutarti con servizi, medici, prezzi, orari o indirizzo."
+    attachment: "Non posso aprire allegati. Per parlare con una persona, chiama la reception al +355 00 000 0000."
+  en:
+    disclosure: "Hi! You're chatting with Klinika Demo's automated assistant. To talk to a person, write \"operator\"."
+    greeting: "How can I help? You can ask about services, doctors, prices, opening hours or our address."
+    emergency: "If this is an emergency, call your local emergency number now or go to the nearest emergency department."
+    clinical: "I can't give medical advice by message. If this is an emergency, call your local emergency number now."
+    personal_data: "Please don't send personal or health details here: I can't use them. To talk to a person, call reception on +355 00 000 0000."
+    handoff: "To talk to a person, call reception on +355 00 000 0000."
+    no_information: "I don't have that information."
+    clarification: "Could you tell me a bit more about what you need? I can help with services, doctors, prices, opening hours or our address."
+    attachment: "I can't open attachments. To talk to a person, call reception on +355 00 000 0000."

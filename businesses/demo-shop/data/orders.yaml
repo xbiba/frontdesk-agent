@@ -1,0 +1,7 @@
+- reference: ORD-10427
+  postal_code: "20121"
+  status: {it: "spedito", en: "shipped"}
+  eta: 2026-10-10
+- reference: ORD-10458
+  postal_code: "00184"
+  status: {it: "in preparazione", en: "being prepared"}

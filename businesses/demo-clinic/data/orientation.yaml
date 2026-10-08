@@ -1,0 +1,9 @@
+- id: back
+  labels: {sq: ["shpinë", "kurriz"], it: ["schiena", "lombare"], en: ["back", "lower back"]}
+  service_ids: [orthopedics-visit, osteopathy]
+- id: knee
+  labels: {sq: ["gju"], it: ["ginocchio"], en: ["knee"]}
+  service_ids: [orthopedics-visit, physiotherapy]
+- id: skin
+  labels: {sq: ["lëkurë", "nishan"], it: ["pelle", "neo"], en: ["skin", "mole"]}
+  service_ids: [dermatology-visit]

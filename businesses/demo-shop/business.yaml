@@ -1,0 +1,31 @@
+id: demo-shop
+name: Bottega Demo
+profile: support-sales
+isolation_level: T1
+default_language: it
+languages: [it, en]
+timezone: Europe/Rome
+features:
+  orientation: false
+  order_status: true
+fixed_texts:
+  it:
+    disclosure: "Ciao! Ti risponde l'assistente automatico di Bottega Demo. Se vuoi parlare con una persona, scrivi \"operatore\"."
+    greeting: "Come posso aiutarti? Puoi chiedere di spedizioni, resi, orari o dello stato di un ordine."
+    emergency: "Se è un'emergenza, chiama subito il numero di emergenza."
+    clinical: "Non posso rispondere a domande mediche. Se è un'emergenza, chiama subito il numero di emergenza."
+    personal_data: "Per favore non inviare qui dati personali: per un ordine bastano numero d'ordine e CAP."
+    handoff: "Per parlare con una persona, chiama il negozio al +39 00 0000 0000 o scrivi a ciao@bottega-demo.example."
+    no_information: "Non ho questa informazione."
+    clarification: "Puoi dirmi meglio di cosa hai bisogno? Posso aiutarti con spedizioni, resi, orari e stato degli ordini."
+    attachment: "Non posso aprire allegati. Per parlare con una persona, chiama il negozio al +39 00 0000 0000."
+  en:
+    disclosure: "Hi! You're chatting with Bottega Demo's automated assistant. To talk to a person, write \"operator\"."
+    greeting: "How can I help? You can ask about shipping, returns, opening hours or an order's status."
+    emergency: "If this is an emergency, call your local emergency number now."
+    clinical: "I can't answer medical questions. If this is an emergency, call your local emergency number now."
+    personal_data: "Please don't send personal details here: for an order, the order number and postal code are enough."
+    handoff: "To talk to a person, call the shop on +39 00 0000 0000 or write to ciao@bottega-demo.example."
+    no_information: "I don't have that information."
+    clarification: "Could you tell me a bit more about what you need? I can help with shipping, returns, opening hours and order status."
+    attachment: "I can't open attachments. To talk to a person, call the shop on +39 00 0000 0000."

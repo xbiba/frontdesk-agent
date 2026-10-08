@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Iterator
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, make_url, text
 from testcontainers.community.postgres import PostgresContainer
 
 from frontdesk.db.migrate import upgrade_to_head
+from frontdesk.tenancy.loader import load_pack
+from frontdesk.tenancy.pack import BusinessPack
 
 PGVECTOR_IMAGE = "pgvector/pgvector:pg16"
 APP_ROLE = "frontdesk_app"
@@ -75,3 +78,21 @@ def migrated_url(database: tuple[str, str]) -> str:
 @pytest.fixture
 def app_url(database: tuple[str, str]) -> str:
     return database[1]
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(scope="session")
+def businesses_dir() -> Path:
+    return REPO_ROOT / "businesses"
+
+
+@pytest.fixture(scope="session")
+def clinic_pack(businesses_dir: Path) -> BusinessPack:
+    return load_pack(businesses_dir / "demo-clinic")
+
+
+@pytest.fixture(scope="session")
+def shop_pack(businesses_dir: Path) -> BusinessPack:
+    return load_pack(businesses_dir / "demo-shop")

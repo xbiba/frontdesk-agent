@@ -1,0 +1,5 @@
+address: "Via dell'Esempio 1, Milano (indirizzo fittizio)"
+phone: "+39 00 0000 0000"
+email: "ciao@bottega-demo.example"
+opening_hours:
+  - {days: "tue-sat", opens: "10:00", closes: "19:30"}

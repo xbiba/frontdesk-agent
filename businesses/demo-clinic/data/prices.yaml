@@ -1,0 +1,10 @@
+- service_id: orthopedics-visit
+  currency: EUR
+  amount: "40"
+- service_id: physiotherapy
+  currency: EUR
+  amount: "30"
+  conditions: {sq: "për seancë", it: "a seduta", en: "per session"}
+- service_id: dermatology-visit
+  currency: EUR
+  amount: "35"
