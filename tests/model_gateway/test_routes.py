@@ -1,7 +1,15 @@
 import pytest
 
 from frontdesk.model_gateway.factory import build_live_model, live_model_settings
-from frontdesk.model_gateway.routes import DataClass, UnapprovedRouteError, require_route
+from frontdesk.model_gateway.routes import (
+    DataClass,
+    ModelRoute,
+    UnapprovedRouteError,
+    require_route,
+)
+
+# What the Anthropic SDK computes for Vertex region "eu"; its client ends a base URL with a slash.
+EU_ENDPOINT = "https://aiplatform.eu.rep.googleapis.com/v1/"
 
 
 def test_vertex_route_is_the_approved_eu_opus_route() -> None:
@@ -33,3 +41,34 @@ def test_live_settings_use_medium_effort_without_sampling() -> None:
     assert settings["anthropic_effort"] == "medium"
     assert settings["max_tokens"] == 800
     assert "temperature" not in settings
+
+
+def test_the_vertex_route_is_pinned_to_the_eu_endpoint() -> None:
+    route = require_route("vertex-eu-opus", DataClass.PATIENT_DERIVED)
+    model = build_live_model(route, gcp_project="demo-project")
+    assert model.base_url == EU_ENDPOINT
+    settings = live_model_settings(max_tokens=800)
+    assert settings["anthropic_effort"] == "medium"
+    assert settings.keys().isdisjoint({"temperature", "top_p", "top_k"})
+
+
+def test_a_stray_vertex_base_url_in_the_environment_is_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_VERTEX_BASE_URL", "https://models.stray.example/v1")
+    route = require_route("vertex-eu-opus", DataClass.PATIENT_DERIVED)
+    model = build_live_model(route, gcp_project="demo-project")
+    assert model.base_url == EU_ENDPOINT
+
+
+@pytest.mark.parametrize("region", ["us", None])
+def test_a_region_without_a_pinned_endpoint_is_refused(region: str | None) -> None:
+    route = ModelRoute(
+        route_id="vertex-other-opus",
+        provider="anthropic-vertex",
+        model_name="claude-opus-5-5",
+        region=region,
+        approved_for=frozenset({DataClass.PATIENT_DERIVED}),
+    )
+    with pytest.raises(UnapprovedRouteError, match="no pinned endpoint"):
+        build_live_model(route, gcp_project="demo-project")
