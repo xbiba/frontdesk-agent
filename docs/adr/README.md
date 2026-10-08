@@ -1,6 +1,6 @@
 # Architecture decision records
 
-Each record follows the same headings: Status, Context, Options considered, Decision, Consequences, Exit plan.
+Each record uses the same headings: Status, Context, Options considered, Decision, Consequences, Exit plan. Options considered is left out when no alternative was weighed.
 
 | ADR | Decision | Status |
 |---|---|---|

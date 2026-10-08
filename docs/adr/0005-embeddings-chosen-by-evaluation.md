@@ -12,8 +12,8 @@ Retrieval must work in Albanian, Italian and English, including a question in on
 - Cohere or Voyage, only if available on an approved EU route.
 - Reranking and contextual retrieval as optional additions.
 
-## Decision (current)
-The demo uses `paraphrase-multilingual-MiniLM-L12-v2` locally (384 dimensions); CI uses a deterministic hash embedder that measures nothing about quality. The production model, the reranker and contextual retrieval are chosen by recall@k and MRR per language, with latency and cost.
+## Decision
+Current decision: the demo uses `paraphrase-multilingual-MiniLM-L12-v2` locally (384 dimensions); CI uses a deterministic hash embedder that measures nothing about quality. The production model, the reranker and contextual retrieval are chosen by recall@k and MRR per language, with latency and cost.
 
 ## Consequences
 - The vector column is 384-dimensional; a model with another dimension means a migration.
