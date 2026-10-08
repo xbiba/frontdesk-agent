@@ -1,0 +1,34 @@
+from pathlib import Path
+
+import pytest
+
+from frontdesk.settings import EmbeddingBackend, Settings, load_settings
+
+
+def test_defaults_are_offline_and_metadata_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in (
+        "FRONTDESK_MODEL_ROUTE",
+        "FRONTDESK_TELEMETRY_CAPTURE_CONTENT",
+        "FRONTDESK_EMBEDDING_BACKEND",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    settings = Settings()
+    assert settings.model_route == "offline-demo"
+    assert settings.telemetry_capture_content is False
+    assert settings.embedding_backend is EmbeddingBackend.HASH
+    assert settings.min_support_similarity == 0.5
+
+
+def test_env_file_selects_one_business(tmp_path: Path) -> None:
+    env_file = tmp_path / "demo.env"
+    env_file.write_text(
+        "FRONTDESK_BUSINESS_PACK=businesses/demo-clinic\nFRONTDESK_MODEL_ROUTE=offline-demo\n"
+    )
+    settings = load_settings(env_file)
+    assert settings.require_business_pack() == Path("businesses/demo-clinic")
+
+
+def test_missing_business_pack_is_a_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FRONTDESK_BUSINESS_PACK", raising=False)
+    with pytest.raises(ValueError, match="FRONTDESK_BUSINESS_PACK"):
+        Settings().require_business_pack()
