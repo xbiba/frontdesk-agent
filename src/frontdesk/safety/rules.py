@@ -63,17 +63,25 @@ _CHEST = r"chest|petto\b|torace|gjoks"
 _BREATH = r"breath|respir|fiato|frym"
 _CANNOT = (
     r"can ?t\b|cannot|can not|could ?n ?t\b|could not|unable|hard to|struggl|trouble|difficult"
-    r"|short|gasp|non riesc|non riusc|fatic|difficolt|manca|affann|nuk\b|s\b|veshtires|zen|mezi"
+    r"|short|gasp|non riesc|non riusc|fatic|difficolt|manca|affann|nuk\b|s(?= (?:po|mund|marr|merr|arrij)\b)|veshtires|zen|mezi"
 )
-_BLOOD = r"bleed|blood(?! test| pressure)|sangu|gjak(?!ut)"
-_MUCH = r"heav|lots?\b|much|severe|stop|profus|molto|tanto|forte|abbondant|ferma|shume|ndal|rrjedh"
+# Blood tests are not bleeding: "analisi del sangue" never counts as a blood word.
+_BLOOD = (
+    r"bleed|blood(?! test| pressure)|gjak(?!ut)"
+    r"|(?<!analisi del )(?<!analisi di )(?<!esami del )(?<!esame del )(?<!prelievo del )(?<!prelievo di )sangu"
+)
+# "how much" and "sa shume" ask for a price or an amount; they do not describe bleeding.
+_MUCH = (
+    r"heav|lots?\b|(?<!how )much|severe|stop|profus|molto|tanto|forte|abbondant|ferma"
+    r"|(?<!sa )shume|ndal|rrjedh"
+)
 
 EMERGENCY: Final = _any(
     _near(_PAIN, _CHEST),
     _near(_CANNOT, _BREATH),
     _near(_BLOOD, _MUCH),
-    r"not breathing",
-    r"non respira",
+    r"(?:not|isn t|wasn t|aren t) breathing",
+    r"non respir",
     r"heart attack",
     r"cardiac arrest",
     r"arresto cardiaco",
@@ -82,14 +90,16 @@ EMERGENCY: Final = _any(
     r"stroke",
     r"ictus",
     r"goditje ne tru",
+    r"paralis",
+    r"paralys",
     r"paraliz",
     r"unconscious",
     r"passed out",
     r"faint",
     r"collaps",
     r"unresponsive",
-    r"not responding",
-    r"sven",
+    r"(?:he|she|they|baby|child|son|daughter|father|mother|friend|patient)(?: s| is| are)? not responding",
+    r"sven(?!d)",
     r"svien",
     r"incoscient",
     r"(?:perso|perde) (?:i sensi|conoscenza)",
@@ -98,31 +108,60 @@ EMERGENCY: Final = _any(
     r"te fiket",
     r"seizure",
     r"convuls",
+    r"epileps",
+    r"epiless",
     r"epilept",
     r"epilett",
     r"konvuls",
     r"anaphyla",
+    r"chok(?:ing|ed|es)",
+    r"soffoc(?:o|a|ando|ato|ata|amento)\b",
+    r"throat (?:(?:is|s|was|keeps|feels like it s|feels like it is) )?"
+    r"(?:clos(?:ing|es|ed)|swell(?:ing|s)|tighten)",
+    r"gola (?:che )?(?:mi )?(?:si )?(?:sta )?(?:chiud|serr)",
+    r"(?:chiude|chiudendo|serra) la gola",
     r"anafila",
     r"emorragia",
     r"gjakderdhje",
     r"overdose",
+    r"overdoz",
     r"poison",
     r"avvelen",
     r"intossic",
     r"helmim",
     r"helmua",
-    r"too many pills",
-    r"(?:troppe|troppi) (?:pastiglie|compresse|pillole|farmaci)",
-    r"shume (?:tableta|hape|ilace)",
+    r"too many (?:pills|tablets|meds|medicines|medications|painkillers|drugs)",
+    r"(?:troppe|troppi) (?:pastiglie|compresse|pillole|farmaci|medicine|medicinali|pasticche)",
+    r"(?:troppe|troppi) (?:sonniferi|antidolorifici|psicofarmaci)",
+    r"shume (?:tableta|hape\b|ilace|pilula|barna\b)",
     r"suicid",
     r"kill myself",
     r"end my life",
     r"want to die",
-    r"self harm",
+    r"self ?harm",
+    # Intent, not accident: "I hurt myself skiing" and "I don't want to hurt myself again" pass.
+    r"(?<!n t )(?<!not )(?<!never )(?:want(?:ed)? to|wanna|planning to|thinking (?:of|about)"
+    r"|feel(?:ing)? like|urge to) (?:hurt|harm|injur|cut)\w* (?:myself|my self)",
+    r"end it all",
+    r"take my (?:own )?life",
+    r"better off dead",
+    r"wish i (?:was|were) dead",
+    r"want to (?:live|be alive) (?:any ?more|no more)",
+    r"no longer want to (?:live(?! in\b| here| there| with| near| alone| abroad)|be alive)",
     r"togliermi la vita",
     r"farla finita",
     r"voglio morire",
-    r"vetevras",
+    r"(?<!non )(?:mi )?(?:voglio|vorrei|ho voglia di) (?:farmi (?:del )?male|uccidermi|ammazzarmi|suicidarmi)",
+    r"(?<!non )mi (?:voglio|vorrei) (?:uccidere|ammazzare|suicidare|far(?:e)? (?:del )?male)",
+    r"(?:penso|pensato|pensando|intenzione) (?:di|a) (?:uccidermi|ammazzarmi|suicidarmi|farmi del male)",
+    r"(?<!non )vorrei (?:essere mort[oa]|morire)",
+    r"non voglio piu vivere(?! in\b| qui| qua| vicino| lontano)",
+    r"non ho piu voglia di vivere",
+    r"autolesion",
+    r"(?:tagliarmi|mi taglio) le vene",
+    r"vetevr",
+    r"fund jetes",
+    r"nuk dua te jetoj me",
     r"vras veten",
     r"dua te vdes",
     r"emergency",
@@ -130,7 +169,7 @@ EMERGENCY: Final = _any(
     r"urgjenc",
     r"emergjenc",
     r"pronto soccorso",
-    r"ambulan",
+    r"ambulan[cz]",
 )
 
 CLINICAL_ADVICE: Final = _any(
@@ -235,7 +274,16 @@ DIAGNOSTIC_LANGUAGE: Final = _any(
 )
 
 _PHONE: Final = re.compile(r"(?<![\w-])(?:\+|00)?\d(?:[\s().-]?\d){7,}(?!\w)")
-_ISO_DATE: Final = re.compile(r"\d{4}-\d{2}-\d{2}")
+# Dates (2026-10-10, 10.10.2026, 10-10-2026) and time ranges (09.00-17.00) are digits joined by
+# separators like a phone number; they are blanked out before the phone search. The parts are
+# range-checked so that "12-34-5678" is still read as a phone number.
+_DAY = r"(?:0?[1-9]|[12]\d|3[01])"
+_MONTH = r"(?:0?[1-9]|1[0-2])"
+_YEAR = r"(?:19|20)\d{2}"
+_CLOCK = r"(?:[01]?\d|2[0-3])[.:][0-5]\d"
+_NOT_PHONE: Final = re.compile(
+    rf"(?<![\d.-])(?:{_YEAR}[.-]{_MONTH}[.-]{_DAY}|{_DAY}[.-]{_MONTH}[.-]{_YEAR}|{_CLOCK}-{_CLOCK})(?!\d)"
+)
 _EMAIL: Final = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _NAME: Final = _any(r"my name is", r"mi chiamo", r"il mio nome e", r"quhem", r"emri im")
 _IDENTITY: Final = _any(
@@ -256,7 +304,7 @@ _BIRTH: Final = _any(
 def personal_fields(text: str) -> frozenset[PersonalField]:
     normalized = normalize(text)
     found: set[PersonalField] = set()
-    if any(not _ISO_DATE.fullmatch(match.group(0).strip()) for match in _PHONE.finditer(text)):
+    if _PHONE.search(_NOT_PHONE.sub(" ", text)):
         found.add(PersonalField.PHONE)
     if _EMAIL.search(text):
         found.add(PersonalField.EMAIL)
