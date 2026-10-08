@@ -6,10 +6,16 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "alembic>=1.20.0",
+    "fastapi>=0.143.0",
+    "pgvector>=0.5.0",
+    "psycopg[binary]>=3.3.6",
     "pydantic>=2.14.0",
     "pydantic-settings>=2.15.0",
     "pyyaml>=6.0.3",
+    "sqlalchemy>=2.1.4",
     "typer>=0.27.3",
+    "uvicorn[standard]>=0.54.0",
 ]
 
 [project.scripts]
@@ -31,6 +37,11 @@ markers = [
   "db: needs Docker (Postgres via testcontainers)",
   "temporal: starts the Temporal test server",
   "slow: downloads models or takes several seconds",
+]
+filterwarnings = [
+  # Starlette's TestClient now prefers httpx2 and says so when it finds only httpx (the plan's
+  # test client). Drop this entry when the dev dependency moves from httpx to httpx2.
+  "ignore:Using `httpx` with `starlette.testclient` is deprecated:starlette.exceptions.StarletteDeprecationWarning",
 ]
 
 [tool.ruff]
@@ -78,6 +89,7 @@ forbidden_modules = ["frontdesk.api", "frontdesk.cli", "frontdesk.worker"]
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "hypothesis>=6.168.5",
     "import-linter>=2.15",
     "mypy>=2.4.0",
@@ -85,5 +97,6 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.16.10",
+    "testcontainers[postgres]>=4.15.0",
     "types-pyyaml>=6.0.12.20260906",
 ]
