@@ -718,5 +718,32 @@ async def test_an_orientation_answer_is_complete_even_if_a_service_is_named_too(
     )
     assert result.outcome is TurnOutcome.REPLIED
     assert result.text == (
-        "Se ne occupano: Visita ortopedica, Osteopatia.\n\nVuoi sapere prezzi o orari?"
+        "Se ne occupano: Visita ortopedica, Osteopatia.\n\n"
+        "Vuoi sapere prezzi o orari, o preferisci parlare con la reception?"
     )
+
+
+async def test_choosing_the_reception_after_an_orientation_gives_the_contact_and_promises_nothing(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    orientation = {
+        "category": "orientation",
+        "intent": "service_info",
+        "problem_category_id": "back",
+    }
+    human = {"category": "administrative", "intent": "human"}
+    runtime = make_runtime(
+        clinic_pack,
+        activate_pack(clinic_pack),
+        classifier_turns([orientation, human], []),
+        document_responder(),
+    )
+    first, state = await handle_message(
+        "Ho mal di schiena, da chi devo andare?", ConversationState(turns=1), runtime
+    )
+    assert "la reception?" in first.text  # the offer
+    second, _ = await handle_message("Preferisco la reception", state, runtime)
+    assert second.outcome is TurnOutcome.HANDOFF
+    assert second.trace.intent is Intent.HUMAN
+    assert second.text == _text(clinic_pack, "it", FixedTextKey.HANDOFF)
+    assert "+355 00 000 0000" in second.text  # how to reach a person; nobody is said to call

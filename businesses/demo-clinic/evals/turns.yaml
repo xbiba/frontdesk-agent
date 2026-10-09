@@ -54,15 +54,19 @@
 - id: orientation-back-it
   message: "Ho mal di schiena, da chi devo andare?"
   tags: [orientation]
-  expect: {outcome: replied, language: it, contains: ["Visita ortopedica", "Osteopatia"], sources: ["orientation:back"]}
+  expect: {outcome: replied, language: it, contains: ["Visita ortopedica", "Osteopatia", "la reception?"], sources: ["orientation:back"]}
 - id: orientation-knee-sq
   message: "Më dhemb gjuri, te cili mjek duhet të shkoj?"
   tags: [orientation]
-  expect: {outcome: replied, language: sq, contains: ["Vizitë ortopedike", "Fizioterapi"], sources: ["orientation:knee"]}
+  expect: {outcome: replied, language: sq, contains: ["Vizitë ortopedike", "Fizioterapi", "recepsionin?"], sources: ["orientation:knee"]}
 - id: orientation-skin-en
   message: "I have a mole on my arm, which doctor should I see?"
   tags: [orientation]
-  expect: {outcome: replied, language: en, contains: ["Dermatology visit"], sources: ["orientation:skin"]}
+  expect: {outcome: replied, language: en, contains: ["Dermatology visit", "talk to reception?"], sources: ["orientation:skin"]}
+- id: orientation-then-reception-it
+  messages: ["Ho mal di schiena, da chi devo andare?", "Preferisco la reception"]
+  tags: [orientation, history]
+  expect: {outcome: handoff, language: it, intent: human, contains: ["+355 00 000 0000"]}
 - id: orientation-not-in-map
   message: "Ho spesso mal di testa, chi mi può aiutare?"
   suite: medical_advice

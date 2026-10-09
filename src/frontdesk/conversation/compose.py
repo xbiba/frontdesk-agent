@@ -42,6 +42,9 @@ _ORIENTATION: Final[dict[str, str]] = {
     "it": "Se ne occupano: {services}.",
     "en": "These services can help: {services}.",
 }
+# An orientation reply always offers a person as well, because the health boundary relies on it.
+# The offer is a question and promises nothing; answering "reception" is the `human` intent, which
+# gets the contact. The Albanian wording still needs a native speaker's review.
 _CLOSINGS: Final[dict[str, dict[str, str]]] = {
     "default": {
         "sq": "Mund t'ju ndihmoj me diçka tjetër?",
@@ -49,9 +52,9 @@ _CLOSINGS: Final[dict[str, dict[str, str]]] = {
         "en": "Can I help with anything else?",
     },
     "orientation": {
-        "sq": "Doni të dini çmimet ose oraret?",
-        "it": "Vuoi sapere prezzi o orari?",
-        "en": "Would you like prices or opening hours?",
+        "sq": "Doni të dini çmimet ose oraret, apo preferoni të flisni me recepsionin?",
+        "it": "Vuoi sapere prezzi o orari, o preferisci parlare con la reception?",
+        "en": "Would you like prices or opening hours, or would you rather talk to reception?",
     },
 }
 _CLARIFY: Final[dict[ClarifyField, dict[str, str]]] = {

@@ -1,10 +1,13 @@
 import uuid
 
+import pytest
+
 from frontdesk.agent.classification import ValidatedFields
 from frontdesk.agent.vocab import Category, ClarifyField, Intent
 from frontdesk.conversation.compose import clarify_question, closing, compose_facts, unanswered
 from frontdesk.knowledge.evidence import Evidence, EvidenceKind
 from frontdesk.knowledge.facts import Catalog
+from frontdesk.tenancy.pack import Language
 
 LOCATION = Evidence.create(
     kind=EvidenceKind.RECORD,
@@ -66,7 +69,54 @@ def test_prices_are_the_record_text() -> None:
 
 def test_orientation_names_services_without_repeating_the_problem() -> None:
     text = compose_facts(_fields(Intent.SERVICE_INFO, Category.ORIENTATION), [BACK])
-    assert text == "Se ne occupano: Visita ortopedica, Osteopatia.\n\nVuoi sapere prezzi o orari?"
+    assert text == (
+        "Se ne occupano: Visita ortopedica, Osteopatia.\n\n"
+        "Vuoi sapere prezzi o orari, o preferisci parlare con la reception?"
+    )
+
+
+@pytest.mark.parametrize(
+    ("language", "closing_text", "reception"),
+    [
+        pytest.param(
+            "sq",
+            "Doni të dini çmimet ose oraret, apo preferoni të flisni me recepsionin?",
+            "recepsionin",
+            id="sq",
+        ),
+        pytest.param(
+            "it",
+            "Vuoi sapere prezzi o orari, o preferisci parlare con la reception?",
+            "la reception",
+            id="it",
+        ),
+        pytest.param(
+            "en",
+            "Would you like prices or opening hours, or would you rather talk to reception?",
+            "talk to reception",
+            id="en",
+        ),
+    ],
+)
+def test_every_orientation_reply_offers_the_reception_in_each_language(
+    language: Language, closing_text: str, reception: str
+) -> None:
+    fields = ValidatedFields(
+        category=Category.ORIENTATION, intent=Intent.SERVICE_INFO, language=language
+    )
+    text = compose_facts(fields, [BACK])
+    assert text is not None
+    last_paragraph = text.rsplit("\n\n", 1)[1]
+    assert last_paragraph == closing_text
+    assert reception in last_paragraph
+    # An offer to talk to a person, in the form of a question: it promises no call and no reply.
+    assert last_paragraph.endswith("?")
+
+
+def test_the_reception_offer_belongs_to_orientation_alone() -> None:
+    text = compose_facts(_fields(Intent.PRICE), [PRICE])
+    assert text is not None
+    assert "reception" not in text
 
 
 def test_clarifying_questions_are_written_by_code() -> None:
