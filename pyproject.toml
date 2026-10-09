@@ -50,11 +50,6 @@ markers = [
   "slow: downloads models or takes several seconds",
   "eval: offline evaluations over the demo businesses",
 ]
-filterwarnings = [
-  # Starlette's TestClient now prefers httpx2 and says so when it finds only httpx (the plan's
-  # test client). Drop this entry when the dev dependency moves from httpx to httpx2.
-  "ignore:Using `httpx` with `starlette.testclient` is deprecated:starlette.exceptions.StarletteDeprecationWarning",
-]
 
 [tool.coverage.run]
 source = ["frontdesk"]
@@ -131,7 +126,6 @@ forbidden_modules = ["pydantic_ai", "fastapi", "temporalio", "sqlalchemy"]
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
     "hypothesis>=6.168.5",
     "import-linter>=2.15",
     "mypy>=2.4.0",

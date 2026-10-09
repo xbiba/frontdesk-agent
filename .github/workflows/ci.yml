@@ -4,9 +4,19 @@ on:
     branches: [main]
   pull_request:
 
+# Nothing here writes to the repository.
+permissions:
+  contents: read
+
+# A newer push to the same branch or pull request replaces the run in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -17,24 +27,28 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy
       - run: uv run lint-imports
-      - run: uv run pytest -m "not eval"
-      - name: coverage (all tests, branches, fails under 80%)
+      - name: tests with branch coverage (fails under 80%)
         run: uv run pytest --cov --cov-report=term-missing
-      - name: offline evaluations
+      - name: offline evaluations, listed case by case
         run: uv run pytest -m eval -v
       - name: audit runtime dependencies
         run: |
           uv export --format requirements-txt --no-dev --no-emit-project --output-file requirements-audit.txt
-          uvx pip-audit --disable-pip --requirement requirements-audit.txt
+          uvx pip-audit@2.10.1 --disable-pip --requirement requirements-audit.txt
   image:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t frontdesk:ci .
+      - name: the service does not run as root
+        run: |
+          user=$(docker image inspect --format '{{.Config.User}}' frontdesk:ci)
+          [ "$user" = "10001:10001" ] || { echo "image user is '$user', not 10001:10001" >&2; exit 1; }
       - name: the image holds the service and nothing else
         # One run of the image, as root so that the files the build left behind can be seen. The
-        # service runs as user 10001, so the last check drops to that user before it imports and
-        # loads. Any failed check ends the job.
+        # service runs as 10001:10001, so the last check drops to that user and group before it
+        # imports and loads. Any failed check ends the job.
         run: |
           docker run --rm -i --user 0 --entrypoint sh frontdesk:ci -s <<'CHECK'
           set -eu
