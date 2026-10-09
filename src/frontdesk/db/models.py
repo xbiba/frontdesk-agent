@@ -1,4 +1,4 @@
-"""ORM models. Every business table has business_id and an RLS policy (migration 0002)."""
+"""ORM models. Every business table has business_id and an RLS policy (migrations 0002, 0003)."""
 
 from __future__ import annotations
 
@@ -84,3 +84,14 @@ class Record(Base):
     kind: Mapped[str] = mapped_column(String(32))
     record_key: Mapped[str] = mapped_column(String(64))
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+
+class OrderLookupAttempts(Base):
+    """Order lookups used by one conversation; committed before each lookup (Task 22)."""
+
+    __tablename__ = "order_lookup_attempts"
+
+    business_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    used: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

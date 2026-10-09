@@ -46,6 +46,7 @@ ALLOWED_FIELDS: Final = frozenset(
         "intent",
         "knowledge_version",
         "language",
+        "live_evidence",
         "outcome",
         "output_tokens",
         "reason",

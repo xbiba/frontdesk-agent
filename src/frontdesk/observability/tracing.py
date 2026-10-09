@@ -2,7 +2,8 @@
 
 A turn span carries IDs, categories, outcomes, prompt versions and evidence IDs: the verified
 ones, plus the number of invalid ones. An ID the model wrote that matched no provided passage is
-never recorded, and neither are source references, which can include order numbers. Message and
+never recorded, and neither are source references, which can include order numbers. Live evidence
+(an order's status) is only counted: its ID is derived from the order reference. Message and
 reply text are added only when the deployment enables content capture, and then always redacted.
 """
 
@@ -27,6 +28,7 @@ ALLOWED_ATTRIBUTES: Final = frozenset(
         "intent",
         "invalid_evidence_ids",
         "language",
+        "live_evidence",
         "outcome",
         "rejection",
         "responder_prompt_version",

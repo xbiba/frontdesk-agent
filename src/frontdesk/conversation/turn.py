@@ -12,7 +12,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Final
 
@@ -22,6 +22,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.agent.answer_check import check_answer
 from frontdesk.agent.classification import (
+    ORDER_REFERENCE,
+    POSTAL_CODE,
     ClassifierOutput,
     Rejection,
     ValidatedFields,
@@ -49,12 +51,14 @@ from frontdesk.conversation.preload import document_evidence, fact_evidence
 from frontdesk.conversation.state import ConversationState
 from frontdesk.db.engine import business_session
 from frontdesk.knowledge.embedders import Embedder
-from frontdesk.knowledge.evidence import Evidence
+from frontdesk.knowledge.evidence import Evidence, EvidenceKind
 from frontdesk.knowledge.facts import Catalog, load_catalog
 from frontdesk.observability.logs import log_event
 from frontdesk.observability.tracing import record_content, record_metadata, turn_span
 from frontdesk.safety.language import detect_language
 from frontdesk.safety.rules import Verdict, emergency_rule, evaluate
+from frontdesk.shop.attempts import consume_order_lookup
+from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.pack import BusinessPack, FixedTextKey, Language, Profile
 
 logger = logging.getLogger(__name__)
@@ -82,7 +86,11 @@ class TurnOutcome(StrEnum):
 
 @dataclass(frozen=True)
 class TurnTrace:
-    """Metadata only: never message text or evidence content."""
+    """Metadata only: never message text or evidence content.
+
+    `evidence_ids` lists documents and records. Live evidence (an order's status) is only counted
+    in `live_evidence`: its ID is derived from the order reference, so it is never listed.
+    """
 
     rule: str
     category: Category | None = None
@@ -90,6 +98,7 @@ class TurnTrace:
     service_ids: tuple[str, ...] = ()
     doctor_ids: tuple[str, ...] = ()
     evidence_ids: tuple[str, ...] = ()
+    live_evidence: int = 0
     sources: tuple[str, ...] = ()
     check_reasons: tuple[str, ...] = ()
     invalid_evidence_ids: int = 0
@@ -105,6 +114,10 @@ class TurnResult:
     trace: TurnTrace
 
 
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
 @dataclass(frozen=True)
 class TurnRuntime:
     pack: BusinessPack
@@ -116,6 +129,8 @@ class TurnRuntime:
     min_support_similarity: float = 0.5
     capture_content: bool = False
     timeout_seconds: float = TURN_TIMEOUT_SECONDS
+    orders: OrderStore | None = None
+    now: Callable[[], datetime] = _utc_now
 
 
 async def handle_message(
@@ -132,6 +147,7 @@ async def handle_message(
             outcome=result.outcome,
             language=result.language,
             evidence_ids=list(trace.evidence_ids),
+            live_evidence=trace.live_evidence,
             invalid_evidence_ids=trace.invalid_evidence_ids,
             check_reasons=list(trace.check_reasons),
             rejection=trace.rejection,
@@ -265,8 +281,7 @@ async def _answer(
     pack = runtime.pack
     language = fields.language
     if fields.intent is Intent.ORDER_STATUS:
-        # Order lookups are not wired in yet, so reception takes them; `state` will count attempts.
-        return _handoff(pack, language, FixedTextKey.HANDOFF, trace)
+        return await _order_reply(fields, state, catalog, runtime, trace, with_closing=with_closing)
     if fields.category is Category.ORIENTATION or fields.intent in FACT_INTENTS:
         missing = _missing_field(fields)
         if missing is not None:
@@ -274,6 +289,47 @@ async def _answer(
         facts = await asyncio.to_thread(_facts, fields, runtime)
         return _facts_reply(pack, fields, facts, catalog, trace, with_closing=with_closing)
     return await _document_answer(fields, catalog, runtime, trace, with_closing=with_closing)
+
+
+async def _order_reply(
+    fields: ValidatedFields,
+    state: ConversationState,
+    catalog: Catalog,
+    runtime: TurnRuntime,
+    trace: TurnTrace,
+    *,
+    with_closing: bool,
+) -> TurnResult:
+    pack = runtime.pack
+    language = fields.language
+    if runtime.orders is None:
+        return _handoff(pack, language, FixedTextKey.HANDOFF, trace)
+    details = _order_details(fields)
+    if details is None:
+        return _clarify(catalog, language, ClarifyField.ORDER_DETAILS, trace)
+    reference, postal_code = details
+    now = runtime.now()
+    # Committed in its own transaction before the lookup: a later failure keeps it used.
+    if not await asyncio.to_thread(_consume_order_lookup, runtime, state.conversation_id, now):
+        exhausted = replace(trace, rejection="order_lookups_exhausted")
+        return _handoff(pack, language, FixedTextKey.HANDOFF, exhausted)
+    found = runtime.orders.lookup(reference, postal_code, language=language, now=now)
+    facts = [found] if found is not None else []
+    return _facts_reply(pack, fields, facts, catalog, trace, with_closing=with_closing)
+
+
+def _order_details(fields: ValidatedFields) -> tuple[str, str] | None:
+    """The order number and postal code, if both are present and exactly in their form.
+
+    `fullmatch` on the raw strings: the patterns end in `$`, which `match` lets a trailing newline
+    pass. Anything else counts as missing, so it is asked for again and uses no attempt.
+    """
+    reference, postal_code = fields.order_reference, fields.postal_code
+    if reference is None or postal_code is None:
+        return None
+    if ORDER_REFERENCE.fullmatch(reference) is None or POSTAL_CODE.fullmatch(postal_code) is None:
+        return None
+    return reference, postal_code
 
 
 def _missing_field(fields: ValidatedFields) -> ClarifyField | None:
@@ -296,8 +352,12 @@ def _facts_reply(
     with_closing: bool,
 ) -> TurnResult:
     language = fields.language
+    listed = [item for item in facts if item.kind is not EvidenceKind.LIVE]
     checked = replace(
-        trace, evidence_ids=tuple(item.evidence_id for item in facts), sources=_sources(facts)
+        trace,
+        evidence_ids=tuple(item.evidence_id for item in listed),
+        live_evidence=len(facts) - len(listed),
+        sources=_sources(facts),
     )
     no_information = _fixed_text(pack, language, FixedTextKey.NO_INFORMATION)
     absent = [
@@ -398,6 +458,13 @@ def _load_catalog(runtime: TurnRuntime) -> Catalog | None:
         return load_catalog(session, runtime.pack.id)
 
 
+def _consume_order_lookup(runtime: TurnRuntime, conversation_id: str, now: datetime) -> bool:
+    with business_session(runtime.session_factory, runtime.pack.id) as session:
+        return consume_order_lookup(
+            session, business_id=runtime.pack.id, conversation_id=conversation_id, now=now
+        )
+
+
 def _facts(fields: ValidatedFields, runtime: TurnRuntime) -> list[Evidence]:
     with business_session(runtime.session_factory, runtime.pack.id) as session:
         return fact_evidence(session, fields, business_id=runtime.pack.id, today=runtime.today())
@@ -426,6 +493,7 @@ def _log_turn(result: TurnResult, business_id: str) -> None:
         intent=trace.intent,
         outcome=result.outcome,
         evidence_ids=list(trace.evidence_ids),
+        live_evidence=trace.live_evidence,
         invalid_evidence_ids=trace.invalid_evidence_ids,
         check_reasons=list(trace.check_reasons),
         reason=trace.rejection,

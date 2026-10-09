@@ -4,6 +4,8 @@ import re
 import shutil
 import time
 from collections.abc import Callable
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -19,11 +21,19 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.agent.prompts import prompt_version
 from frontdesk.conversation.state import ConversationState
-from frontdesk.conversation.turn import MAX_MESSAGE_CHARS, TurnOutcome, handle_message
+from frontdesk.conversation.turn import (
+    MAX_MESSAGE_CHARS,
+    TurnOutcome,
+    TurnRuntime,
+    handle_message,
+)
+from frontdesk.knowledge.evidence import Evidence
 from frontdesk.observability.logs import MetadataOnlyFormatter
 from frontdesk.observability.tracing import ALLOWED_ATTRIBUTES, record_metadata, redact, turn_span
+from frontdesk.shop.attempts import MAX_ORDER_LOOKUPS
+from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.loader import load_pack
-from frontdesk.tenancy.pack import BusinessPack, Profile
+from frontdesk.tenancy.pack import BusinessPack, Language, Profile
 from tests.conversation.helpers import classifier_model, document_responder, make_runtime
 
 Activate = Callable[..., sessionmaker[Session]]
@@ -46,6 +56,10 @@ RETURNS = {
     "intent": "general_question",
     "general_question": "How do I return an item?",
 }
+ORDER_STATUS = {"category": "administrative", "intent": "order_status"}
+ORDER_NUMBER = "ORD-10427"
+POSTAL_CODE = "20121"
+ORDER_NOW = datetime(2026, 10, 7, 9, 0, tzinfo=UTC)
 # A session factory bound to no database: a long message must not reach the database either.
 NO_DATABASE: sessionmaker[Session] = sessionmaker(expire_on_commit=False)
 
@@ -476,3 +490,116 @@ async def test_content_capture_of_a_very_long_message_takes_linear_time(
     await handle_message("a" * 100_000, ConversationState(turns=1), runtime)
     assert time.perf_counter() - started < 1.0
     assert "frontdesk.content" in _exported(span_exporter)
+
+
+# An order's status is live evidence. Its ID is derived from the order reference, so like the
+# reference and the postal code it is counted in telemetry and never written there.
+
+
+class _LeakyStore(OrderStore):
+    """An order system whose error message holds what the person wrote."""
+
+    def lookup(
+        self, reference: str, postal_code: str, *, language: Language, now: datetime
+    ) -> Evidence | None:
+        raise RuntimeError(f"failed on {reference} {postal_code} {ERROR_SENTINEL}")
+
+
+def _order_runtime(pack: BusinessPack, factory: sessionmaker[Session]) -> TurnRuntime:
+    runtime = make_runtime(pack, factory, classifier_model(ORDER_STATUS), document_responder())
+    return replace(runtime, orders=OrderStore(tuple(pack.orders)), now=lambda: ORDER_NOW)
+
+
+def _live_id(pack: BusinessPack) -> str:
+    """The ID the live evidence of the order gets: the one telemetry must not carry."""
+    found = OrderStore(tuple(pack.orders)).lookup(
+        ORDER_NUMBER, POSTAL_CODE, language="it", now=ORDER_NOW
+    )
+    assert found is not None
+    assert found.evidence_id.startswith("L-")
+    return found.evidence_id
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    ("postal_code", "live"),
+    [
+        pytest.param(POSTAL_CODE, 1, id="found"),
+        pytest.param("00184", 0, id="wrong-postal-code"),
+    ],
+)
+async def test_an_order_lookup_is_counted_but_its_reference_and_live_id_are_not_recorded(
+    span_exporter: InMemorySpanExporter,
+    caplog: pytest.LogCaptureFixture,
+    activate_pack: Activate,
+    shop_pack: BusinessPack,
+    postal_code: str,
+    live: int,
+) -> None:
+    span_exporter.clear()
+    runtime = _order_runtime(shop_pack, activate_pack(shop_pack))
+    message = f"Dov'è l'ordine {ORDER_NUMBER}? CAP {postal_code} {MESSAGE_SENTINEL}"
+    with caplog.at_level(logging.INFO):
+        result, _ = await handle_message(message, ConversationState(turns=1), runtime)
+    assert (ORDER_NUMBER in result.text) is bool(live)  # the reply carries the order itself
+    trace = result.trace
+    assert trace.evidence_ids == ()
+    assert trace.live_evidence == live
+    attributes = _turn_attributes(span_exporter)
+    assert attributes["frontdesk.evidence_ids"] == ()
+    assert attributes["frontdesk.live_evidence"] == live
+    exported = _exported(span_exporter)
+    logs = _logs(caplog)
+    assert f'"live_evidence": {live}' in logs
+    for secret in (ORDER_NUMBER, POSTAL_CODE, _live_id(shop_pack), MESSAGE_SENTINEL):
+        assert secret not in exported
+        assert secret not in logs
+
+
+@pytest.mark.db
+async def test_a_failing_order_system_leaves_nothing_the_person_wrote_in_telemetry(
+    span_exporter: InMemorySpanExporter,
+    caplog: pytest.LogCaptureFixture,
+    activate_pack: Activate,
+    shop_pack: BusinessPack,
+) -> None:
+    span_exporter.clear()
+    working = _order_runtime(shop_pack, activate_pack(shop_pack))
+    runtime = replace(working, orders=_LeakyStore(tuple(shop_pack.orders)))
+    with caplog.at_level(logging.INFO):
+        result, _ = await handle_message(
+            f"Ordine {ORDER_NUMBER}, CAP {POSTAL_CODE}", ConversationState(turns=1), runtime
+        )
+    assert result.trace.rule == "error"
+    exported = _exported(span_exporter)
+    logs = _logs(caplog)
+    assert '"reason": "RuntimeError"' in logs
+    for secret in (ORDER_NUMBER, POSTAL_CODE, ERROR_SENTINEL):
+        assert secret not in exported
+        assert secret not in logs
+
+
+@pytest.mark.db
+async def test_exhausted_order_lookups_leave_no_order_data_in_telemetry(
+    span_exporter: InMemorySpanExporter,
+    caplog: pytest.LogCaptureFixture,
+    activate_pack: Activate,
+    shop_pack: BusinessPack,
+) -> None:
+    runtime = _order_runtime(shop_pack, activate_pack(shop_pack))
+    state = ConversationState(turns=1)
+    for _ in range(MAX_ORDER_LOOKUPS):
+        _, state = await handle_message(f"Ordine {ORDER_NUMBER}, CAP 00184", state, runtime)
+    span_exporter.clear()
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        result, _ = await handle_message(
+            f"Ordine {ORDER_NUMBER}, CAP {POSTAL_CODE}", state, runtime
+        )
+    assert result.trace.rejection == "order_lookups_exhausted"
+    exported = _exported(span_exporter)
+    logs = _logs(caplog)
+    assert '"reason": "order_lookups_exhausted"' in logs
+    for secret in (ORDER_NUMBER, POSTAL_CODE, _live_id(shop_pack)):
+        assert secret not in exported
+        assert secret not in logs
