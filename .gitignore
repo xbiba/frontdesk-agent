@@ -7,8 +7,14 @@ __pycache__/
 .coverage
 htmlcov/
 dist/
+# Environment files hold credentials (a deployment's database, its cloud project): only the
+# demo ones, which exist for a local throwaway database, are committed.
 .env
-*.env.local
+.env.*
+*.env
+*.env.*
+!.env.example
+!deploy/demo-*.env
 evals/reports/
 requirements-audit.txt
 .fastembed_cache/

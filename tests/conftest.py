@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import uuid
 from collections.abc import Callable, Iterator
@@ -21,6 +22,15 @@ from frontdesk.tenancy.loader import load_pack
 from frontdesk.tenancy.pack import BusinessPack
 
 models.ALLOW_MODEL_REQUESTS = False
+
+
+@pytest.fixture(autouse=True)
+def _no_frontdesk_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Settings let the environment override an env file, so a developer's exported variables
+    (a real database URL, a route) would win over the env file a test writes for itself."""
+    for name in [name for name in os.environ if name.startswith("FRONTDESK_")]:
+        monkeypatch.delenv(name)
+
 
 PGVECTOR_IMAGE = "pgvector/pgvector:pg16"
 APP_ROLE = "frontdesk_app"
