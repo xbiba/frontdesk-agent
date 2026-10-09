@@ -1,0 +1,16 @@
+- id: shipping-times-it
+  question: "In quanti giorni spedite in Italia?"
+  language: it
+  relevant: [shipping-it]
+- id: tracking-it
+  question: "Come seguo la spedizione del mio ordine?"
+  language: it
+  relevant: [shipping-it]
+- id: returns-en
+  question: "How do I return an item?"
+  language: en
+  relevant: [returns-en, returns-it]
+- id: returns-it
+  question: "Posso fare un reso?"
+  language: it
+  relevant: [returns-it, returns-en]
