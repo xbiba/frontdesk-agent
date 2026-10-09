@@ -219,6 +219,72 @@ def test_a_broken_retrieval_dataset_is_reported_on_stderr_with_exit_code_1(
     assert "Traceback" not in result.output
 
 
+# --- A retrieval evaluation that cannot mean anything exits 1 instead of reporting zeros ------------
+
+
+def test_retrieval_evaluation_without_active_knowledge_exits_1_with_a_hint(
+    tmp_path: Path, businesses_dir: Path, database: tuple[str, str]
+) -> None:
+    env = str(_env(tmp_path, "clinic", businesses_dir / "demo-clinic", database))
+    report = tmp_path / "report.json"
+    result = runner.invoke(app, ["eval", "retrieval", "--env-file", env, "--output", str(report)])
+    assert result.exit_code == 1
+    assert "business 'demo-clinic' has no active knowledge version" in result.stderr
+    assert f"frontdesk knowledge bootstrap-demo --env-file {env}" in result.stderr
+    assert result.stdout == ""  # no table of zeros
+    assert not report.exists()
+    assert "Traceback" not in result.output
+
+
+def _retrieval_dataset(pack_dir: Path, *cases: str) -> Path:
+    dataset = pack_dir / "evals" / "retrieval.yaml"
+    dataset.write_text("".join(cases), encoding="utf-8")
+    return dataset
+
+
+def test_a_case_that_names_an_unknown_document_exits_1_naming_the_file_the_case_and_the_key(
+    tmp_path: Path, businesses_dir: Path, database: tuple[str, str]
+) -> None:
+    pack_dir = _copy_pack(tmp_path, businesses_dir, "demo-clinic")
+    dataset = _retrieval_dataset(
+        pack_dir,
+        '- id: parking-typo\n  question: "Is there parking?"\n  language: en\n'
+        "  relevant: [parkng-en]\n",
+        '- id: fine\n  question: "Cosa portare?"\n  language: it\n  relevant: [first-visit-it]\n',
+        '- id: half-right\n  question: "Fizioterapi?"\n  language: sq\n'
+        "  relevant: [physiotherapy-sq, physio-sq]\n",
+    )
+    env = str(_env(tmp_path, "clinic", pack_dir, database))
+    _run("knowledge", "bootstrap-demo", "--env-file", env)
+    report = tmp_path / "report.json"
+    result = runner.invoke(app, ["eval", "retrieval", "--env-file", env, "--output", str(report)])
+    assert result.exit_code == 1
+    assert f"{dataset}: case 'parking-typo': 'parkng-en' is not a document" in result.stderr
+    assert f"{dataset}: case 'half-right': 'physio-sq' is not a document" in result.stderr
+    assert "case 'fine'" not in result.stderr
+    assert "physiotherapy-sq" not in result.stderr  # the right half is not blamed
+    assert "evaluation" not in result.stdout  # no report of zeros
+    assert not report.exists()
+    assert "Traceback" not in result.output
+
+
+def test_a_document_that_is_not_valid_today_is_known_and_scores_zero(
+    tmp_path: Path, businesses_dir: Path, database: tuple[str, str]
+) -> None:
+    pack_dir = _copy_pack(tmp_path, businesses_dir, "demo-clinic")
+    parking = pack_dir / "knowledge" / "parking-en.md"
+    parking.write_text(
+        parking.read_text(encoding="utf-8").replace(
+            "language: en\n", "language: en\nvalid_until: 2020-01-01\n", 1
+        ),
+        encoding="utf-8",
+    )
+    env = str(_env(tmp_path, "clinic", pack_dir, database))
+    _run("knowledge", "bootstrap-demo", "--env-file", env)
+    output = _run("eval", "retrieval", "--env-file", env)  # exits 0: the key exists
+    assert "| parking-en | en | 0.00 | 0.00 |" in output
+
+
 def test_the_cli_keeps_the_pydantic_ai_banner_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PYDANTIC_AI_NO_BANNER", "set-and-removed")  # makes monkeypatch restore it
     monkeypatch.delenv("PYDANTIC_AI_NO_BANNER")

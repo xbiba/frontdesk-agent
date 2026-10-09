@@ -59,6 +59,30 @@ def _deployment(
             id="ahead-of-utc",
         ),
         pytest.param(
+            "Europe/Tirane",
+            datetime(2031, 7, 14, 21, 30, tzinfo=UTC),
+            date(2031, 7, 14),
+            id="summer-time-before-local-midnight",
+        ),
+        pytest.param(
+            "Europe/Tirane",
+            datetime(2031, 7, 14, 22, 30, tzinfo=UTC),
+            date(2031, 7, 15),
+            id="summer-time-after-local-midnight",
+        ),
+        pytest.param(
+            "Europe/Tirane",
+            datetime(2031, 10, 26, 22, 30, tzinfo=UTC),
+            date(2031, 10, 26),
+            id="the-day-summer-time-ends-before-local-midnight",
+        ),
+        pytest.param(
+            "Europe/Tirane",
+            datetime(2031, 10, 26, 23, 30, tzinfo=UTC),
+            date(2031, 10, 27),
+            id="the-day-summer-time-ends-after-local-midnight",
+        ),
+        pytest.param(
             "America/Los_Angeles",
             datetime(2031, 7, 15, 2, 0, tzinfo=UTC),
             date(2031, 7, 14),

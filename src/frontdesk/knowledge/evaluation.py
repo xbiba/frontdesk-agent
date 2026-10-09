@@ -18,10 +18,13 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic_core import ErrorDetails
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from frontdesk.db.models import Document
 from frontdesk.knowledge.embedders import Embedder
 from frontdesk.knowledge.retrieval import hybrid_search
+from frontdesk.knowledge.versions import active_version_id
 from frontdesk.tenancy.pack import Language, NonBlankStr
 
 
@@ -127,6 +130,28 @@ def load_cases(path: Path) -> list[RetrievalCase]:
     if problems:
         raise DatasetError("\n".join(problems))
     return cases
+
+
+def unknown_relevant_documents(
+    session: Session, *, business_id: str, cases: Sequence[RetrievalCase]
+) -> list[tuple[str, str]]:
+    """The (case id, key) pairs whose `relevant` key is no document of the active version.
+
+    A case that names a document the knowledge does not hold can never be found, so it would score
+    0 whatever the retrieval does: a mistyped key is not a retrieval failure. A document that
+    exists but is not valid today is known; it scores 0 because it is not searched.
+    """
+    version_id = active_version_id(session, business_id)
+    known = (
+        set(
+            session.scalars(
+                select(Document.doc_key).where(Document.knowledge_version_id == version_id)
+            )
+        )
+        if version_id is not None
+        else set()
+    )
+    return [(case.id, key) for case in cases for key in case.relevant if key not in known]
 
 
 def run_retrieval_eval(

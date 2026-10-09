@@ -61,6 +61,9 @@ class Deployment:
 class NoActiveKnowledgeError(RuntimeError):
     """The business has no approved, active knowledge version yet."""
 
+    def __init__(self, business_id: str) -> None:
+        super().__init__(f"business '{business_id}' has no active knowledge version")
+
 
 def open_deployment(settings: Settings) -> Deployment:
     pack = load_pack(settings.require_business_pack())
@@ -85,7 +88,7 @@ def build_turn_runtime(
         catalog = load_catalog(session, pack.id)
         check_embedder(session, pack.id, deployment.embedder)
     if catalog is None:
-        raise NoActiveKnowledgeError(f"business '{pack.id}' has no active knowledge version")
+        raise NoActiveKnowledgeError(pack.id)
     route = require_route(deployment.settings.model_route, DataClass.PATIENT_DERIVED)
     services = ToolServices(
         session_factory=deployment.session_factory,

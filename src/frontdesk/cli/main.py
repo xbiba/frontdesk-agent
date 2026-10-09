@@ -38,12 +38,14 @@ from frontdesk.knowledge.evaluation import (
     render_markdown,
     run_retrieval_eval,
     to_json,
+    unknown_relevant_documents,
 )
 from frontdesk.knowledge.versions import (
     EmbedderMismatchError,
     KnowledgeStateError,
     VersionStatus,
     activate,
+    active_version_id,
     approve,
     check_embedder,
     create_draft,
@@ -94,16 +96,21 @@ def _deployment(env_file: Path) -> Deployment:
     return open_deployment(load_settings(env_file))
 
 
+def _without_knowledge(error: NoActiveKnowledgeError, env_file: Path) -> typer.Exit:
+    """Say what to run when the business has no active knowledge; the caller raises the result."""
+    typer.echo(
+        f"{error}. Draft, approve and activate a version first "
+        f"(demo businesses: frontdesk knowledge bootstrap-demo --env-file {env_file}).",
+        err=True,
+    )
+    return typer.Exit(1)
+
+
 def _runtime(deployment: Deployment, env_file: Path) -> TurnRuntime:
     try:
         return build_turn_runtime(deployment)
     except NoActiveKnowledgeError as error:
-        typer.echo(
-            f"{error}. Draft, approve and activate a version first "
-            f"(demo businesses: frontdesk knowledge bootstrap-demo --env-file {env_file}).",
-            err=True,
-        )
-        raise typer.Exit(1) from error
+        raise _without_knowledge(error, env_file) from error
     except EmbedderMismatchError as error:
         typer.echo(f"error: {error} --env-file {env_file}", err=True)
         raise typer.Exit(1) from error
@@ -238,15 +245,31 @@ def eval_retrieval(
     k: Annotated[int, typer.Option("--k", min=1, max=20)] = 5,
     output: ReportPath = None,
 ) -> None:
-    """Run the business's labelled retrieval questions and print recall@k and MRR."""
+    """Run the business's labelled retrieval questions and print recall@k and MRR.
+
+    Exits 1, without a report, when the business has no active knowledge or a case names a
+    document that the active version lacks: both would score zeros that mean nothing.
+    """
     deployment = _deployment(env_file)
+    dataset = deployment.settings.require_business_pack() / "evals" / "retrieval.yaml"
     try:
-        cases = load_cases(deployment.settings.require_business_pack() / "evals" / "retrieval.yaml")
+        cases = load_cases(dataset)
     except DatasetError as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(1) from error
     with _session(deployment) as session:
         check_embedder(session, deployment.pack.id, deployment.embedder)
+        if active_version_id(session, deployment.pack.id) is None:
+            raise _without_knowledge(NoActiveKnowledgeError(deployment.pack.id), env_file)
+        unknown = unknown_relevant_documents(session, business_id=deployment.pack.id, cases=cases)
+        if unknown:
+            for case_id, key in unknown:
+                typer.echo(
+                    f"{dataset}: case '{case_id}': '{key}' is not a document of the active "
+                    "knowledge version (a document key is its file name without .md)",
+                    err=True,
+                )
+            raise typer.Exit(1)
         report = run_retrieval_eval(
             session,
             business_id=deployment.pack.id,

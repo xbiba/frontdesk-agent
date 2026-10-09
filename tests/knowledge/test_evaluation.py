@@ -20,6 +20,7 @@ from frontdesk.knowledge.evaluation import (
     render_markdown,
     run_retrieval_eval,
     to_json,
+    unknown_relevant_documents,
 )
 from frontdesk.tenancy.loader import load_pack
 from frontdesk.tenancy.pack import BusinessPack
@@ -543,3 +544,47 @@ def test_a_zero_vector_leaves_the_search_to_the_words_of_the_question(
     words, silence = report.results
     assert (words.retrieved, words.recall, words.reciprocal_rank) == (("parking-en",), 1.0, 1.0)
     assert (silence.retrieved, silence.recall, silence.reciprocal_rank) == ((), 0.0, 0.0)
+
+
+@pytest.mark.db
+def test_relevant_keys_the_active_version_lacks_are_unknown(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    factory = activate_pack(clinic_pack)
+    cases = [
+        RetrievalCase("a", "q", "en", ("parking-en", "parkng-en")),
+        RetrievalCase("b", "q", "it", ("first-visit-it",)),
+        RetrievalCase("c", "q", "sq", ("nope", "parking-en", "also-nope")),
+    ]
+    with business_session(factory, clinic_pack.id) as session:
+        unknown = unknown_relevant_documents(session, business_id=clinic_pack.id, cases=cases)
+    assert unknown == [("a", "parkng-en"), ("c", "nope"), ("c", "also-nope")]
+
+
+@pytest.mark.db
+def test_a_business_without_an_active_version_knows_no_document(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    factory = activate_pack(clinic_pack)
+    cases = [RetrievalCase("a", "q", "en", ("parking-en",))]
+    with business_session(factory, "another-business") as session:
+        unknown = unknown_relevant_documents(session, business_id="another-business", cases=cases)
+    assert unknown == [("a", "parking-en")]
+
+
+@pytest.mark.db
+def test_a_document_outside_its_validity_window_is_still_a_known_document(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    pack = clinic_pack.model_copy(
+        update={
+            "documents": [
+                document.model_copy(update={"valid_until": date(2020, 1, 1)})
+                for document in clinic_pack.documents
+            ]
+        }
+    )
+    factory = activate_pack(pack)
+    cases = [RetrievalCase("a", "q", "en", ("parking-en",))]
+    with business_session(factory, pack.id) as session:
+        assert unknown_relevant_documents(session, business_id=pack.id, cases=cases) == []
