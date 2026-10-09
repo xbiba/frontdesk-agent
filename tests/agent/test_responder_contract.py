@@ -262,6 +262,11 @@ def test_each_profile_ships_a_runbook(profile: Profile) -> None:
         pytest.param({"text": "x" * 301}, id="text-too-long"),
         pytest.param({"quote": "x" * 11}, id="quote-too-short"),
         pytest.param({"quote": "x" * 401}, id="quote-too-long"),
+        pytest.param({"text": "   "}, id="blank-text"),
+        pytest.param({"quote": " " * 12}, id="quote-of-spaces"),
+        pytest.param({"quote": "\n" * 12}, id="quote-of-newlines"),
+        pytest.param({"quote": "a" + " " * 11}, id="quote-of-one-letter-and-padding"),
+        pytest.param({"quote": "abcde   fghij"}, id="quote-of-eleven-once-collapsed"),
         pytest.param({"evidence_id": "D-ABCDEF12"}, id="uppercase-id"),
         pytest.param({"evidence_id": "d-12345678"}, id="lowercase-prefix"),
         pytest.param({"evidence_id": "D-12345678\n"}, id="id-with-newline"),
@@ -282,10 +287,13 @@ def test_a_claim_outside_the_limits_is_refused(change: dict[str, str]) -> None:
         pytest.param({"text": "x" * 300}, id="longest-text"),
         pytest.param({"quote": "x" * 12}, id="shortest-quote"),
         pytest.param({"quote": "x" * 400}, id="longest-quote"),
+        pytest.param({"quote": "abcde   fghijk"}, id="quote-of-twelve-once-collapsed"),
+        pytest.param({"text": "  x  "}, id="padded-text"),
     ],
 )
-def test_a_claim_at_the_limits_is_accepted(change: dict[str, str]) -> None:
-    assert Claim.model_validate({**CLAIM, **change}).evidence_id == PASSAGE.evidence_id
+def test_a_claim_at_the_limits_is_accepted_and_kept_as_written(change: dict[str, str]) -> None:
+    payload = {**CLAIM, **change}
+    assert Claim.model_validate(payload).model_dump() == payload
 
 
 def test_an_answer_may_carry_up_to_the_maximum_number_of_claims() -> None:

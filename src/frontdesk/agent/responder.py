@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from enum import StrEnum
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from pydantic_ai import Agent, FunctionToolset, RunContext, UsageLimits
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.models import Model
@@ -27,6 +27,7 @@ from frontdesk.tenancy.pack import Profile
 # With the classifier's two requests, at most four model calls per message.
 RESPONDER_LIMITS: Final = UsageLimits(request_limit=2, tool_calls_limit=1)
 MAX_CLAIMS: Final = 4
+MIN_QUOTE_CHARS: Final = 12
 
 
 class AnswerAction(StrEnum):
@@ -40,7 +41,26 @@ class Claim(BaseModel):
 
     text: str = Field(min_length=1, max_length=300)
     evidence_id: str = Field(pattern=DOCUMENT_ID_PATTERN)
-    quote: str = Field(min_length=12, max_length=400)
+    quote: str = Field(min_length=MIN_QUOTE_CHARS, max_length=400)
+
+    # The claim check compares quotes with whitespace collapsed, so the length that counts is the
+    # collapsed one: a quote of blanks would be "found" in any passage. These only reject; the
+    # stored values stay as the model wrote them.
+    @field_validator("text")
+    @classmethod
+    def _text_is_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+    @field_validator("quote")
+    @classmethod
+    def _quote_is_long_enough(cls, value: str) -> str:
+        if len(" ".join(value.split())) < MIN_QUOTE_CHARS:
+            raise ValueError(
+                f"must have at least {MIN_QUOTE_CHARS} characters once whitespace is collapsed"
+            )
+        return value
 
 
 class ResponderOutput(BaseModel):
