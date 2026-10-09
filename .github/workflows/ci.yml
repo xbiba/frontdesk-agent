@@ -17,7 +17,9 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy
       - run: uv run lint-imports
-      - run: uv run pytest
+      - run: uv run pytest -m "not eval"
+      - name: offline evaluations
+        run: uv run pytest -m eval -v
       - name: audit runtime dependencies
         run: |
           uv export --format requirements-txt --no-dev --no-emit-project --output-file requirements-audit.txt

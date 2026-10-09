@@ -334,3 +334,49 @@ def test_bootstrap_names_what_is_wrong_with_a_pack_that_is_not_a_demo(
     assert "real-clinic" in result.stderr
     assert "demo-" in result.stderr
     assert _knowledge_versions(database[0]) == 0
+
+
+# --- eval turns: labelled conversation turns through the whole pipeline -------------------------------
+
+
+def test_turn_evaluation_command(
+    tmp_path: Path, businesses_dir: Path, database: tuple[str, str]
+) -> None:
+    env = str(_env(tmp_path, "shop", businesses_dir / "demo-shop", database))
+    _run("knowledge", "bootstrap-demo", "--env-file", env)
+    report = tmp_path / "turns.json"
+    output = _run("eval", "turns", "--env-file", env, "--output", str(report))
+    assert "| case | language | outcome | result |" in output
+    assert "FAIL" not in output
+    assert report.exists()
+
+
+def test_a_failing_case_fails_the_turn_evaluation_but_the_report_is_still_written(
+    tmp_path: Path, businesses_dir: Path, database: tuple[str, str]
+) -> None:
+    pack_dir = _copy_pack(tmp_path, businesses_dir, "demo-shop")
+    with (pack_dir / "evals" / "turns.yaml").open("a", encoding="utf-8") as dataset:
+        dataset.write(
+            '- id: wrong-on-purpose\n  message: "Posso fare un reso?"\n  expect: {outcome: handoff}\n'
+        )
+    env = str(_env(tmp_path, "shop", pack_dir, database))
+    _run("knowledge", "bootstrap-demo", "--env-file", env)
+    report = tmp_path / "turns.json"
+    result = runner.invoke(app, ["eval", "turns", "--env-file", env, "--output", str(report)])
+    assert result.exit_code == 1
+    assert "| wrong-on-purpose | it | replied | FAIL: outcome: replied |" in result.stdout
+    written = json.loads(report.read_text(encoding="utf-8"))
+    assert written["cases"] == written["passed"] + 1
+    failed = [entry["case_id"] for entry in written["results"] if not entry["passed"]]
+    assert failed == ["wrong-on-purpose"]
+
+
+def test_turn_evaluation_without_knowledge_explains_what_to_run(
+    tmp_path: Path, businesses_dir: Path, database: tuple[str, str]
+) -> None:
+    env = str(_env(tmp_path, "shop", businesses_dir / "demo-shop", database))
+    report = tmp_path / "turns.json"
+    result = runner.invoke(app, ["eval", "turns", "--env-file", env, "--output", str(report)])
+    assert result.exit_code == 1
+    assert "bootstrap-demo" in result.stderr
+    assert not report.exists()

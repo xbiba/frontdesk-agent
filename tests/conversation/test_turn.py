@@ -269,6 +269,7 @@ def _not_provided(passage_id: str, content: str) -> dict[str, Any]:
     }
 
 
+@pytest.mark.eval
 @pytest.mark.parametrize(
     ("claim", "reason"),
     [

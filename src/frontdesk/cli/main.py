@@ -22,6 +22,12 @@ from frontdesk.composition import (
     build_turn_runtime,
     open_deployment,
 )
+from frontdesk.conversation.evaluation import (
+    load_turn_cases,
+    render_turn_markdown,
+    run_turn_eval,
+    turn_report_json,
+)
 from frontdesk.conversation.turn import TurnRuntime
 from frontdesk.db.engine import business_session
 from frontdesk.db.migrate import upgrade_to_head
@@ -251,6 +257,20 @@ def eval_retrieval(
     typer.echo(render_markdown(report))
     if output is not None:
         output.write_text(to_json(report), encoding="utf-8")
+
+
+@eval_app.command("turns")
+def eval_turns(env_file: EnvFile, output: ReportPath = None) -> None:
+    """Run the business's labelled conversation turns; exit 1 if any case fails."""
+    deployment = _deployment(env_file)
+    runtime = _runtime(deployment, env_file)
+    cases = load_turn_cases(deployment.settings.require_business_pack() / "evals" / "turns.yaml")
+    report = asyncio.run(run_turn_eval(runtime, cases, route=deployment.settings.model_route))
+    typer.echo(render_turn_markdown(report))
+    if output is not None:
+        output.write_text(turn_report_json(report), encoding="utf-8")
+    if not report.ok:
+        raise typer.Exit(1)
 
 
 @app.command("chat")
