@@ -1,3 +1,5 @@
+import time
+
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
@@ -7,6 +9,7 @@ from frontdesk.safety.rules import (
     Verdict,
     contains_clinical_terms,
     contains_diagnostic_language,
+    emergency_rule,
     evaluate,
 )
 
@@ -184,3 +187,62 @@ def test_clinical_terms_and_diagnostic_language() -> None:
 @given(st.text(max_size=500))
 def test_rules_never_raise(text: str) -> None:
     assert evaluate(text).verdict in set(Verdict)
+
+
+# The emergency patterns alone: the net for a message too long for `evaluate`, whose personal-data
+# patterns take time that grows with the square of the length of a long word.
+
+
+@pytest.mark.parametrize("text", [text for texts in EMERGENCIES.values() for text in texts])
+def test_the_emergency_net_alone_names_the_same_rule_as_evaluate(text: str) -> None:
+    assert emergency_rule(text) == evaluate(text).rule == "emergency"
+
+
+@pytest.mark.parametrize("text", NOT_EMERGENCIES)
+def test_the_emergency_net_alone_leaves_practical_messages_alone(text: str) -> None:
+    assert emergency_rule(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "verdict"),
+    [
+        ("Che farmaco devo prendere per la schiena?", Verdict.CLINICAL_ADVICE),
+        ("Il mio numero è 069 123 4567", Verdict.PERSONAL_DATA),
+        ("scrivetemi a mario.rossi@example.com", Verdict.PERSONAL_DATA),
+    ],
+)
+def test_the_emergency_net_alone_does_not_run_the_other_rules(text: str, verdict: Verdict) -> None:
+    assert evaluate(text).verdict is verdict
+    assert emergency_rule(text) is None
+
+
+@given(st.text(max_size=500))
+def test_the_emergency_net_alone_agrees_with_evaluate_on_emergencies(text: str) -> None:
+    assert (emergency_rule(text) is not None) == (evaluate(text).verdict is Verdict.EMERGENCY)
+
+
+def test_the_emergency_net_reads_all_of_a_long_text() -> None:
+    calm = "ciao come stai " * 7_000
+    assert len(calm) > 100_000
+    assert emergency_rule(calm) is None
+    assert emergency_rule("mi fa male il petto " + calm) == "emergency"
+    assert emergency_rule(calm + "nuk marr frymë") == "emergency"
+    assert emergency_rule(calm + "he isn't breathing " + calm) == "emergency"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("a" * 100_000, id="one-long-word"),
+        pytest.param("pain " * 20_000, id="repeated-stem"),
+        pytest.param("1 " * 50_000, id="digits"),
+        pytest.param("a.b@" * 25_000, id="at-signs"),
+        # Each of these characters becomes 18 once normalized (NFKD).
+        pytest.param(chr(0xFDFA) * 100_000, id="characters-that-expand"),
+        pytest.param("ciao come stai " * 7_000, id="prose"),
+    ],
+)
+def test_the_emergency_net_alone_takes_time_linear_in_the_length(text: str) -> None:
+    started = time.perf_counter()
+    assert emergency_rule(text) is None
+    assert time.perf_counter() - started < 1.0

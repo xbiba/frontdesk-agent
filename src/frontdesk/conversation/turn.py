@@ -46,7 +46,7 @@ from frontdesk.knowledge.evidence import Evidence
 from frontdesk.knowledge.facts import Catalog, load_catalog
 from frontdesk.observability.logs import log_event
 from frontdesk.safety.language import detect_language
-from frontdesk.safety.rules import Verdict, evaluate
+from frontdesk.safety.rules import Verdict, emergency_rule, evaluate
 from frontdesk.tenancy.pack import BusinessPack, FixedTextKey, Language, Profile
 
 logger = logging.getLogger(__name__)
@@ -145,12 +145,14 @@ async def _decide(
     if not any(char.isalnum() for char in stripped):
         return _fixed(pack, language, FixedTextKey.CLARIFICATION, TurnTrace(rule="empty"))
     if len(stripped) > MAX_MESSAGE_CHARS:
-        return _handoff(pack, language, FixedTextKey.HANDOFF, TurnTrace(rule="too_long"))
+        # Too long for the other rules (not linear in the length), but not for the emergency ones.
+        found = emergency_rule(stripped)
+        if found is None:
+            return _handoff(pack, language, FixedTextKey.HANDOFF, TurnTrace(rule="too_long"))
+        return _emergency(pack, language, found)
     rule = evaluate(stripped)
     if rule.verdict is Verdict.EMERGENCY:
-        # The category lets the next state drop the topic, as for an emergency the classifier found.
-        trace = TurnTrace(rule=rule.rule, category=Category.EMERGENCY)
-        return _handoff(pack, language, FixedTextKey.EMERGENCY, trace)
+        return _emergency(pack, language, rule.rule)
     if rule.verdict is Verdict.CLINICAL_ADVICE:
         return _handoff(pack, language, FixedTextKey.CLINICAL, TurnTrace(rule=rule.rule))
     if rule.verdict is Verdict.PERSONAL_DATA:
@@ -427,3 +429,9 @@ def _handoff(
         parts.append(_fixed_text(pack, language, reason))
     parts.append(_fixed_text(pack, language, FixedTextKey.HANDOFF))
     return TurnResult("\n\n".join(parts), TurnOutcome.HANDOFF, language, trace)
+
+
+def _emergency(pack: BusinessPack, language: Language, rule: str) -> TurnResult:
+    # The category lets the next state drop the topic, as for an emergency the classifier found.
+    trace = TurnTrace(rule=rule, category=Category.EMERGENCY)
+    return _handoff(pack, language, FixedTextKey.EMERGENCY, trace)

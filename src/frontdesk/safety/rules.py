@@ -317,6 +317,16 @@ def personal_fields(text: str) -> frozenset[PersonalField]:
     return frozenset(found)
 
 
+def emergency_rule(text: str) -> str | None:
+    """The rule that finds an emergency in `text`, or None. Only the emergency patterns run.
+
+    They take time linear in the length of the text, which the personal-data patterns do not (a
+    long word makes the email pattern quadratic), so a message too long for `evaluate` is still
+    checked for an emergency with this alone.
+    """
+    return "emergency" if EMERGENCY.search(normalize(text)) else None
+
+
 def evaluate(text: str, *, expected: frozenset[PersonalField] = frozenset()) -> RuleResult:
     normalized = normalize(text)
     if EMERGENCY.search(normalized):

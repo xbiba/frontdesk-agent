@@ -15,7 +15,7 @@ Checking a generated reply with patterns cannot prove it right. A check on numbe
 The second option.
 - Prices, opening hours, address and contacts, services, doctors, orientation and order status are written by code from the approved records, with fixed phrasing in each language, including the opening and the closing question. No model writes them.
 - Questions answered from documents go to the responder, which returns at most four claims. Each claim is one sentence in the person's language, the ID of a document passage and a quote copied from that passage. Code checks that the passage was provided, that the quote is in it word for word, that every number in the sentence is in the quote, that the sentence names no price, that it uses no diagnostic language and that it is close in meaning to its quote (cosine similarity of their embeddings at least `min_support_similarity`).
-- Clarifying questions are chosen by the model from a closed list and written by code. A handoff always uses the approved fixed texts.
+- Clarifying questions are chosen by the model from a closed list and written by code. The list is the one that each profile's prompt offers (the shop's offers none). A handoff always uses the approved fixed texts.
 
 ## Consequences
 - The replies people read most often are exact by construction and cost no model call.
@@ -23,6 +23,7 @@ The second option.
 - Prices belong in records, not in documents: a document answer that names a price is refused.
 - Numbers are compared as values, whether written in digits or in words of the three languages ("fourteen", "quattordici" and "14" are one number). Words that are also articles or verbs ("one", "un", "uno", "una", "sei", "një") count only after a tens word or before a unit of time. A thousands group ("1.000") is compared as written.
 - A quote must start and end on whole words and numbers, and no negation may stand among the four words before it in its clause; otherwise the claim is refused as `quote_not_in_source`.
+- A clarifying question that the profile's prompt does not offer is refused like a failed claim check: the person gets the approved "no information" text and the handoff text, and the turn trace records `clarify_not_offered` among its `check_reasons`.
 - Still unseen by code: a sentence that negates its own quote, ordinals and fractions, hundreds and thousands written in several words, a price given without a currency; the live evaluation measures them.
 
 ## Exit plan
