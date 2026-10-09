@@ -13,3 +13,4 @@ Each record uses the same headings: Status, Context, Options considered, Decisio
 | [0007](0007-public-code-private-business-configuration.md) | Public code, private business configuration | Accepted |
 | [0008](0008-one-deployment-per-business.md) | One deployment per business | Accepted |
 | [0009](0009-grounded-replies.md) | Facts written by code; document answers carry verified quotes | Accepted |
+| [0010](0010-one-engine-channel-adapters.md) | One engine, channel adapters, a capability policy per channel | Accepted |
