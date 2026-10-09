@@ -380,3 +380,62 @@ def test_turn_evaluation_without_knowledge_explains_what_to_run(
     assert result.exit_code == 1
     assert "bootstrap-demo" in result.stderr
     assert not report.exists()
+
+
+@pytest.mark.parametrize(
+    ("content", "reason"),
+    [
+        pytest.param(None, "cannot be read", id="missing-file"),
+        pytest.param(b"", ": no cases", id="empty-file"),
+        pytest.param(b"# nothing here yet\n", ": no cases", id="only-a-comment"),
+        pytest.param(b"[]\n", ": no cases", id="empty-list"),
+        pytest.param(b"id: not-a-list\n", "expected a list of cases", id="not-a-list"),
+        pytest.param(b"- {id: a, message: [x\n", "invalid YAML at line", id="invalid-yaml"),
+        pytest.param(b"- {id: a, message: \xff, expect: {}}\n", "not valid UTF-8", id="not-utf8"),
+        pytest.param(
+            b"- {id: broken-case, message: x, expect: {outcome: maybe}}\n",
+            "case 'broken-case': expect.outcome",
+            id="invalid-case",
+        ),
+        pytest.param(
+            b"- {id: twice, message: x, expect: {}}\n- {id: twice, message: y, expect: {}}\n",
+            "case 'twice': duplicate id, case #1 has it too",
+            id="duplicate-id",
+        ),
+    ],
+)
+def test_a_broken_turn_dataset_is_reported_on_stderr_with_exit_code_1(
+    content: bytes | None, reason: str, tmp_path: Path, businesses_dir: Path
+) -> None:
+    pack_dir = _copy_pack(tmp_path, businesses_dir, "demo-clinic")
+    dataset = pack_dir / "evals" / "turns.yaml"
+    if content is None:
+        dataset.unlink()
+    else:
+        dataset.write_bytes(content)
+    env = str(_env(tmp_path, "clinic", pack_dir, NO_DATABASE))  # no connection is ever opened
+    result = runner.invoke(app, ["eval", "turns", "--env-file", env])
+    assert result.exit_code == 1
+    assert str(dataset) in result.stderr
+    assert reason in result.stderr
+    assert result.stdout == ""
+    assert "Traceback" not in result.output
+    assert isinstance(result.exception, SystemExit)  # a clean exit, not an uncaught error
+
+
+def test_every_problem_of_a_turn_dataset_reaches_stderr_at_once(
+    tmp_path: Path, businesses_dir: Path
+) -> None:
+    pack_dir = _copy_pack(tmp_path, businesses_dir, "demo-shop")
+    (pack_dir / "evals" / "turns.yaml").write_text(
+        "- {id: first, message: x, expect: {outcome: maybe}}\n"
+        "- {id: second, expect: {}}\n"
+        "- {id: third, message: x, expect: {}}\n",
+        encoding="utf-8",
+    )
+    env = str(_env(tmp_path, "shop", pack_dir, NO_DATABASE))
+    result = runner.invoke(app, ["eval", "turns", "--env-file", env])
+    assert result.exit_code == 1
+    assert "case 'first'" in result.stderr
+    assert "case 'second'" in result.stderr
+    assert "case 'third'" not in result.stderr  # the valid case is not a problem

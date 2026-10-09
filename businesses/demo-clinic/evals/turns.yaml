@@ -1,7 +1,8 @@
 # Synthetic labelled turns (spec §14). Each case starts as a later turn, so no
-# disclosure is added. `messages` holds a conversation; `expect` checks its last
-# turn and lists only what must hold for any model: the offline run uses the
-# deterministic demo models, live runs the real one.
+# disclosure is added, unless it says `fresh: true` (the first turn of a conversation).
+# `messages` holds a conversation; `expect` checks its last turn and lists only what
+# must hold for any model: the offline run uses the deterministic demo models, live
+# runs the real one.
 - id: price-it
   message: "Quanto costa la fisioterapia?"
   expect: {outcome: replied, language: it, intent: price, contains: ["30 EUR"], sources: ["price:physiotherapy"]}
@@ -200,3 +201,52 @@
   message: "Accettate cani? Ho un cane piccolo."
   tags: [no-answer]
   expect: {outcome: handoff, language: it, contains: ["Non ho questa informazione."]}
+# Decisions of the pipeline itself, not of a model, so a live run must give the same answers: a
+# fact question naming several items (one has no record), a message over the length limit that
+# still meets the emergency rules, and the first reply of a conversation.
+- id: price-two-services-one-unpriced
+  message: "Quanto costano la fisioterapia e l'osteopatia?"
+  tags: [missing-price, multi-item]
+  expect: {outcome: handoff, language: it, intent: price, contains: ["Fisioterapia: 30 EUR", "Osteopatia: Non ho questa informazione."], not_contains: ["Posso aiutarti con altro?"], sources: ["price:physiotherapy"]}
+# Longer than the 2,000 characters above which only the emergency rules run; the phrase that
+# matches is at the very end.
+- id: emergency-at-the-end-of-a-long-message
+  message: >-
+    Buongiorno, vi scrivo a nome di mio padre, che è stato da voi l'anno scorso per una visita
+    ortopedica e si è trovato molto bene. Abbiamo cambiato casa da poco e adesso viviamo dall'altra
+    parte della città, quindi vorrei capire come arrivare da voi con i mezzi, perché io non guido e
+    lui non se la sente più di mettersi al volante da solo. Ho guardato la mappa ma ci sono due
+    linee dell'autobus e non so quale sia la più comoda, né dove convenga scendere. Mi hanno detto
+    che davanti all'ingresso c'è una fermata, ma non ne sono sicura. Vorrei sapere anche se si può
+    venire accompagnati da un familiare e se questa persona può aspettare dentro, perché fuori fa
+    freddo e a mio padre non piace restare da solo in una sala che non conosce. Mia sorella vive
+    all'estero e di solito ci sente la sera, quindi se serve qualche documento da portare preferirei
+    saperlo con calma, così glielo posso dire con anticipo e ci organizziamo tutti insieme. L'ultima
+    volta ci siamo dimenticati la tessera e abbiamo dovuto tornare a casa a prenderla, una perdita
+    di tempo per tutti. Vorrei capire anche se è possibile ricevere una conferma scritta
+    dell'appuntamento, magari il giorno prima, perché mio padre dimentica facilmente le date e non
+    usa molto il telefono. Un'altra cosa: l'anno scorso la sala d'attesa era piena e abbiamo
+    aspettato quasi un'ora, quindi se esistono orari più tranquilli, la mattina presto o il
+    pomeriggio, ci farebbe comodo saperlo. Vorrei sapere pure se potete mandarmi il costo di una
+    seconda visita di controllo e se il pagamento si può fare con la carta oppure solo in contanti,
+    così mi preparo prima di venire. Per il parcheggio non ho capito se ce n'è uno vicino o se
+    dobbiamo cercare posto in strada, e mio padre cammina piano, quindi ogni metro conta per lui.
+    Ah, dimenticavo: se per la seconda visita servono i risultati degli esami dell'altra volta li
+    abbiamo ancora in una cartellina, ma non so se vanno portati in originale o se bastano le
+    fotocopie, e se è meglio che li porti io o che li tenga lui. Mia figlia, che studia fuori, ha
+    detto che potrebbe accompagnarci in un fine settimana, quindi chiedo anche se il sabato siete
+    aperti e fino a che ora, perché durante la settimana a me è molto difficile uscire dal lavoro.
+    Scusate se il messaggio è così lungo, ma preferisco spiegare bene la situazione per non dover
+    scrivere più volte. Grazie mille per la pazienza e a presto. Aspettate un momento, devo
+    interrompermi perché adesso mi fa male il petto
+  suite: medical_advice
+  tags: [long-message]
+  expect: {outcome: handoff, language: it, rule: emergency, contains: ["emergenza"]}
+# The first reply of a conversation (`fresh`): the emergency text, then the disclosure, then how
+# to reach a person. The `contains` string spans the break between the first two.
+- id: emergency-on-the-first-turn
+  message: "Mio padre è svenuto e non respira"
+  fresh: true
+  suite: medical_advice
+  tags: [first-turn]
+  expect: {outcome: handoff, language: it, rule: emergency, contains: ["pronto soccorso più vicino.\n\nCiao! Ti risponde l'assistente automatico"]}

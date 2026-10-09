@@ -6,17 +6,21 @@ import pytest
 from pydantic import ValidationError
 
 from frontdesk.agent.vocab import Intent
+from frontdesk.conversation.compose import closing
 from frontdesk.conversation.evaluation import (
     Suite,
     TurnCase,
     TurnCaseResult,
+    TurnDatasetError,
     TurnEvalReport,
     check_case,
     load_turn_cases,
     render_turn_markdown,
     turn_report_json,
 )
-from frontdesk.conversation.turn import TurnOutcome, TurnResult, TurnTrace
+from frontdesk.conversation.turn import MAX_MESSAGE_CHARS, TurnOutcome, TurnResult, TurnTrace
+from frontdesk.safety.rules import emergency_rule
+from frontdesk.tenancy.pack import BusinessPack, FixedTextKey
 
 CONTACT = "Per parlare con una persona, chiama la reception."
 CASE = TurnCase.model_validate(
@@ -74,7 +78,7 @@ def test_handoffs_must_end_with_the_contact() -> None:
 def test_cases_are_validated(tmp_path: Path) -> None:
     path = tmp_path / "turns.yaml"
     path.write_text("- {id: a, message: x, expect: {outcome: maybe}}\n", encoding="utf-8")
-    with pytest.raises(ValidationError):
+    with pytest.raises(TurnDatasetError):
         load_turn_cases(path)
     path.write_text(
         "- {id: a, message: x, expect: {}}\n- {id: a, message: y, expect: {}}\n", encoding="utf-8"
@@ -86,7 +90,7 @@ def test_cases_are_validated(tmp_path: Path) -> None:
         "- {id: a, message: x, messages: [y], expect: {}}\n",
     ):
         path.write_text(invalid, encoding="utf-8")
-        with pytest.raises(ValidationError):
+        with pytest.raises(TurnDatasetError):
             load_turn_cases(path)
 
 
@@ -155,6 +159,18 @@ def test_failures_come_in_a_fixed_order() -> None:
     )
 
 
+def test_a_failure_reason_stays_on_one_line_so_a_report_row_is_never_split() -> None:
+    case = _case(contains=["Se è un'emergenza.\n\nCiao!"], not_contains=["Fisioterapia:\r\n"])
+    failures = check_case(case, _result("Fisioterapia:\r\n30 EUR"), handoff_text=CONTACT)
+    assert failures == (
+        "missing text: Se è un'emergenza.\\n\\nCiao!",
+        "unexpected text: Fisioterapia:\\r\\n",
+    )
+    report = TurnEvalReport("demo-clinic", "offline-demo", (_outcome("a", failures=failures),))
+    rows = [line for line in render_turn_markdown(report).splitlines() if line.startswith("| a ")]
+    assert len(rows) == 1  # the whole failure is in one table row
+
+
 def test_an_empty_expectation_still_applies_the_checks_every_reply_gets() -> None:
     case = _case()
     assert check_case(case, _result("Fisioterapia: 30 EUR"), handoff_text=CONTACT) == ()
@@ -203,27 +219,112 @@ def test_a_malformed_case_is_refused(case: dict[str, Any]) -> None:
         TurnCase.model_validate(case)
 
 
-def test_the_dataset_must_be_a_list_of_cases(tmp_path: Path) -> None:
+def _dataset(tmp_path: Path, text: str) -> Path:
     path = tmp_path / "turns.yaml"
-    for invalid in ("id: a\n", "", "- just a string\n"):
-        path.write_text(invalid, encoding="utf-8")
-        with pytest.raises(ValidationError):
-            load_turn_cases(path)
+    path.write_text(text, encoding="utf-8")
+    return path
 
 
-def test_duplicate_case_ids_are_named_with_the_file(tmp_path: Path) -> None:
-    path = tmp_path / "turns.yaml"
-    path.write_text(
+def _problems(path: Path) -> list[str]:
+    with pytest.raises(TurnDatasetError) as refused:
+        load_turn_cases(path)
+    return str(refused.value).splitlines()
+
+
+def test_a_dataset_error_is_a_value_error() -> None:
+    assert issubclass(TurnDatasetError, ValueError)
+
+
+def test_a_malformed_case_is_refused_naming_the_file_the_case_and_the_field(
+    tmp_path: Path,
+) -> None:
+    path = _dataset(tmp_path, "- {id: price-it, message: x, expect: {outcome: maybe}}\n")
+    [problem] = _problems(path)
+    assert problem.startswith(f"{path}: case 'price-it': expect.outcome: Input should be ")
+
+
+def test_every_malformed_case_is_reported_at_once(tmp_path: Path) -> None:
+    path = _dataset(
+        tmp_path,
+        "- {id: a, message: x, expect: {}}\n"
+        "- {id: b, message: x, colour: red, expect: {}}\n"
+        "- {message: y, expect: {}}\n"
+        "- just a string\n"
+        "- {id: a, message: z, expect: {}}\n",
+    )
+    problems = _problems(path)
+    assert len(problems) == 4
+    assert problems[0] == f"{path}: case 'b': colour: Extra inputs are not permitted"
+    assert problems[1] == f"{path}: case #3: id: Field required"
+    assert problems[2].startswith(f"{path}: case #4: ")
+    assert problems[3] == f"{path}: case 'a': duplicate id, case #1 has it too"
+
+
+def test_a_case_without_a_message_is_refused_naming_the_case(tmp_path: Path) -> None:
+    path = _dataset(tmp_path, "- {id: quiet, expect: {}}\n")
+    [problem] = _problems(path)
+    assert problem.startswith(f"{path}: case 'quiet': ")
+    assert "needs either `message` or `messages`" in problem
+
+
+def test_duplicate_ids_are_named_with_the_file_and_the_first_case_that_has_them(
+    tmp_path: Path,
+) -> None:
+    path = _dataset(
+        tmp_path,
         "- {id: b, message: x, expect: {}}\n"
         "- {id: a, message: x, expect: {}}\n"
         "- {id: b, message: y, expect: {}}\n"
         "- {id: a, message: y, expect: {}}\n",
-        encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="duplicate case ids") as raised:
-        load_turn_cases(path)
-    assert str(path) in str(raised.value)
-    assert "['a', 'b']" in str(raised.value)
+    assert _problems(path) == [
+        f"{path}: case 'b': duplicate id, case #1 has it too",
+        f"{path}: case 'a': duplicate id, case #2 has it too",
+    ]
+
+
+def test_a_missing_file_is_refused_naming_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "turns.yaml"
+    assert _problems(path) == [f"{path}: cannot be read (No such file or directory)"]
+
+
+def test_a_file_that_is_not_utf8_text_is_refused_naming_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "turns.yaml"
+    path.write_bytes(b"- {id: a, message: \xff\xfe, expect: {}}\n")
+    assert _problems(path) == [f"{path}: not valid UTF-8 text (save the file as UTF-8)"]
+
+
+def test_invalid_yaml_is_refused_with_the_line_and_the_column(tmp_path: Path) -> None:
+    path = _dataset(tmp_path, "- {id: a, message: x, expect: {}}\n- {id: b, message: [x\n")
+    [problem] = _problems(path)
+    assert problem.startswith(f"{path}: invalid YAML at line ")
+    assert ", column " in problem
+
+
+@pytest.mark.parametrize("text", ["", "[]\n", "# only a comment\n", "null\n"])
+def test_a_dataset_without_cases_is_refused(tmp_path: Path, text: str) -> None:
+    assert _problems(_dataset(tmp_path, text)) == [f"{tmp_path / 'turns.yaml'}: no cases"]
+
+
+@pytest.mark.parametrize("text", ["id: a\n", "just some text\n", "42\n"])
+def test_a_dataset_that_is_not_a_list_is_refused(tmp_path: Path, text: str) -> None:
+    path = _dataset(tmp_path, text)
+    assert _problems(path) == [f"{path}: expected a list of cases, one '- id: ...' entry for each"]
+
+
+# --- A fresh conversation: the first reply of a person -------------------------------------------------
+
+
+def test_a_case_starts_as_a_later_turn_unless_it_is_fresh() -> None:
+    plain = TurnCase.model_validate({"id": "a", "message": "x", "expect": {}})
+    fresh = TurnCase.model_validate({"id": "b", "message": "x", "fresh": True, "expect": {}})
+    assert (plain.fresh, fresh.fresh) == (False, True)
+
+
+@pytest.mark.parametrize("seed", [{"current_language": "it"}, {"previous_intents": ["hours"]}])
+def test_a_fresh_conversation_has_no_earlier_language_or_intents(seed: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError, match="fresh"):
+        TurnCase.model_validate({"id": "a", "message": "x", "fresh": True, "expect": {}, **seed})
 
 
 # --- Reports -------------------------------------------------------------------------------------------
@@ -264,6 +365,11 @@ def test_a_report_is_ok_only_when_every_case_passed() -> None:
     assert (REPORT.ok, REPORT.passed) == (False, 2)
     green = TurnEvalReport("demo-shop", "offline-demo", (_outcome("a"), _outcome("b")))
     assert (green.ok, green.passed) == (True, 2)
+
+
+def test_a_report_that_checked_nothing_is_not_ok() -> None:
+    empty = TurnEvalReport("demo-clinic", "offline-demo", ())
+    assert (empty.ok, empty.passed) == (False, 0)
 
 
 def test_results_are_grouped_by_suite_and_by_language_with_sorted_names() -> None:
@@ -328,3 +434,39 @@ def test_the_demo_datasets_have_the_size_and_the_kinds_of_case_the_spec_names(
     emergencies = {case.expect.language for case in clinic if case.expect.rule == "emergency"}
     assert emergencies == {"sq", "it", "en"}  # the emergency phrasings, in every language
     assert any(case.expect.rule == "emergency" for case in shop)
+
+
+def test_the_clinic_dataset_covers_several_items_long_messages_and_first_turns(
+    businesses_dir: Path, clinic_pack: BusinessPack
+) -> None:
+    path = businesses_dir / "demo-clinic" / "evals" / "turns.yaml"
+    cases = {case.id: case for case in load_turn_cases(path)}
+
+    # A fact question naming several items, one without a record: each missing item is named, the
+    # reply carries no closing question and ends with the contact.
+    pair = cases["price-two-services-one-unpriced"]
+    assert pair.expect.outcome is TurnOutcome.HANDOFF
+    assert pair.expect.intent is Intent.PRICE
+    assert "Osteopatia: Non ho questa informazione." in pair.expect.contains
+    assert closing("it") in pair.expect.not_contains
+
+    # A message over the limit still meets the emergency patterns: the phrase is only at the end.
+    long = cases["emergency-at-the-end-of-a-long-message"]
+    message = (long.message or "").strip()
+    assert len(message) > MAX_MESSAGE_CHARS
+    assert emergency_rule(message) is not None
+    assert emergency_rule(message[:-30]) is None
+    assert long.expect.rule == "emergency"
+
+    # The first reply of an emergency reads the emergency text first, then the disclosure.
+    first = cases["emergency-on-the-first-turn"]
+    texts = clinic_pack.fixed_texts["it"]
+    assert first.expect.language == "it"
+    spanning = [text for text in first.expect.contains if "\n\n" in text]
+    emergency_then_disclosure = (
+        f"{texts[FixedTextKey.EMERGENCY]}\n\n{texts[FixedTextKey.DISCLOSURE]}"
+    )
+    assert spanning
+    assert all(text in emergency_then_disclosure for text in spanning)
+    # `fresh` is for this case only: every other case starts as a later turn, as before.
+    assert [case.id for case in cases.values() if case.fresh] == ["emergency-on-the-first-turn"]

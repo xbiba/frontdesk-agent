@@ -111,6 +111,41 @@ async def test_every_case_starts_as_a_later_turn_so_no_disclosure_is_added(
     assert (await run_turn_eval(runtime, [case], route=ROUTE)).ok
 
 
+async def test_a_fresh_case_meets_the_first_turn_so_the_emergency_reads_before_the_disclosure(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    # Emergencies end at the rules: the classifier must not run (`None` makes it fail if it does).
+    runtime = make_runtime(
+        clinic_pack, activate_pack(clinic_pack), classifier_model(None), document_responder()
+    )
+    texts = clinic_pack.fixed_texts["it"]
+    emergency, disclosure = texts[FixedTextKey.EMERGENCY], texts[FixedTextKey.DISCLOSURE]
+    message = "Mio padre è svenuto e non respira"
+    first = _case(
+        id="first-turn",
+        message=message,
+        fresh=True,
+        expect={
+            "outcome": "handoff",
+            "rule": "emergency",
+            "contains": [f"{emergency}\n\n{disclosure}"],  # emergency first, disclosure second
+            "not_contains": [f"{disclosure}\n\n{emergency}"],
+        },
+    )
+    later = _case(  # the same message as a later turn: no disclosure at all
+        id="later-turn",
+        message=message,
+        expect={
+            "outcome": "handoff",
+            "rule": "emergency",
+            "contains": [emergency],
+            "not_contains": [disclosure],
+        },
+    )
+    report = await run_turn_eval(runtime, [first, later], route=ROUTE)
+    assert report.ok, render_turn_markdown(report)
+
+
 async def test_cases_do_not_share_a_conversation(
     activate_pack: Activate, shop_pack: BusinessPack
 ) -> None:
