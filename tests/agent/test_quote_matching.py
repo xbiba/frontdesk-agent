@@ -11,7 +11,7 @@ from frontdesk.agent.responder import ResponderOutput
 from frontdesk.knowledge.chunking import chunk_markdown
 from frontdesk.knowledge.embedders import HashEmbedder
 from frontdesk.knowledge.evidence import Evidence, EvidenceKind
-from frontdesk.tenancy.pack import BusinessPack
+from frontdesk.tenancy.pack import BusinessPack, Language
 
 APOSTROPHE = chr(0x2019)
 SOFT_HYPHEN = chr(0x00AD)
@@ -28,9 +28,14 @@ class _Similar:
         return [[1.0, 0.0] for _ in texts]
 
 
-def _answer(content: str, text: str, quote: str) -> AnswerCheck:
+def _answer(content: str, text: str, quote: str, language: Language | None = None) -> AnswerCheck:
     passage = Evidence.create(
-        kind=EvidenceKind.DOCUMENT, source_ref="doc#1", version="v1", title="Doc", content=content
+        kind=EvidenceKind.DOCUMENT,
+        source_ref="doc#1",
+        version="v1",
+        title="Doc",
+        content=content,
+        language=language,
     )
     output = ResponderOutput.model_validate(
         {
@@ -252,6 +257,153 @@ def test_every_negation_word_keeps_a_quote_out_of_its_sentence(word: str) -> Non
 @pytest.mark.parametrize("word", NOT_NEGATIONS)
 def test_words_that_only_look_like_a_negation_do_not(word: str) -> None:
     assert quote_in("is open on weekdays", f"The clinic {word} is open on weekdays")
+
+
+# --- the negation words of a passage are those of its language
+
+LANGUAGES: tuple[Language, ...] = ("en", "it", "sq")
+WORDS_BY_LANGUAGE: dict[Language, list[str]] = {
+    "en": _words("not no never without none nothing nobody neither nor cannot"),
+    "it": _words("non né nè mai senza nessun nessuno nessuna niente nulla neanche nemmeno neppure"),
+    "sq": _words("nuk mos jo pa asnjë asnje askush asgjë asgje kurrë kurre"),
+}
+LANGUAGE_CASES = [
+    pytest.param(language, word, id=f"{language}-{word}")
+    for language in LANGUAGES
+    for word in WORDS_BY_LANGUAGE[language]
+]
+OTHER_LANGUAGE_CASES = [
+    pytest.param(language, word, id=f"{language}-not-{other}-{word}")
+    for language in LANGUAGES
+    for other in LANGUAGES
+    if other != language
+    for word in WORDS_BY_LANGUAGE[other]
+]
+
+
+@pytest.mark.parametrize(("language", "word"), LANGUAGE_CASES)
+def test_a_negation_word_of_the_passages_language_keeps_a_quote_out(
+    language: Language, word: str
+) -> None:
+    assert not quote_in("is open on weekdays", f"The clinic {word} is open on weekdays", language)
+
+
+@pytest.mark.parametrize(("language", "word"), OTHER_LANGUAGE_CASES)
+def test_a_word_that_negates_in_another_language_does_not_in_this_one(
+    language: Language, word: str
+) -> None:
+    assert quote_in("is open on weekdays", f"The clinic {word} is open on weekdays", language)
+    # Without a language every list applies, as before.
+    assert not quote_in("is open on weekdays", f"The clinic {word} is open on weekdays")
+
+
+@pytest.mark.parametrize(
+    ("quote", "source"),
+    [
+        pytest.param("un controllo", "Per visita s'intende un controllo.", id="s-intende"),
+        pytest.param(
+            "le ore di lavoro",
+            "Per giorni lavorativi s'intendono le ore di lavoro",
+            id="s-intendono",
+        ),
+        pytest.param(
+            "un controllo",
+            f"Per visita s{APOSTROPHE}intende un controllo.",
+            id="s-intende-with-a-typographic-apostrophe",
+        ),
+    ],
+)
+def test_the_italian_elision_before_a_quote_is_not_an_albanian_negation(
+    quote: str, source: str
+) -> None:
+    assert quote_in(quote, source, "it")
+    assert quote_in(quote, source, "en")
+    assert not quote_in(quote, source, "sq")  # in Albanian text, "s'" negates
+    assert not quote_in(quote, source)  # an unknown language fails closed
+
+
+@pytest.mark.parametrize(
+    ("quote", "source"),
+    [
+        pytest.param("ka parkim falas", "S'ka parkim falas për pacientët.", id="s-ka"),
+        pytest.param("ka parkim falas", f"S{APOSTROPHE}ka parkim falas për pacientët.", id="typo"),
+        pytest.param("pranojmë kartën bankare", "Nuk e pranojmë kartën bankare.", id="nuk"),
+    ],
+)
+def test_albanian_negations_still_refuse_a_quote_in_an_albanian_passage(
+    quote: str, source: str
+) -> None:
+    assert not quote_in(quote, source, "sq")
+
+
+@pytest.mark.parametrize(
+    ("quote", "source"),
+    [
+        pytest.param("accept cards today", "We don't accept cards today", id="dont"),
+        pytest.param(
+            "accept cards today", f"Sorry, we can{APOSTROPHE}t accept cards today", id="cant"
+        ),
+    ],
+)
+def test_the_english_contraction_negates_in_english_text_only(quote: str, source: str) -> None:
+    assert not quote_in(quote, source, "en")
+    assert not quote_in(quote, source)
+    assert quote_in(quote, source, "it")
+    assert quote_in(quote, source, "sq")
+
+
+def test_a_name_that_is_an_albanian_negation_does_not_negate_an_english_sentence() -> None:
+    assert quote_in("about parking", "Ask Jo about parking", "en")
+    assert not quote_in("about parking", "Ask Jo about parking", "sq")
+
+
+def test_every_other_negation_case_stays_refused_in_its_own_language() -> None:
+    cases: list[tuple[Language, str, str]] = [
+        ("en", "accept cards today", "No refunds? We do not accept cards today"),
+        ("en", "refunds after the first month", "No refunds after the first month"),
+        ("it", "pagare con carta", "Non è possibile pagare con carta."),
+        ("it", "accettiamo carte", "NON accettiamo carte"),
+        ("sq", "hyni me këpucë", "Mos hyni me këpucë në sallë."),
+    ]
+    for language, quote, source in cases:
+        assert not quote_in(quote, source, language), (language, source)
+
+
+# "no" before a number abbreviates "number": it is not a negation after a word that takes one.
+
+
+@pytest.mark.parametrize("language", [None, "en", "it", "sq"])
+def test_no_before_a_number_after_a_label_is_not_a_negation(language: Language | None) -> None:
+    assert quote_in("ships fast", "Order no 12 ships fast.", language)
+    assert quote_in("12 ships fast", "Order no 12 ships fast.", language)
+    assert quote_in("ships fast", "Invoice No 7 ships fast.", language)
+    assert quote_in("is ready", "Your order no 12345 is ready", language)
+
+
+@pytest.mark.parametrize(
+    ("quote", "source"),
+    [
+        pytest.param("24-hour service", "We have no 24-hour service.", id="no-24-hour"),
+        pytest.param("5 parking spaces", "There are no 5 parking spaces.", id="no-5"),
+        pytest.param("ships fast", "We have no order 12 ships fast", id="no-then-a-label"),
+        pytest.param("12 ships fast", "No 12 ships fast", id="no-at-the-start"),
+        pytest.param("ships fast", "Order no ships fast", id="no-without-a-number"),
+        pytest.param("ships fast", "Order no more ships fast", id="no-more"),
+    ],
+)
+def test_no_elsewhere_still_negates(quote: str, source: str) -> None:
+    assert not quote_in(quote, source, "en")
+    assert not quote_in(quote, source)
+
+
+def test_the_passage_language_reaches_the_claim_check() -> None:
+    content = "Per visita s'intende un controllo medico completo di circa trenta minuti."
+    text = "La visita è un controllo medico completo."
+    quote = "un controllo medico completo di circa trenta minuti"
+    assert _answer(content, text, quote, "it").ok
+    assert _answer(content, text, quote, "en").ok
+    assert _answer(content, text, quote, "sq").reasons == ("quote_not_in_source",)
+    assert _answer(content, text, quote).reasons == ("quote_not_in_source",)  # language unknown
 
 
 # --- how text is compared

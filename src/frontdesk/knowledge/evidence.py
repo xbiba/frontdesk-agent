@@ -9,6 +9,8 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from frontdesk.tenancy.pack import Language
+
 DOCUMENT_ID_PATTERN: Final = r"^D-[0-9a-f]{8}$"
 
 
@@ -32,6 +34,9 @@ class Evidence(BaseModel):
     content: str
     values: dict[str, str] = Field(default_factory=dict)
     public_url: str | None = None
+    # The language of a document passage. It is not part of the ID, and the claim checks use it to
+    # pick the negation words of that language; without it they apply all three languages' words.
+    language: Language | None = None
 
     @classmethod
     def create(
@@ -44,6 +49,7 @@ class Evidence(BaseModel):
         content: str,
         values: dict[str, str] | None = None,
         public_url: str | None = None,
+        language: Language | None = None,
     ) -> Evidence:
         digest = hashlib.sha256(f"{kind}|{source_ref}|{version}".encode()).hexdigest()[:8]
         return cls(
@@ -55,6 +61,7 @@ class Evidence(BaseModel):
             content=content,
             values=values or {},
             public_url=public_url,
+            language=language,
         )
 
 

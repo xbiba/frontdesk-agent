@@ -95,8 +95,11 @@ def check_free_text(text: str) -> str | None:
 
 
 def _has_markup(text: str) -> bool:
-    """Angle brackets, control characters (newlines included) and invisible format characters."""
-    return any(char in "<>" or unicodedata.category(char) in {"Cc", "Cf"} for char in text)
+    """Angle brackets, control characters (newlines included), invisible format characters and the
+    Unicode line and paragraph separators (U+2028, U+2029), which also end a line."""
+    return any(
+        char in "<>" or unicodedata.category(char) in {"Cc", "Cf", "Zl", "Zp"} for char in text
+    )
 
 
 def extract_order_details(text: str) -> tuple[str | None, str | None]:

@@ -22,6 +22,7 @@ from frontdesk.db.models import Chunk, Document
 from frontdesk.knowledge.evidence import Evidence, EvidenceKind
 from frontdesk.knowledge.versions import active_version_id
 from frontdesk.safety.normalize import tokens
+from frontdesk.tenancy.pack import Language
 
 RRF_K = 60
 MIN_TOKEN_LENGTH = 3
@@ -107,6 +108,7 @@ STOPWORDS = frozenset(
 class RetrievedChunk:
     chunk_id: uuid.UUID
     document_key: str
+    language: Language
     title: str
     heading: str
     content: str
@@ -184,6 +186,7 @@ def chunk_evidence(chunk: RetrievedChunk) -> Evidence:
         title=chunk.heading,
         content=chunk.content,
         public_url=chunk.public_url,
+        language=chunk.language,
     )
 
 
@@ -246,6 +249,7 @@ def _load(
             Chunk.content,
             Chunk.knowledge_version_id,
             Document.doc_key,
+            Document.language,
             Document.title,
             Document.public_url,
         )
@@ -266,6 +270,7 @@ def _load(
             RetrievedChunk(
                 chunk_id=row.id,
                 document_key=row.doc_key,
+                language=row.language,
                 title=row.title,
                 heading=row.heading,
                 content=row.content,

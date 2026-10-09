@@ -40,3 +40,20 @@ def test_rendered_content_cannot_close_the_block() -> None:
     rendered = render_evidence([item])
     assert rendered.count("</evidence>") == 1
     assert "title=\"Say 'hi'\"" in rendered
+
+
+def test_a_passage_may_carry_its_language_and_the_id_does_not_change() -> None:
+    plain = Evidence.create(
+        kind=EvidenceKind.DOCUMENT, source_ref="doc#1", version="v1", title="T", content="x"
+    )
+    italian = Evidence.create(
+        kind=EvidenceKind.DOCUMENT,
+        source_ref="doc#1",
+        version="v1",
+        title="T",
+        content="x",
+        language="it",
+    )
+    assert plain.language is None
+    assert italian.language == "it"
+    assert italian.evidence_id == plain.evidence_id

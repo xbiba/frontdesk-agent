@@ -1,16 +1,16 @@
 """Checks on every document answer before it can be sent (ADR-0009).
 
 Each claim must cite a passage that was provided, quote it word for word, take
-every number from the quote, name no price, avoid diagnostic language and stay
-close in meaning to its quote. Facts from records never come through here: code
-writes them (Task 20).
+every number and every link or address from the quote, name no price, avoid
+diagnostic language and stay close in meaning to its quote. Facts from records
+never come through here: code writes them.
 """
 
 from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -19,6 +19,7 @@ from frontdesk.agent.responder import AnswerAction, Claim, ResponderOutput
 from frontdesk.knowledge.embedders import Embedder, cosine
 from frontdesk.knowledge.evidence import Evidence, EvidenceKind
 from frontdesk.safety.rules import contains_diagnostic_language
+from frontdesk.tenancy.pack import Language
 
 MAX_ANSWER_CHARS: Final = 600
 
@@ -48,14 +49,49 @@ _TOKEN: Final = re.compile(r"[^\W_]+(?:(?:[-\U00002013]|(?<=\d)[.,:/](?=\d))[^\W
 # Where a negation stops reaching the quote: a sentence, clause, bracket or list item ends.
 _CLAUSE_BREAK: Final = re.compile(r"[.!?;:,()\U00002022]| [-\U00002013\U00002014*] ")
 _LEAD_WORD: Final = re.compile(r"[^\W\d_]+(?:'[^\W\d_]+)*'?")
-# Lower case with accents, so that Italian "né" (nor) is not the pronoun "ne". English "n't" words
-# and Albanian "s'" ("s'ka": there is not) are recognised by their ending and beginning.
-_NEGATIONS: Final = {
+# Lower case with accents, so that Italian "né" (nor) is not the pronoun "ne". The words belong to a
+# language: a passage is read with the negation words of its own. Two forms are rules rather than
+# words: Albanian "s'" ("s'ka": there is not), which is also the Italian elision ("s'intende"), and
+# English "n't". Each applies to its language only.
+_NEGATIONS: Final[dict[Language, str]] = {
     "en": "not no never without none nothing nobody neither nor cannot",
     "it": "non né nè mai senza nessun nessuno nessuna niente nulla neanche nemmeno neppure",
     "sq": "nuk mos jo pa asnjë asnje askush asgjë asgje kurrë kurre",
 }
-_NEGATION_WORDS: Final = frozenset(word for words in _NEGATIONS.values() for word in words.split())
+_NEGATION_WORDS: Final = {
+    language: frozenset(words.split()) for language, words in _NEGATIONS.items()
+}
+# "no" abbreviates "number" after a word that takes one and before the number ("Order no 12"). Only
+# there it is not a negation; "no 24-hour service" and "no 5 spaces" still are.
+_NUMBER_LABELS: Final = frozenset(
+    {
+        "order",
+        "invoice",
+        "receipt",
+        "reference",
+        "ref",
+        "item",
+        "article",
+        "ticket",
+        "tracking",
+        "parcel",
+        "shipment",
+        "account",
+        "customer",
+        "booking",
+        "appointment",
+        "room",
+        "tel",
+        "phone",
+    }
+)
+_NUMBER_AHEAD: Final = re.compile(r"\s*\d")
+# A web address (any scheme, or www.), an email address, or the "](" of a markdown link. An address
+# ends at a space or a closing bracket, so the brackets of a markdown link are told apart from it.
+_LINK: Final = re.compile(
+    r"(?:[a-z][a-z0-9+.-]*://|www\.)[^\s\]<>\"]+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+|\]\(", re.IGNORECASE
+)
+_AFTER_LINK: Final = ".,;:!?)}'\"\u2026\u00bb"  # punctuation that follows a link, not part of it
 NEGATION_REACH: Final = 4  # words before the quote, in its clause, that are searched for one
 
 
@@ -79,13 +115,26 @@ def mentions_price(text: str) -> bool:
     return bool(_CURRENCY.search(text) or _LEK_CODE.search(text))
 
 
-def quote_in(quote: str, source: str) -> bool:
+def links_in(text: str) -> set[str]:
+    """The web addresses, email addresses and markdown links ("](") in `text`, compared by `==`.
+
+    Contacts are written by code, never by the model, so a claim may only repeat the ones its quote
+    holds. Case does not matter; the punctuation after an address is not part of it.
+    """
+    return {
+        found.rstrip(_AFTER_LINK).casefold() if found != "](" else found
+        for found in _LINK.findall(_flat(text))
+    }
+
+
+def quote_in(quote: str, source: str, language: Language | None = None) -> bool:
     """The quote is in the source word for word, and was not cut out of a word or a negation.
 
     Spacing and quote marks do not matter. The quote may not start or end inside a word or a number
     ("4 giorni" is not in "14 giorni", "available" is not in "unavailable"), and the words just
     before it may not hold a negation ("accept cards" is not in "we do not accept cards"). A quote
-    found more than once must pass at every place.
+    found more than once must pass at every place. The negation words are those of the source's
+    `language`; when it is not known, the words of all three languages count.
     """
     flat = _flat(quote)
     # An empty string is "in" every string, so a quote with nothing in it would pass for any passage.
@@ -93,8 +142,10 @@ def quote_in(quote: str, source: str) -> bool:
         return False
     haystack = _flat(source)
     starts = _occurrences(haystack, flat)
+    languages = tuple(_NEGATION_WORDS) if language is None else (language,)
     return bool(starts) and not any(
-        _cuts_a_token(haystack, start, start + len(flat)) or _negated_before(haystack, start)
+        _cuts_a_token(haystack, start, start + len(flat))
+        or _negated_before(haystack, start, languages)
         for start in starts
     )
 
@@ -135,10 +186,12 @@ def check_answer(
 def _claim_problems(claim: Claim, passage: Evidence) -> list[str]:
     text = to_plain_text(claim.text)
     problems: list[str] = []
-    if not quote_in(claim.quote, passage.content):
+    if not quote_in(claim.quote, passage.content, passage.language):
         problems.append("quote_not_in_source")
     if numbers_in(text) - numbers_in(claim.quote):
         problems.append("number_not_in_quote")
+    if links_in(text) - links_in(claim.quote):
+        problems.append("link_not_in_quote")
     if mentions_price(text):
         problems.append("price_in_answer")
     if contains_diagnostic_language(text):
@@ -186,13 +239,36 @@ def _cuts_a_token(haystack: str, start: int, end: int) -> bool:
     )
 
 
-def _negated_before(haystack: str, start: int) -> bool:
+def _negated_before(haystack: str, start: int, languages: Collection[Language]) -> bool:
     clause = _CLAUSE_BREAK.split(haystack[:start])[-1]
-    return any(_is_negation(word) for word in _LEAD_WORD.findall(clause.lower())[-NEGATION_REACH:])
+    clause_start = start - len(clause)
+    words = list(_LEAD_WORD.finditer(clause))
+    return any(
+        _is_negation(words[index].group().lower(), languages)
+        and not _abbreviates_number(haystack, clause_start, words, index)
+        for index in range(max(0, len(words) - NEGATION_REACH), len(words))
+    )
 
 
-def _is_negation(word: str) -> bool:
-    return word in _NEGATION_WORDS or word.startswith("s'") or word.endswith("n't")
+def _abbreviates_number(
+    haystack: str, clause_start: int, words: Sequence[re.Match[str]], index: int
+) -> bool:
+    """Whether `words[index]` is the "no" of "Order no 12": after a word that takes a number, and
+    followed by one. Anywhere else "no" negates."""
+    if index == 0 or words[index].group().lower() != "no":
+        return False
+    label = words[index - 1].group().lower()
+    ahead = _NUMBER_AHEAD.match(haystack, clause_start + words[index].end())
+    return label in _NUMBER_LABELS and ahead is not None
+
+
+def _is_negation(word: str, languages: Collection[Language]) -> bool:
+    return any(
+        word in _NEGATION_WORDS[language]
+        or (language == "sq" and word.startswith("s'"))
+        or (language == "en" and word.endswith("n't"))
+        for language in languages
+    )
 
 
 def _canonical(number: str) -> str:

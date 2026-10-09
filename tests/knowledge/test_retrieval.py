@@ -292,6 +292,24 @@ def test_chunks_become_document_evidence(
     assert evidence.kind is EvidenceKind.DOCUMENT
     assert evidence.source_ref.startswith("parking-en#")
     assert evidence.content == hit.content
+    assert (hit.language, evidence.language) == ("en", "en")
+
+
+@pytest.mark.db
+def test_every_hit_carries_the_language_of_its_document(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    factory = activate_pack(clinic_pack)
+    query = "parking fisioterapia fizioterapi visita pagesa"
+    vector = HashEmbedder().embed([query])[0]
+    hits = _search(
+        factory, clinic_pack.id, query, query_vector=vector, limit=20, max_chars=1_000_000
+    )
+    languages = {document.key: document.language for document in clinic_pack.documents}
+    assert len({hit.document_key for hit in hits}) >= 3
+    assert {languages[hit.document_key] for hit in hits} >= {"en", "it", "sq"}
+    assert all(hit.language == languages[hit.document_key] for hit in hits)
+    assert all(chunk_evidence(hit).language == hit.language for hit in hits)
 
 
 def _activated_in_new_database(

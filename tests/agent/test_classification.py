@@ -410,6 +410,8 @@ def test_an_output_that_was_already_parsed_validates_again() -> None:
         "park\N{ZERO WIDTH SPACE}ing",
         "abc\N{RIGHT-TO-LEFT OVERRIDE}def",
         "Is there parking?\N{ZERO WIDTH NO-BREAK SPACE}",
+        "Is there\N{LINE SEPARATOR}parking?",
+        "Is there\N{PARAGRAPH SEPARATOR}parking?",
     ],
 )
 def test_invisible_characters_inside_a_question_are_rejected(text: str) -> None:

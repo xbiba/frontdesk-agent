@@ -286,6 +286,33 @@ def _not_provided(passage_id: str, content: str) -> dict[str, Any]:
     }
 
 
+def _with_a_link(passage_id: str, content: str) -> dict[str, Any]:
+    sentence = content.split(". ")[0].rstrip(".")
+    return {
+        "text": f"{sentence}. Book a space at www.parking-demo.example.",
+        "evidence_id": passage_id,
+        "quote": sentence,
+    }
+
+
+def _with_an_address(passage_id: str, content: str) -> dict[str, Any]:
+    sentence = content.split(". ")[0].rstrip(".")
+    return {
+        "text": f"{sentence}. Write to parking@parking-demo.example.",
+        "evidence_id": passage_id,
+        "quote": sentence,
+    }
+
+
+def _with_a_markdown_link(passage_id: str, content: str) -> dict[str, Any]:
+    sentence = content.split(". ")[0].rstrip(".")
+    return {
+        "text": f"{sentence}. See [the map](https://parking-demo.example/map).",
+        "evidence_id": passage_id,
+        "quote": sentence,
+    }
+
+
 @pytest.mark.eval
 @pytest.mark.parametrize(
     ("claim", "reason"),
@@ -295,6 +322,9 @@ def _not_provided(passage_id: str, content: str) -> dict[str, Any]:
         (_invented_number, "number_not_in_quote"),
         (_price, "price_in_answer"),
         (_not_provided, "unknown_evidence"),
+        (_with_a_link, "link_not_in_quote"),
+        (_with_an_address, "link_not_in_quote"),
+        (_with_a_markdown_link, "link_not_in_quote"),
     ],
 )
 async def test_plausible_but_wrong_answers_never_reach_the_person(
