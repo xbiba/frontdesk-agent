@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from sqlalchemy import create_engine, text
 from typer.testing import CliRunner
 
 from frontdesk.cli.main import app
@@ -271,3 +272,65 @@ def test_the_shop_answers_a_document_question_with_a_checked_quote(
     assert "Puoi restituire un articolo entro quattordici giorni dalla consegna" in output
     assert "sources=returns-it" in output
     assert "outcome=replied" in output
+
+
+# --- bootstrap-demo approves by itself only synthetic data: "demo-" id and isolation level T1 ------
+
+
+def _edit_business(pack_dir: Path, **changes: str) -> None:
+    path = pack_dir / "business.yaml"
+    business = yaml.safe_load(path.read_text(encoding="utf-8"))
+    path.write_text(yaml.safe_dump({**business, **changes}, allow_unicode=True), encoding="utf-8")
+
+
+def _knowledge_versions(owner_url: str) -> int:
+    """Every knowledge version in the database, of any business and status (the owner sees all)."""
+    engine = create_engine(owner_url)
+    try:
+        with engine.connect() as connection:
+            count = connection.execute(text("SELECT count(*) FROM knowledge_versions")).scalar_one()
+    finally:
+        engine.dispose()
+    return int(count)
+
+
+@pytest.mark.parametrize("level", ["T2", "T3"])
+def test_bootstrap_refuses_a_demo_named_pack_that_declares_more_than_demo_data(
+    level: str, tmp_path: Path, businesses_dir: Path, database: tuple[str, str]
+) -> None:
+    pack_dir = _copy_pack(tmp_path, businesses_dir, "demo-clinic")
+    _edit_business(pack_dir, id="demo-clinic-live", isolation_level=level)
+    env = str(_env(tmp_path, "live", pack_dir, database))
+    result = runner.invoke(app, ["knowledge", "bootstrap-demo", "--env-file", env])
+    assert result.exit_code == 1
+    assert result.stdout == ""  # no "active: ..." line
+    assert "only for demo businesses" in result.stderr
+    assert "demo-clinic-live" in result.stderr
+    assert f"isolation level {level}" in result.stderr
+    assert "T1" in result.stderr
+    assert "recorded approval" in result.stderr
+    assert _knowledge_versions(database[0]) == 0  # nothing was drafted, approved or activated
+
+
+def test_bootstrap_still_serves_a_demo_pack_that_declares_t1(
+    tmp_path: Path, businesses_dir: Path, database: tuple[str, str]
+) -> None:
+    pack_dir = _copy_pack(tmp_path, businesses_dir, "demo-clinic")
+    _edit_business(pack_dir, id="demo-clinic-copy")  # still "demo-" and still T1
+    env = str(_env(tmp_path, "copy", pack_dir, database))
+    assert "active: " in _run("knowledge", "bootstrap-demo", "--env-file", env)
+    assert _knowledge_versions(database[0]) == 1
+
+
+def test_bootstrap_names_what_is_wrong_with_a_pack_that_is_not_a_demo(
+    tmp_path: Path, businesses_dir: Path, database: tuple[str, str]
+) -> None:
+    pack_dir = _copy_pack(tmp_path, businesses_dir, "demo-clinic")
+    _edit_business(pack_dir, id="real-clinic")  # T1, but not named like a demo
+    env = str(_env(tmp_path, "real", pack_dir, database))
+    result = runner.invoke(app, ["knowledge", "bootstrap-demo", "--env-file", env])
+    assert result.exit_code == 1
+    assert "only for demo businesses" in result.stderr
+    assert "real-clinic" in result.stderr
+    assert "demo-" in result.stderr
+    assert _knowledge_versions(database[0]) == 0

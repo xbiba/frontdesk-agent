@@ -46,10 +46,19 @@ from frontdesk.knowledge.versions import (
     version_status,
 )
 from frontdesk.settings import load_settings
+from frontdesk.tenancy.pack import BusinessPack
 
 DEMO_PREFIX: Final = "demo-"
+DEMO_ISOLATION_LEVEL: Final = "T1"  # synthetic data only (ADR-0008); real clinics declare T3
 
-app = typer.Typer(no_args_is_help=True, help="frontdesk: a messaging agent for small businesses.")
+# An uncaught error prints a traceback. With local variables in it, the frames that hold the
+# Deployment would print the Settings: the database URL with its password. Typer's default is
+# False; it is set here so that no change of that default can bring the locals back.
+app = typer.Typer(
+    no_args_is_help=True,
+    help="frontdesk: a messaging agent for small businesses.",
+    pretty_exceptions_show_locals=False,
+)
 db_app = typer.Typer(no_args_is_help=True, help="Database migrations.")
 knowledge_app = typer.Typer(no_args_is_help=True, help="Versioned, approved knowledge.")
 eval_app = typer.Typer(no_args_is_help=True, help="Evaluations.")
@@ -170,13 +179,33 @@ def knowledge_reembed(env_file: EnvFile) -> None:
     typer.echo(f"re-embedded {count} chunks with {deployment.embedder.identity}")
 
 
+def _why_not_a_demo(pack: BusinessPack) -> str | None:
+    """Why `bootstrap-demo` may not approve this pack by itself, or None if it may.
+
+    A demo business has both an id that starts with "demo-" and the isolation level T1, which is
+    for synthetic data. A name alone proves nothing: a pack called "demo-..." that declares T2 or
+    T3 holds real data, and its knowledge needs a recorded approval like any other.
+    """
+    if not pack.id.startswith(DEMO_PREFIX):
+        return f"the id '{pack.id}' does not start with '{DEMO_PREFIX}'"
+    if pack.isolation_level != DEMO_ISOLATION_LEVEL:
+        return (
+            f"'{pack.id}' declares isolation level {pack.isolation_level}, "
+            f"and demo businesses declare {DEMO_ISOLATION_LEVEL}"
+        )
+    return None
+
+
 @knowledge_app.command("bootstrap-demo")
 def knowledge_bootstrap_demo(env_file: EnvFile) -> None:
     """Draft, approve and activate a synthetic demo business in one step."""
     deployment = _deployment(env_file)
-    if not deployment.pack.id.startswith(DEMO_PREFIX):
+    reason = _why_not_a_demo(deployment.pack)
+    if reason is not None:
         typer.echo(
-            "bootstrap-demo is only for demo businesses; real ones need a recorded approval",
+            f"bootstrap-demo is only for demo businesses: {reason}. A real business needs a "
+            "recorded approval: frontdesk knowledge draft, approve and activate "
+            f"--env-file {env_file}.",
             err=True,
         )
         raise typer.Exit(1)
