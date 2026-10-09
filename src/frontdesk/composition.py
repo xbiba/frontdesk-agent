@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.agent.classifier import build_classifier
 from frontdesk.agent.demo_models import demo_classifier_model, demo_responder_model
+from frontdesk.agent.prompts import read_prompt
 from frontdesk.agent.responder import build_responder
 from frontdesk.agent.tools import ToolServices, build_toolset
 from frontdesk.conversation.turn import TurnRuntime
@@ -72,10 +73,14 @@ def build_turn_runtime(
 ) -> TurnRuntime:
     """The pipeline for this deployment's business.
 
-    `today` defaults to the business-local date (`Deployment.today`); a caller may fix it.
+    `today` defaults to the business-local date (`Deployment.today`); a caller may fix it. Each
+    prompt is read once, here: the agents run that text and the runtime records its version, so a
+    turn never reads a prompt file. A missing or blank prompt stops the build.
     """
     pack = deployment.pack
     business_today = today or deployment.today
+    classifier_prompt = read_prompt(pack.profile, "classifier")
+    responder_prompt = read_prompt(pack.profile, "responder")
     with business_session(deployment.session_factory, pack.id) as session:
         catalog = load_catalog(session, pack.id)
         check_embedder(session, pack.id, deployment.embedder)
@@ -89,20 +94,33 @@ def build_turn_runtime(
     )
     toolset = build_toolset(pack.profile, services)
     if route.provider == "offline":
-        classifier = build_classifier(demo_classifier_model(catalog), pack.profile)
-        responder = build_responder(demo_responder_model(), pack.profile, toolset)
+        classifier = build_classifier(
+            demo_classifier_model(catalog), pack.profile, instructions=classifier_prompt.text
+        )
+        responder = build_responder(
+            demo_responder_model(), pack.profile, toolset, instructions=responder_prompt.text
+        )
     else:
         model = build_live_model(route, gcp_project=deployment.settings.gcp_project)
         classifier = build_classifier(
-            model, pack.profile, model_settings=live_model_settings(max_tokens=600)
+            model,
+            pack.profile,
+            model_settings=live_model_settings(max_tokens=600),
+            instructions=classifier_prompt.text,
         )
         responder = build_responder(
-            model, pack.profile, toolset, model_settings=live_model_settings(max_tokens=1200)
+            model,
+            pack.profile,
+            toolset,
+            model_settings=live_model_settings(max_tokens=1200),
+            instructions=responder_prompt.text,
         )
     return TurnRuntime(
         pack=pack,
         classifier=classifier,
         responder=responder,
+        classifier_prompt_version=classifier_prompt.version,
+        responder_prompt_version=responder_prompt.version,
         session_factory=deployment.session_factory,
         embedder=deployment.embedder,
         today=business_today,

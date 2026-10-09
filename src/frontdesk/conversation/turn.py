@@ -31,7 +31,6 @@ from frontdesk.agent.classification import (
 )
 from frontdesk.agent.classifier import CLASSIFIER_LIMITS, ClassifierDeps, classifier_deps
 from frontdesk.agent.deps import ResponderDeps
-from frontdesk.agent.prompts import prompt_version
 from frontdesk.agent.responder import (
     RESPONDER_LIMITS,
     AnswerAction,
@@ -120,9 +119,14 @@ def _utc_now() -> datetime:
 
 @dataclass(frozen=True)
 class TurnRuntime:
+    """What a turn runs on. The prompt versions are those of the texts the agents were built
+    with (`read_prompt`): a turn reads no prompt file, so editing one changes nothing here."""
+
     pack: BusinessPack
     classifier: Agent[ClassifierDeps, ClassifierOutput]
     responder: Agent[ResponderDeps, ResponderOutput]
+    classifier_prompt_version: str
+    responder_prompt_version: str
     session_factory: sessionmaker[Session]
     embedder: Embedder
     today: Callable[[], date]
@@ -151,8 +155,8 @@ async def handle_message(
             invalid_evidence_ids=trace.invalid_evidence_ids,
             check_reasons=list(trace.check_reasons),
             rejection=trace.rejection,
-            classifier_prompt_version=prompt_version(runtime.pack.profile, "classifier"),
-            responder_prompt_version=prompt_version(runtime.pack.profile, "responder"),
+            classifier_prompt_version=runtime.classifier_prompt_version,
+            responder_prompt_version=runtime.responder_prompt_version,
         )
         record_content(span, enabled=runtime.capture_content, message=text, reply=result.text)
     _log_turn(result, runtime.pack.id)

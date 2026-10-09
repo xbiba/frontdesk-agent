@@ -19,7 +19,7 @@ from pydantic_ai.settings import ModelSettings
 
 from frontdesk.agent.classification import ValidatedFields
 from frontdesk.agent.deps import ResponderDeps, ToolResult
-from frontdesk.agent.prompts import load_prompt
+from frontdesk.agent.prompts import instructions_for
 from frontdesk.agent.vocab import ClarifyField
 from frontdesk.knowledge.evidence import DOCUMENT_ID_PATTERN, Evidence, render_evidence
 from frontdesk.tenancy.pack import Profile
@@ -77,7 +77,10 @@ def build_responder(
     toolset: FunctionToolset[ResponderDeps],
     *,
     model_settings: ModelSettings | None = None,
+    instructions: str | None = None,
 ) -> Agent[ResponderDeps, ResponderOutput]:
+    """`instructions` is the prompt text a caller has already read (`read_prompt`), so that the
+    version it records is that of the text this agent runs; without it the file is read here."""
     # The annotation is not enough: an untyped caller could pass "anthropic:..." and skip the gateway.
     if not isinstance(model, Model):
         raise TypeError(
@@ -89,7 +92,7 @@ def build_responder(
         name=f"{profile.value}-responder",
         deps_type=ResponderDeps,
         output_type=ResponderOutput,
-        instructions=load_prompt(profile, "responder"),
+        instructions=instructions_for(profile, "responder", instructions),
         toolsets=[toolset],
         retries=1,
         model_settings=model_settings,

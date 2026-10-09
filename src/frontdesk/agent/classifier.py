@@ -10,7 +10,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 
 from frontdesk.agent.classification import ClassifierOutput
-from frontdesk.agent.prompts import load_prompt
+from frontdesk.agent.prompts import instructions_for
 from frontdesk.agent.vocab import ClarifyField, Intent
 from frontdesk.knowledge.facts import Catalog
 from frontdesk.tenancy.pack import Language, Profile
@@ -116,8 +116,14 @@ def render_catalog(deps: ClassifierDeps) -> str:
 
 
 def build_classifier(
-    model: Model, profile: Profile, *, model_settings: ModelSettings | None = None
+    model: Model,
+    profile: Profile,
+    *,
+    model_settings: ModelSettings | None = None,
+    instructions: str | None = None,
 ) -> Agent[ClassifierDeps, ClassifierOutput]:
+    """`instructions` is the prompt text a caller has already read (`read_prompt`), so that the
+    version it records is that of the text this agent runs; without it the file is read here."""
     # The annotation is not enough: an untyped caller could pass "anthropic:..." and skip the gateway.
     if not isinstance(model, Model):
         raise TypeError(
@@ -129,7 +135,7 @@ def build_classifier(
         name=f"{profile.value}-classifier",
         deps_type=ClassifierDeps,
         output_type=ClassifierOutput,
-        instructions=load_prompt(profile, "classifier"),
+        instructions=instructions_for(profile, "classifier", instructions),
         retries=1,
         model_settings=model_settings,
     )

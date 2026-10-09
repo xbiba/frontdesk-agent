@@ -282,6 +282,22 @@ async def test_the_shop_classifier_has_its_own_name_and_prompt() -> None:
     assert "Business: Bottega Demo." in instructions
 
 
+async def test_instructions_the_caller_has_read_are_used_instead_of_the_file() -> None:
+    model, requests = _scripted(PRICE)
+    agent = build_classifier(model, Profile.RECEPTIONIST, instructions="Classify like this.")
+    await agent.run("hi", deps=_deps(), usage_limits=CLASSIFIER_LIMITS)
+    instructions = _instructions(requests[0])
+    assert "Classify like this." in instructions
+    assert load_prompt(Profile.RECEPTIONIST, "classifier") not in instructions
+    assert "- physiotherapy: Fizioterapi" in instructions  # the catalog still follows
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\n\t "])
+def test_blank_instructions_are_refused(blank: str) -> None:
+    with pytest.raises(ValueError, match="classifier"):
+        build_classifier(TestModel(), Profile.RECEPTIONIST, instructions=blank)
+
+
 async def test_an_off_vocabulary_answer_gets_one_retry() -> None:
     model, requests = _scripted(OFF_VOCABULARY, PRICE)
     agent = build_classifier(model, Profile.RECEPTIONIST)

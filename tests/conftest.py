@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
@@ -11,6 +12,7 @@ from sqlalchemy import create_engine, make_url, text
 from sqlalchemy.orm import Session, sessionmaker
 from testcontainers.community.postgres import PostgresContainer
 
+from frontdesk.agent import prompts
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
 from frontdesk.db.migrate import upgrade_to_head
 from frontdesk.knowledge.embedders import Embedder, HashEmbedder
@@ -104,6 +106,15 @@ def clinic_pack(businesses_dir: Path) -> BusinessPack:
 @pytest.fixture(scope="session")
 def shop_pack(businesses_dir: Path) -> BusinessPack:
     return load_pack(businesses_dir / "demo-shop")
+
+
+@pytest.fixture
+def agents_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A private copy of agents/ that the prompt loader reads; a test may edit or delete it."""
+    target = tmp_path / "agents"
+    shutil.copytree(prompts.AGENTS_DIR, target)
+    monkeypatch.setattr(prompts, "AGENTS_DIR", target)
+    return target
 
 
 TEST_NOW = datetime(2026, 10, 7, 9, 0, tzinfo=UTC)

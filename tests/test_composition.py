@@ -12,6 +12,7 @@ import pytest
 from pydantic_ai.models import Model
 from sqlalchemy.orm import Session, sessionmaker
 
+from frontdesk.agent.prompts import prompt_version, read_prompt
 from frontdesk.composition import Deployment, build_turn_runtime, open_deployment
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, handle_message
@@ -19,7 +20,7 @@ from frontdesk.knowledge.embedders import HashEmbedder
 from frontdesk.model_gateway.routes import UnapprovedRouteError
 from frontdesk.settings import EmbeddingBackend, Settings
 from frontdesk.shop.orders import OrderStore
-from frontdesk.tenancy.pack import BusinessPack
+from frontdesk.tenancy.pack import BusinessPack, Profile
 
 Activate = Callable[..., sessionmaker[Session]]
 NO_DATABASE = "postgresql+psycopg://nobody:nobody@127.0.0.1:1/none"  # never connected to
@@ -134,6 +135,48 @@ def test_the_runtime_dates_by_the_business_day_unless_a_date_is_given(
     assert runtime.now() == instant  # one clock for the business day and for the order lookups
     explicit = build_turn_runtime(deployment, today=lambda: date(2030, 1, 1))
     assert explicit.today() == date(2030, 1, 1)
+
+
+# --- The prompts are read once, when the runtime is built ----------------------------------------
+
+
+@pytest.mark.db
+def test_the_runtime_keeps_the_versions_of_the_prompts_it_was_built_with(
+    activate_pack: Activate, app_url: str, clinic_pack: BusinessPack, agents_copy: Path
+) -> None:
+    factory = activate_pack(clinic_pack)
+    versions = {
+        name: read_prompt(Profile.RECEPTIONIST, name).version
+        for name in ("classifier", "responder")
+    }
+    runtime = build_turn_runtime(_deployment(clinic_pack, factory, app_url=app_url))
+    prompts = agents_copy / Profile.RECEPTIONIST.value / "prompts"
+    (prompts / "classifier.md").write_text("Edited after the build.\n", encoding="utf-8")
+    (prompts / "responder.md").unlink()
+    assert runtime.classifier_prompt_version == versions["classifier"]
+    assert runtime.responder_prompt_version == versions["responder"]
+    assert prompt_version(Profile.RECEPTIONIST, "classifier") != versions["classifier"]
+
+
+@pytest.mark.db
+def test_each_profile_gets_the_versions_of_its_own_prompts(
+    activate_pack: Activate, app_url: str, shop_pack: BusinessPack
+) -> None:
+    factory = activate_pack(shop_pack)
+    runtime = build_turn_runtime(_deployment(shop_pack, factory, app_url=app_url))
+    assert runtime.classifier_prompt_version == prompt_version(Profile.SUPPORT_SALES, "classifier")
+    assert runtime.responder_prompt_version == prompt_version(Profile.SUPPORT_SALES, "responder")
+
+
+@pytest.mark.parametrize("name", ["classifier", "responder"])
+def test_a_blank_prompt_stops_the_build_before_the_database_is_touched(
+    clinic_pack: BusinessPack, agents_copy: Path, name: str
+) -> None:
+    (agents_copy / Profile.RECEPTIONIST.value / "prompts" / f"{name}.md").write_text(
+        " \n\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match=rf"receptionist/prompts/{name}\.md"):
+        build_turn_runtime(_deployment(clinic_pack))  # the database URL leads nowhere
 
 
 # --- What is wired ---------------------------------------------------------------------------------

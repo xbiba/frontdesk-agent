@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import re
@@ -34,7 +35,12 @@ from frontdesk.shop.attempts import MAX_ORDER_LOOKUPS
 from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.loader import load_pack
 from frontdesk.tenancy.pack import BusinessPack, Language, Profile
-from tests.conversation.helpers import classifier_model, document_responder, make_runtime
+from tests.conversation.helpers import (
+    classifier_model,
+    classifier_turns,
+    document_responder,
+    make_runtime,
+)
 from tests.timing import LINEAR_TIME_LIMIT_SECONDS
 
 Activate = Callable[..., sessionmaker[Session]]
@@ -296,6 +302,40 @@ async def test_the_prompt_versions_are_those_of_the_packs_profile(
     assert responder == prompt_version(Profile.SUPPORT_SALES, "responder")
     assert classifier != prompt_version(Profile.RECEPTIONIST, "classifier")
     assert responder != prompt_version(Profile.RECEPTIONIST, "responder")
+
+
+@pytest.mark.db
+async def test_the_span_names_the_versions_of_the_texts_the_agents_were_built_with(
+    span_exporter: InMemorySpanExporter,
+    activate_pack: Activate,
+    clinic_pack: BusinessPack,
+    agents_copy: Path,
+) -> None:
+    span_exporter.clear()
+    folder = agents_copy / Profile.RECEPTIONIST.value / "prompts"
+    built = {
+        name: (folder / f"{name}.md").read_text(encoding="utf-8")
+        for name in ("classifier", "responder")
+    }
+    instructions: list[str] = []
+    runtime = make_runtime(
+        clinic_pack,
+        activate_pack(clinic_pack),
+        classifier_turns([QUESTION], instructions),
+        document_responder(),
+    )
+    (folder / "classifier.md").write_text("Edited after the build.\n", encoding="utf-8")
+    (folder / "responder.md").unlink()
+    result, _ = await handle_message("Is there parking?", ConversationState(turns=1), runtime)
+    assert result.outcome is TurnOutcome.REPLIED
+    assert built["classifier"] in instructions[0]  # the agent still runs the text it was built with
+    attributes = _turn_attributes(span_exporter)
+    for name, text in built.items():
+        expected = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+        assert attributes[f"frontdesk.{name}_prompt_version"] == expected
+    # The edited file would give another version: the span must not have read it.
+    edited = prompt_version(Profile.RECEPTIONIST, "classifier")
+    assert attributes["frontdesk.classifier_prompt_version"] != edited
 
 
 @pytest.mark.db

@@ -1,5 +1,7 @@
 import asyncio
+import shutil
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -61,6 +63,21 @@ async def test_prices_are_written_from_the_record_without_the_responder(
     assert result.trace.sources == ("price:physiotherapy",)
     assert prompts == []
     assert (state.turns, state.language, state.topic_service_ids) == (1, "it", ("physiotherapy",))
+
+
+async def test_a_turn_reads_no_prompt_file_so_losing_one_costs_no_reply(
+    activate_pack: Activate, clinic_pack: BusinessPack, agents_copy: Path
+) -> None:
+    runtime = make_runtime(
+        clinic_pack, activate_pack(clinic_pack), classifier_model(PARKING), document_responder()
+    )
+    shutil.rmtree(agents_copy)  # every prompt file is gone once the agents are built
+    emergency, _ = await handle_message("mi fa male il petto", ConversationState(turns=1), runtime)
+    assert emergency.text == _handoff(clinic_pack, "it", FixedTextKey.EMERGENCY)
+    assert emergency.trace.rule == "emergency"
+    answer, _ = await handle_message("Is there parking?", ConversationState(turns=1), runtime)
+    assert answer.outcome is TurnOutcome.REPLIED
+    assert answer.trace.rule == "pass"
 
 
 async def test_albanian_without_diacritics_gets_albanian_texts(

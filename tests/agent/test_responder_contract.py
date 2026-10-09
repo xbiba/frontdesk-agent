@@ -183,6 +183,24 @@ async def test_each_profile_answers_with_its_own_prompt_and_the_business_context
     assert "You answer for Bottega Demo. Reply in language 'it'." in instructions
 
 
+async def test_instructions_the_caller_has_read_are_used_instead_of_the_file() -> None:
+    model, requests = _scripted(HANDOFF)
+    agent = build_responder(
+        model, Profile.RECEPTIONIST, _toolset(), instructions="Answer like this."
+    )
+    await agent.run("x", deps=_deps(), usage_limits=RESPONDER_LIMITS)
+    instructions = _instructions(requests[0])
+    assert "Answer like this." in instructions
+    assert load_prompt(Profile.RECEPTIONIST, "responder") not in instructions
+    assert "You answer for Klinika Demo. Reply in language 'en'." in instructions
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\n\t "])
+def test_blank_instructions_are_refused(blank: str) -> None:
+    with pytest.raises(ValueError, match="responder"):
+        build_responder(TestModel(), Profile.RECEPTIONIST, _toolset(), instructions=blank)
+
+
 def _actions_offered(prompt: str) -> set[str]:
     offered = prompt.split("Return one of", 1)[1].split("Rules:", 1)[0]
     return {
