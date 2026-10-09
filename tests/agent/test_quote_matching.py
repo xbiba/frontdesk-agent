@@ -263,8 +263,10 @@ def test_words_that_only_look_like_a_negation_do_not(word: str) -> None:
 
 LANGUAGES: tuple[Language, ...] = ("en", "it", "sq")
 WORDS_BY_LANGUAGE: dict[Language, list[str]] = {
-    "en": _words("not no never without none nothing nobody neither nor cannot"),
-    "it": _words("non né nè mai senza nessun nessuno nessuna niente nulla neanche nemmeno neppure"),
+    "en": _words("not no non never without none nothing nobody neither nor cannot"),
+    "it": _words(
+        "non no né nè mai senza nessun nessuno nessuna niente nulla neanche nemmeno neppure"
+    ),
     "sq": _words("nuk mos jo pa asnjë asnje askush asgjë asgje kurrë kurre"),
 }
 LANGUAGE_CASES = [
@@ -278,6 +280,7 @@ OTHER_LANGUAGE_CASES = [
     for other in LANGUAGES
     if other != language
     for word in WORDS_BY_LANGUAGE[other]
+    if word not in WORDS_BY_LANGUAGE[language]
 ]
 
 
@@ -495,3 +498,16 @@ def test_the_first_sentence_of_every_demo_passage_passes_the_claim_checks(
             if not result.ok:
                 refused[f"{source_ref}: {quote}"] = result.reasons
     assert refused == {}
+
+
+@pytest.mark.parametrize(
+    ("language", "source", "quote"),
+    [
+        pytest.param("it", "No pagamenti in contanti.", "pagamenti in contanti", id="it-no"),
+        pytest.param("en", "We have non smoking rooms only.", "smoking rooms only", id="en-non"),
+    ],
+)
+def test_no_and_non_negate_in_italian_and_english(
+    language: Language, source: str, quote: str
+) -> None:
+    assert not quote_in(quote, source, language)

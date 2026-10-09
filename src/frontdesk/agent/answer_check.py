@@ -54,8 +54,8 @@ _LEAD_WORD: Final = re.compile(r"[^\W\d_]+(?:'[^\W\d_]+)*'?")
 # words: Albanian "s'" ("s'ka": there is not), which is also the Italian elision ("s'intende"), and
 # English "n't". Each applies to its language only.
 _NEGATIONS: Final[dict[Language, str]] = {
-    "en": "not no never without none nothing nobody neither nor cannot",
-    "it": "non né nè mai senza nessun nessuno nessuna niente nulla neanche nemmeno neppure",
+    "en": "not no non never without none nothing nobody neither nor cannot",
+    "it": "non no né nè mai senza nessun nessuno nessuna niente nulla neanche nemmeno neppure",
     "sq": "nuk mos jo pa asnjë asnje askush asgjë asgje kurrë kurre",
 }
 _NEGATION_WORDS: Final = {
