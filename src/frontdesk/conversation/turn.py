@@ -29,6 +29,7 @@ from frontdesk.agent.classification import (
 )
 from frontdesk.agent.classifier import CLASSIFIER_LIMITS, ClassifierDeps, classifier_deps
 from frontdesk.agent.deps import ResponderDeps
+from frontdesk.agent.prompts import prompt_version
 from frontdesk.agent.responder import (
     RESPONDER_LIMITS,
     AnswerAction,
@@ -51,6 +52,7 @@ from frontdesk.knowledge.embedders import Embedder
 from frontdesk.knowledge.evidence import Evidence
 from frontdesk.knowledge.facts import Catalog, load_catalog
 from frontdesk.observability.logs import log_event
+from frontdesk.observability.tracing import record_content, record_metadata, turn_span
 from frontdesk.safety.language import detect_language
 from frontdesk.safety.rules import Verdict, emergency_rule, evaluate
 from frontdesk.tenancy.pack import BusinessPack, FixedTextKey, Language, Profile
@@ -119,7 +121,24 @@ class TurnRuntime:
 async def handle_message(
     text: str, state: ConversationState, runtime: TurnRuntime
 ) -> tuple[TurnResult, ConversationState]:
-    result = await _run_turn(text, state, runtime)
+    with turn_span(runtime.pack.id) as span:
+        result = await _run_turn(text, state, runtime)
+        trace = result.trace
+        record_metadata(
+            span,
+            rule=trace.rule,
+            category=trace.category,
+            intent=trace.intent,
+            outcome=result.outcome,
+            language=result.language,
+            evidence_ids=list(trace.evidence_ids),
+            invalid_evidence_ids=trace.invalid_evidence_ids,
+            check_reasons=list(trace.check_reasons),
+            rejection=trace.rejection,
+            classifier_prompt_version=prompt_version(runtime.pack.profile, "classifier"),
+            responder_prompt_version=prompt_version(runtime.pack.profile, "responder"),
+        )
+        record_content(span, enabled=runtime.capture_content, message=text, reply=result.text)
     _log_turn(result, runtime.pack.id)
     return result, _next_state(state, result)
 
