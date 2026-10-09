@@ -21,6 +21,9 @@ The second option.
 - The replies people read most often are exact by construction and cost no model call.
 - Similarity cannot see a negation ("we accept cards" and "we do not accept cards" are close). The live evaluation measures how often a sentence contradicts its quote, with a judge model, before the threshold changes or a verifier model is added.
 - Prices belong in records, not in documents: a document answer that names a price is refused.
+- Numbers are compared as values, whether written in digits or in words of the three languages ("fourteen", "quattordici" and "14" are one number). Words that are also articles or verbs ("one", "un", "uno", "una", "sei", "një") count only after a tens word or before a unit of time. A thousands group ("1.000") is compared as written.
+- A quote must start and end on whole words and numbers, and no negation may stand among the four words before it in its clause; otherwise the claim is refused as `quote_not_in_source`.
+- Still unseen by code: a sentence that negates its own quote, ordinals and fractions, hundreds and thousands written in several words, a price given without a currency; the live evaluation measures them.
 
 ## Exit plan
 The claim checks sit behind one function; a verifier model can be added after them if the live evaluation calls for one.

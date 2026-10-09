@@ -159,9 +159,15 @@ def test_helpers() -> None:
 # Beyond the cases above: a claim must never pass because a check had nothing to compare.
 
 
+# Words, because a quote may not start or end inside a word: 40 of them, the first 28 are quoted.
 LONG = Evidence.create(
-    kind=EvidenceKind.DOCUMENT, source_ref="long#1", version="v1", title="Long", content="a" * 400
+    kind=EvidenceKind.DOCUMENT,
+    source_ref="long#1",
+    version="v1",
+    title="Long",
+    content=" ".join(["abcdefghi"] * 40),
 )
+LONG_QUOTE = " ".join(["abcdefghi"] * 28)
 STRAY = Evidence.create(
     kind=EvidenceKind.DOCUMENT,
     source_ref="elsewhere#1",
@@ -296,6 +302,20 @@ def test_a_similarity_equal_to_the_threshold_supports_a_claim() -> None:
         pytest.param("10.60", {"10.6"}, id="sixty-minutes-is-a-decimal"),
         pytest.param("1.75 m", {"1.75"}, id="minutes-do-not-start-with-seven"),
         pytest.param("1.234 visite", {"1.234"}, id="three-digits-after-the-dot-are-no-time"),
+        pytest.param(
+            "1.000 pazienti", {"1.000"}, id="a-thousands-group-is-not-the-number-before-it"
+        ),
+        pytest.param("1,000 patients", {"1.000"}, id="the-comma-group-reads-as-the-dot-group"),
+        pytest.param("2.500", {"2.500"}, id="2500-is-not-2.5"),
+        pytest.param("10.000", {"10.000"}, id="10000-is-not-10"),
+        pytest.param("1.000.000", {"1.000.000"}, id="several-groups-are-one-number"),
+        pytest.param("12.345", {"12.345"}, id="a-group-after-two-digits"),
+        pytest.param("123.456", {"123.456"}, id="a-group-after-three-digits"),
+        pytest.param("0.500 kg", {"0.5"}, id="below-one-keeps-its-zero"),
+        pytest.param("1.2345", {"1.2345"}, id="four-decimals-are-not-a-group"),
+        pytest.param("1234.567", {"1234.567"}, id="a-group-needs-at-most-three-digits-before-it"),
+        pytest.param("1234.500", {"1234.5"}, id="after-four-digits-it-is-a-decimal"),
+        pytest.param("1.5.2024", {"1.5", "2024"}, id="a-date-is-still-split"),
         pytest.param("30,00 e 30.00 e 30", {"30"}, id="decimal-zeros-are-dropped"),
         pytest.param("1,5 e 1.5", {"1.5"}, id="comma-and-dot-decimals-agree"),
         pytest.param("007 e 0", {"7", "0"}, id="leading-zeros-are-dropped"),
@@ -536,19 +556,25 @@ def test_markdown_is_removed_from_the_text_that_is_returned() -> None:
     assert result.text == FIRST
 
 
+def _long(length: int) -> tuple[str, Evidence, str]:
+    """A claim of `length` characters quoting LONG_QUOTE; full stops make up the length."""
+    return (LONG_QUOTE + "." * (length - len(LONG_QUOTE)), LONG, LONG_QUOTE)
+
+
 def test_the_answer_may_be_as_long_as_the_limit_and_no_longer() -> None:
     assert MAX_ANSWER_CHARS == 600
-    at_limit = _check(("a" * 299, LONG, "a" * 299), ("a" * 300, LONG, "a" * 300), evidence=[LONG])
+    at_limit = _check(_long(299), _long(300), evidence=[LONG])
     assert at_limit.ok
     assert len(at_limit.text) == 600
-    over = _check(("a" * 300, LONG, "a" * 300), ("a" * 300, LONG, "a" * 300), evidence=[LONG])
+    over = _check(_long(300), _long(300), evidence=[LONG])
     assert over.reasons == ("too_long",)
     assert len(over.text) == 601
 
 
 def test_the_length_limit_counts_what_is_sent_not_the_markdown() -> None:
-    marked_up = "**" + "a" * 296 + "**"  # 300 characters written, 296 sent
-    result = _check(("a" * 300, LONG, "a" * 300), (marked_up, LONG, "a" * 296), evidence=[LONG])
+    _, _, quote = _long(296)
+    marked_up = "**" + quote + "." * 17 + "**"  # 300 characters written, 296 sent
+    result = _check(_long(300), (marked_up, LONG, quote), evidence=[LONG])
     assert result.ok
     assert len(result.text) == 597
 
@@ -562,8 +588,8 @@ def test_reasons_come_in_the_order_the_checks_run_and_each_comes_once() -> None:
     result = _check(
         STRAY_CLAIM,
         failing,
-        ("a" * 280, LONG, "a" * 280),
-        ("a" * 280, LONG, "a" * 280),
+        _long(280),
+        _long(280),
         evidence=[PARKING, LONG],
     )
     assert result.reasons == (
@@ -586,3 +612,34 @@ def test_a_check_result_cannot_be_changed() -> None:
     result = _check()
     with pytest.raises(FrozenInstanceError):
         result.ok = True  # type: ignore[misc]
+
+
+THOUSAND = Evidence.create(
+    kind=EvidenceKind.DOCUMENT,
+    source_ref="car-park-it#1",
+    version="v1",
+    title="Parcheggio",
+    content="Il parcheggio ha 1.000 posti dietro l'edificio.",
+)
+
+
+@pytest.mark.parametrize(
+    ("text", "reasons"),
+    [
+        pytest.param("Il parcheggio ha 1.000 posti.", (), id="as-written"),
+        pytest.param("The car park has 1,000 spaces.", (), id="with-the-english-comma"),
+        pytest.param(
+            "Il parcheggio ha 1 posti.", ("number_not_in_quote",), id="one-for-a-thousand"
+        ),
+        pytest.param(
+            "Il parcheggio ha 1000 posti.", ("number_not_in_quote",), id="without-the-dot"
+        ),
+        pytest.param("Il parcheggio ha 2.500 posti.", ("number_not_in_quote",), id="another-group"),
+    ],
+)
+def test_a_thousands_group_supports_only_itself(text: str, reasons: tuple[str, ...]) -> None:
+    # In Italian and Albanian "1.000" is a thousand, in English it would be one: the check does not
+    # guess, so a claim must write the group as its quote does (a comma for a dot is the same group).
+    claim = (text, THOUSAND, "ha 1.000 posti dietro l'edificio")
+    result = _run(claim, embedder=_Constant([1.0, 0.0]), min_similarity=0.5)
+    assert result.reasons == reasons

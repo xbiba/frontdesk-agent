@@ -9,10 +9,12 @@ writes them (Task 20).
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
+from frontdesk.agent.number_words import spoken_numbers
 from frontdesk.agent.responder import AnswerAction, Claim, ResponderOutput
 from frontdesk.knowledge.embedders import Embedder, cosine
 from frontdesk.knowledge.evidence import Evidence, EvidenceKind
@@ -21,7 +23,11 @@ from frontdesk.safety.rules import contains_diagnostic_language
 MAX_ANSWER_CHARS: Final = 600
 
 _TIME: Final = re.compile(r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b")
-_NUMBER: Final = re.compile(r"\d+(?:[.,]\d+)?")
+# A thousands group ("1.000", "2,500", "1.000.000") comes first: the dot is a thousands separator in
+# Italian and Albanian and a decimal point in English, and the comma the reverse, so it is compared
+# as written and never taken for the number before the separator.
+_GROUPED: Final = re.compile(r"[1-9]\d{0,2}(?:[.,]\d{3})+")
+_NUMBER: Final = re.compile(rf"{_GROUPED.pattern}(?!\d)|\d+(?:[.,]\d+)?")
 _CURRENCY: Final = re.compile(
     r"[€$£]|\b(?:eur|euro|euros|lek|leke|lekë|usd|dollars?)\b", re.IGNORECASE
 )
@@ -34,6 +40,24 @@ _QUOTE_MARKS: Final = str.maketrans(
     {"\u2019": "'", "\u2018": "'", "\u201c": '"', "\u201d": '"', "\u2039": "<", "\u203a": ">"}
 )
 
+# Soft hyphens and zero-width characters, which copied text carries inside words.
+_INVISIBLE: Final = str.maketrans(dict.fromkeys((0x00AD, 0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF)))
+# A word, or a number with its separators ("14", "10:30", "1.000"), or words joined by a hyphen
+# ("non-refundable", "e-mail"): a quote may not start or end inside one of these.
+_TOKEN: Final = re.compile(r"[^\W_]+(?:(?:[-\U00002013]|(?<=\d)[.,:/](?=\d))[^\W_]+)*")
+# Where a negation stops reaching the quote: a sentence, clause, bracket or list item ends.
+_CLAUSE_BREAK: Final = re.compile(r"[.!?;:,()\U00002022]| [-\U00002013\U00002014*] ")
+_LEAD_WORD: Final = re.compile(r"[^\W\d_]+(?:'[^\W\d_]+)*'?")
+# Lower case with accents, so that Italian "né" (nor) is not the pronoun "ne". English "n't" words
+# and Albanian "s'" ("s'ka": there is not) are recognised by their ending and beginning.
+_NEGATIONS: Final = {
+    "en": "not no never without none nothing nobody neither nor cannot",
+    "it": "non né nè mai senza nessun nessuno nessuna niente nulla neanche nemmeno neppure",
+    "sq": "nuk mos jo pa asnjë asnje askush asgjë asgje kurrë kurre",
+}
+_NEGATION_WORDS: Final = frozenset(word for words in _NEGATIONS.values() for word in words.split())
+NEGATION_REACH: Final = 4  # words before the quote, in its clause, that are searched for one
+
 
 @dataclass(frozen=True)
 class AnswerCheck:
@@ -45,9 +69,10 @@ class AnswerCheck:
 
 
 def numbers_in(text: str) -> set[str]:
+    """Every number in `text`: digits (times as HH:MM) and words, "fourteen" and "14" alike."""
     found = {f"{int(hour):02d}:{minute}" for hour, minute in _TIME.findall(text)}
     found |= {_canonical(number) for number in _NUMBER.findall(_TIME.sub(" ", text))}
-    return found
+    return found | spoken_numbers(text)
 
 
 def mentions_price(text: str) -> bool:
@@ -55,9 +80,23 @@ def mentions_price(text: str) -> bool:
 
 
 def quote_in(quote: str, source: str) -> bool:
+    """The quote is in the source word for word, and was not cut out of a word or a negation.
+
+    Spacing and quote marks do not matter. The quote may not start or end inside a word or a number
+    ("4 giorni" is not in "14 giorni", "available" is not in "unavailable"), and the words just
+    before it may not hold a negation ("accept cards" is not in "we do not accept cards"). A quote
+    found more than once must pass at every place.
+    """
     flat = _flat(quote)
     # An empty string is "in" every string, so a quote with nothing in it would pass for any passage.
-    return bool(flat) and flat in _flat(source)
+    if not flat:
+        return False
+    haystack = _flat(source)
+    starts = _occurrences(haystack, flat)
+    return bool(starts) and not any(
+        _cuts_a_token(haystack, start, start + len(flat)) or _negated_before(haystack, start)
+        for start in starts
+    )
 
 
 def to_plain_text(text: str) -> str:
@@ -126,11 +165,41 @@ def _is_close(similarity: float, min_similarity: float) -> bool:
 
 
 def _flat(text: str) -> str:
-    return " ".join(text.translate(_QUOTE_MARKS).split())
+    composed = unicodedata.normalize("NFC", text).translate(_INVISIBLE)
+    return " ".join(composed.translate(_QUOTE_MARKS).split())
+
+
+def _occurrences(haystack: str, needle: str) -> list[int]:
+    found: list[int] = []
+    position = haystack.find(needle)
+    while position != -1:
+        found.append(position)
+        position = haystack.find(needle, position + 1)
+    return found
+
+
+def _cuts_a_token(haystack: str, start: int, end: int) -> bool:
+    return any(
+        token.start() < cut < token.end()
+        for token in _TOKEN.finditer(haystack)
+        for cut in (start, end)
+    )
+
+
+def _negated_before(haystack: str, start: int) -> bool:
+    clause = _CLAUSE_BREAK.split(haystack[:start])[-1]
+    return any(_is_negation(word) for word in _LEAD_WORD.findall(clause.lower())[-NEGATION_REACH:])
+
+
+def _is_negation(word: str) -> bool:
+    return word in _NEGATION_WORDS or word.startswith("s'") or word.endswith("n't")
 
 
 def _canonical(number: str) -> str:
     normalized = number.replace(",", ".")
-    if "." in normalized:
-        normalized = normalized.rstrip("0").rstrip(".")
-    return normalized.lstrip("0") or "0"
+    if _GROUPED.fullmatch(number):
+        return normalized
+    integer, _, fraction = normalized.partition(".")
+    integer = integer.lstrip("0") or "0"
+    fraction = fraction.rstrip("0")
+    return f"{integer}.{fraction}" if fraction else integer
