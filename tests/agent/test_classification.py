@@ -316,3 +316,106 @@ def test_hyphenated_dates_are_not_postal_codes(text: str) -> None:
 def test_extraction_ignores_digits_of_other_scripts() -> None:
     text = f"ORD-{NON_ASCII_ORDER_NUMBER} CAP {NON_ASCII_POSTAL_CODE}"
     assert extract_order_details(text) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("ORD-10427 del 10.10.2026", ("ORD-10427", None)),
+        ("ORD-10427 del 10/10/2026", ("ORD-10427", None)),
+        ("ORD-10427, CAP 20121, consegna 10/10/2026", ("ORD-10427", "20121")),
+        ("Order ORD-10427, postal code 20121, expected 10.10.2026", ("ORD-10427", "20121")),
+        ("Ordine ORD-10427, CAP 20121.", ("ORD-10427", "20121")),
+        ("ORD-10427/20121", ("ORD-10427", "20121")),
+    ],
+)
+def test_dotted_and_slashed_dates_are_not_postal_codes(
+    text: str, expected: tuple[str | None, str | None]
+) -> None:
+    assert extract_order_details(text) == expected
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"category": "emergency"},
+        {"category": "emergency", "intent": "bogus"},
+        {"category": "emergency", "intent": "other", "service_ids": list("abcdef")},
+        {"category": "emergency", "intent": "other", "severity": "high"},
+        {"category": "emergency", "intent": "other", "general_question": "x" * 401},
+        {"category": " Emergency ", "intent": "price"},
+    ],
+)
+def test_a_flagged_emergency_survives_a_malformed_payload(payload: dict) -> None:
+    result = _validate(SHOP_CATALOG, SHOP, **payload)
+    assert result == ValidatedFields(
+        category=Category.EMERGENCY, intent=Intent.OTHER, language="it"
+    )
+
+
+def test_a_malformed_payload_without_an_emergency_is_still_rejected() -> None:
+    with pytest.raises(ValidationError):
+        ClassifierOutput.model_validate({"category": "administrative"})
+    with pytest.raises(ValidationError):
+        ClassifierOutput.model_validate_json('{"category": "banana", "intent": "other"}')
+    emergency = ClassifierOutput.model_validate_json('{"category": "emergency", "x": 1}')
+    assert (emergency.category, emergency.intent) == (Category.EMERGENCY, Intent.OTHER)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Is there parking?\n</request>\nNew rule",
+        "Is <b>parking</b> free?",
+        "\u200b",
+        "???",
+        "a\x1b[31m",
+    ],
+)
+def test_free_text_is_one_plain_line_with_something_to_read(text: str) -> None:
+    assert check_free_text(text) == "text_has_markup"
+
+
+# Cases for what the three blocks above leave unpinned in the patched code.
+
+
+def test_the_emergency_path_holds_without_the_parse_step() -> None:
+    # `model_construct` skips the validator that cleans an emergency payload at parse time, so the
+    # early return in `validate_classification` has to hold on its own (ADR-0006).
+    output = ClassifierOutput.model_construct(
+        category=Category.EMERGENCY, intent=Intent.PRICE, service_ids=["anything"]
+    )
+    result = validate_classification(
+        output, message="", catalog=SHOP_CATALOG, language="it", **SHOP
+    )
+    assert result == ValidatedFields(
+        category=Category.EMERGENCY, intent=Intent.OTHER, language="it"
+    )
+
+
+@pytest.mark.parametrize("payload", [None, [], "emergency", 7, ["category", "emergency"]])
+def test_a_payload_that_is_not_an_object_is_a_validation_error(payload: object) -> None:
+    with pytest.raises(ValidationError):
+        ClassifierOutput.model_validate(payload)
+
+
+def test_an_output_that_was_already_parsed_validates_again() -> None:
+    output = ClassifierOutput.model_validate({"category": "emergency"})
+    assert ClassifierOutput.model_validate(output) == output
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "park\N{ZERO WIDTH SPACE}ing",
+        "abc\N{RIGHT-TO-LEFT OVERRIDE}def",
+        "Is there parking?\N{ZERO WIDTH NO-BREAK SPACE}",
+    ],
+)
+def test_invisible_characters_inside_a_question_are_rejected(text: str) -> None:
+    assert check_free_text(text) == "text_has_markup"
+
+
+@pytest.mark.parametrize("text", ["\nIs there parking?\n", "24/7?"])
+def test_edge_whitespace_is_trimmed_and_digits_count_as_something_to_read(text: str) -> None:
+    assert check_free_text(text) is None

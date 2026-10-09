@@ -10,9 +10,10 @@ number are read from the message by code, never taken from the model.
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from frontdesk.agent.vocab import PROFILE_INTENTS, Category, Intent
 from frontdesk.knowledge.facts import Catalog
@@ -26,6 +27,9 @@ POSTAL_CODE: Final = re.compile(r"^[0-9]{4,6}$")
 _DIGIT_RUN: Final = re.compile(r"\d{4,}")
 _REFERENCE_IN_TEXT: Final = re.compile(r"\bORD[-\s]?([0-9]{4,8})\b", re.IGNORECASE)
 _NUMBER_IN_TEXT: Final = re.compile(r"(?<![\w-])([0-9]{4,6})(?![\w-])")
+# Dates with dots or slashes (10.10.2026, 2026/10/10) are blanked before the number search: their
+# year is not a postal code. Hyphenated dates are kept out by `_NUMBER_IN_TEXT` itself.
+_DATE_IN_TEXT: Final = re.compile(r"(?<![\w./-])[0-9]{1,4}[./][0-9]{1,2}[./][0-9]{1,4}(?![\w/-])")
 
 
 class ClassifierOutput(BaseModel):
@@ -39,6 +43,17 @@ class ClassifierOutput(BaseModel):
     doctor_ids: list[str] = Field(default_factory=list, max_length=5)
     problem_category_id: str | None = None
     general_question: str | None = Field(default=None, max_length=400)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _emergency_wins(cls, data: object) -> object:
+        """A flagged emergency stays one whatever else is wrong with the payload (ADR-0006)."""
+        if (
+            isinstance(data, dict)
+            and str(data.get("category", "")).strip().casefold() == Category.EMERGENCY
+        ):
+            return {"category": Category.EMERGENCY, "intent": Intent.OTHER}
+        return data
 
 
 class ValidatedFields(BaseModel):
@@ -68,6 +83,8 @@ def check_free_text(text: str) -> str | None:
         return "empty_text"
     if len(stripped) > MAX_QUESTION_CHARS:
         return "text_too_long"
+    if _has_markup(stripped) or not any(char.isalnum() for char in stripped):
+        return "text_has_markup"
     if "@" in stripped or _DIGIT_RUN.search(stripped):
         return "text_has_identifiers"
     if evaluate(stripped).verdict is not Verdict.PASS:
@@ -77,10 +94,16 @@ def check_free_text(text: str) -> str | None:
     return None
 
 
+def _has_markup(text: str) -> bool:
+    """Angle brackets, control characters (newlines included) and invisible format characters."""
+    return any(char in "<>" or unicodedata.category(char) in {"Cc", "Cf"} for char in text)
+
+
 def extract_order_details(text: str) -> tuple[str | None, str | None]:
     """Order number and postal code as written by the person; None when absent or ambiguous."""
     references = {match.group(1) for match in _REFERENCE_IN_TEXT.finditer(text)}
-    numbers = {match.group(1) for match in _NUMBER_IN_TEXT.finditer(text)} - references
+    dateless = _DATE_IN_TEXT.sub(" ", text)
+    numbers = {match.group(1) for match in _NUMBER_IN_TEXT.finditer(dateless)} - references
     reference = f"ORD-{next(iter(references))}" if len(references) == 1 else None
     postal_code = next(iter(numbers)) if len(numbers) == 1 else None
     return reference, postal_code
