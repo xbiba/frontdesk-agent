@@ -1,17 +1,19 @@
 import shutil
 import uuid
 from collections.abc import Callable
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
 from frontdesk.db.models import EMBEDDING_DIM
-from frontdesk.knowledge.embedders import HashEmbedder
+from frontdesk.knowledge.chunking import Chunk as Section
+from frontdesk.knowledge.chunking import chunk_markdown
+from frontdesk.knowledge.embedders import HashEmbedder, cosine
 from frontdesk.knowledge.evidence import EvidenceKind
 from frontdesk.knowledge.retrieval import (
     RetrievedChunk,
@@ -20,20 +22,35 @@ from frontdesk.knowledge.retrieval import (
     hybrid_search,
     rrf_fuse,
 )
-from frontdesk.knowledge.versions import active_version_id, create_draft
+from frontdesk.knowledge.versions import activate, active_version_id, approve, create_draft
 from frontdesk.tenancy.loader import load_pack
 from frontdesk.tenancy.pack import BusinessPack
 
 TODAY = date(2026, 10, 7)
+NOW = datetime(2026, 10, 7, 9, 0, tzinfo=UTC)
 Activate = Callable[..., sessionmaker[Session]]
+NewDatabase = Callable[[], tuple[str, str]]
 PARKING_TEXT = "Parking\nKlinika Demo has six free parking spaces behind the building."
 
 
 def test_rrf_prefers_items_ranked_by_both_lists() -> None:
     a, b, c = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
-    fused = rrf_fuse([[a, b], [b, c]])
+    fused = rrf_fuse([[a, b], [b, c]], {a: ("a", 0), b: ("b", 0), c: ("c", 0)})
     assert fused[0][0] == b
     assert {item for item, _ in fused} == {a, b, c}
+
+
+def test_rrf_ranks_equal_scores_by_document_key_then_position_never_by_id() -> None:
+    # Each is first in one list, so all three score the same. Their ids sort the other way round.
+    by_position = [uuid.UUID(int=3), uuid.UUID(int=2), uuid.UUID(int=1)]
+    places = {
+        by_position[0]: ("alpha", 0),
+        by_position[1]: ("alpha", 1),
+        by_position[2]: ("beta", 0),
+    }
+    fused = rrf_fuse([[by_position[2]], [by_position[1]], [by_position[0]]], places)
+    assert [item for item, _ in fused] == by_position
+    assert len({score for _, score in fused}) == 1
 
 
 def test_tsquery_normalizes_and_drops_stopwords() -> None:
@@ -275,3 +292,209 @@ def test_chunks_become_document_evidence(
     assert evidence.kind is EvidenceKind.DOCUMENT
     assert evidence.source_ref.startswith("parking-en#")
     assert evidence.content == hit.content
+
+
+def _activated_in_new_database(
+    new_database: NewDatabase, pack: BusinessPack
+) -> sessionmaker[Session]:
+    """The pack, active in a database of its own: same content, other random ids."""
+    _, app_url = new_database()
+    factory = make_session_factory(make_engine(app_url))
+    with business_session(factory, pack.id) as session:
+        draft = create_draft(session, pack)
+        approve(session, draft.version_id, approved_by="test", evidence="synthetic", now=NOW)
+        activate(session, draft.version_id, HashEmbedder(), now=NOW)
+    return factory
+
+
+def _ranking(
+    factory: sessionmaker[Session], pack: BusinessPack, query: str, **kwargs: Any
+) -> list[tuple[str, str, float]]:
+    """What a ranking says without the random ids: document key, section, score."""
+    hits = _search(factory, pack.id, query, **kwargs)
+    return [(hit.document_key, hit.heading, hit.score) for hit in hits]
+
+
+def _by_key_then_position(pack: BusinessPack) -> list[tuple[str, str]]:
+    """Every section of the pack ordered by document key, then by position in the document."""
+    return [
+        (document.key, piece.heading)
+        for document in sorted(pack.documents, key=lambda document: document.key)
+        for piece in chunk_markdown(document.title, document.body)
+    ]
+
+
+@pytest.mark.db
+def test_equal_vector_distances_rank_the_same_in_every_database(
+    new_database: NewDatabase, clinic_pack: BusinessPack
+) -> None:
+    """The vector of "zzzz" is at right angles to every section's, so all nine are equally far."""
+    vector = HashEmbedder().embed(["zzzz"])[0]
+    sections = [
+        f"{piece.heading}\n{piece.content}"
+        for document in clinic_pack.documents
+        for piece in chunk_markdown(document.title, document.body)
+    ]
+    assert [cosine(vector, other) for other in HashEmbedder().embed(sections)] == [0.0] * 9
+    rankings = [
+        _ranking(
+            _activated_in_new_database(new_database, clinic_pack),
+            clinic_pack,
+            "zzzz",
+            query_vector=vector,
+            limit=20,
+        )
+        for _ in range(2)
+    ]
+    assert rankings[0] == rankings[1]
+    assert [(key, heading) for key, heading, _ in rankings[0]] == _by_key_then_position(clinic_pack)
+
+
+def _pack_of_copies(pack: BusinessPack, count: int, prefixes: dict[str, str]) -> BusinessPack:
+    """A pack of only `count` copies of each document in `prefixes` (key -> key of the copies).
+
+    Copies say the same, so their sections are exactly as relevant as each other.
+    """
+    documents = [
+        document.model_copy(update={"key": f"{prefixes[document.key]}-{n}"})
+        for document in pack.documents
+        if document.key in prefixes
+        for n in range(count)
+    ]
+    return pack.model_copy(update={"documents": documents})
+
+
+@pytest.mark.db
+def test_equal_full_text_scores_rank_by_document_key_then_position_in_every_database(
+    new_database: NewDatabase, clinic_pack: BusinessPack
+) -> None:
+    """The word is once in the heading of every section of the copies: 16 chunks, one score."""
+    pack = _pack_of_copies(clinic_pack, 8, {"first-visit-it": "visit"})
+    expected = _by_key_then_position(pack)
+    assert len(expected) == 16
+    factories = [_activated_in_new_database(new_database, pack) for _ in range(2)]
+    rankings = [
+        _ranking(factory, pack, "visita", query_vector=None, limit=20) for factory in factories
+    ]
+    assert rankings[0] == rankings[1]
+    assert [(key, heading) for key, heading, _ in rankings[0]] == expected
+    # The cut at `candidates` falls among equal scores too: the first sections in place order stay.
+    for factory in factories:
+        cut = _search(factory, pack.id, "visita", query_vector=None, limit=3, candidates=3)
+        assert [(hit.document_key, hit.heading) for hit in cut] == expected[:3]
+
+
+@pytest.mark.db
+def test_equal_fused_scores_rank_by_document_key_then_position_in_every_database(
+    new_database: NewDatabase, clinic_pack: BusinessPack
+) -> None:
+    """Every chunk is in one search only, at the rank of a chunk the other search put there.
+
+    The word "ramp" finds the second section of the eight parking copies, in key order. The vector
+    points at the eight copies of one first section, also in key order, so the k-th chunk of one
+    search ties with the k-th chunk of the other.
+    """
+    pack = _pack_of_copies(
+        clinic_pack, 8, {"parking-en": "parking-copy", "physiotherapy-it": "physio-copy"}
+    )
+    parking = next(doc for doc in pack.documents if doc.key == "parking-copy-0")
+    physio = next(doc for doc in pack.documents if doc.key == "physio-copy-0")
+    parking_first, ramp = chunk_markdown(parking.title, parking.body)  # only `ramp` has the word
+    physio_first = chunk_markdown(physio.title, physio.body)[0]
+
+    def points_at(section: Section) -> list[float]:
+        return HashEmbedder().embed([f"{section.heading}\n{section.content}"])[0]
+
+    # The vector points at the physio copies: the tied chunks belong to two documents, and the key
+    # decides ("parking-copy" before "physio-copy") although the parking section comes later in
+    # its document (second, the other first).
+    across_documents = [
+        place
+        for n in range(8)
+        for place in (
+            (f"parking-copy-{n}", ramp.heading),
+            (f"physio-copy-{n}", physio_first.heading),
+        )
+    ]
+    # The vector points at the parking copies: the tied chunks are two sections of one document, and
+    # their position in it decides.
+    within_a_document = [
+        place
+        for n in range(8)
+        for place in (
+            (f"parking-copy-{n}", parking_first.heading),
+            (f"parking-copy-{n}", ramp.heading),
+        )
+    ]
+    factories = [_activated_in_new_database(new_database, pack) for _ in range(2)]
+    for section, expected in ((physio_first, across_documents), (parking_first, within_a_document)):
+        rankings = [
+            _ranking(
+                factory,
+                pack,
+                "ramp",
+                query_vector=points_at(section),
+                candidates=8,
+                limit=16,
+            )
+            for factory in factories
+        ]
+        assert rankings[0] == rankings[1]
+        assert [(key, heading) for key, heading, _ in rankings[0]] == expected
+        scores = [score for _, _, score in rankings[0]]
+        assert scores[0::2] == scores[1::2]  # the pairs really are equal, not merely adjacent
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("by_vector", [True, False], ids=["vector", "terms"])
+def test_equal_scores_rank_by_position_in_the_document_not_by_where_the_row_is_stored(
+    new_database: NewDatabase, clinic_pack: BusinessPack, by_vector: bool
+) -> None:
+    """With the positions of the sections reversed, the one stored first must come last."""
+    if by_vector:
+        pack, query = clinic_pack, "zzzz"
+    else:
+        pack, query = _pack_of_copies(clinic_pack, 8, {"first-visit-it": "visit"}), "visita"
+    factory = _activated_in_new_database(new_database, pack)
+    with business_session(factory, pack.id) as session:
+        session.execute(text("UPDATE chunks SET ordinal = 1 - ordinal"))
+    vector = HashEmbedder().embed([query])[0] if by_vector else None
+    ranking = _ranking(factory, pack, query, query_vector=vector, limit=20)
+    expected = [
+        (document.key, section.heading)
+        for document in sorted(pack.documents, key=lambda document: document.key)
+        for section in reversed(chunk_markdown(document.title, document.body))
+    ]
+    assert [(key, heading) for key, heading, _ in ranking] == expected
+
+
+@pytest.mark.db
+def test_the_vector_search_materializes_the_eligible_chunks(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    """The planner-forcing test above also passes without this, so the SQL itself is checked.
+
+    Unmaterialized, the planner may sort on the HNSW index, which filters after it scans.
+    """
+    factory = activate_pack(clinic_pack)
+    statements: list[str] = []
+
+    def record(
+        conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool
+    ) -> None:
+        statements.append(statement)
+
+    with business_session(factory, clinic_pack.id) as session:
+        connection = session.connection()
+        event.listen(connection, "before_cursor_execute", record)
+        try:
+            hybrid_search(
+                session,
+                business_id=clinic_pack.id,
+                query="",
+                query_vector=HashEmbedder().embed(["parking"])[0],
+                today=TODAY,
+            )
+        finally:
+            event.remove(connection, "before_cursor_execute", record)
+    assert any("MATERIALIZED" in statement for statement in statements)

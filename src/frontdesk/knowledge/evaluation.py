@@ -13,12 +13,20 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
 from statistics import fmean
+from typing import Any
 
 import yaml
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic_core import ErrorDetails
 from sqlalchemy.orm import Session
 
 from frontdesk.knowledge.embedders import Embedder
 from frontdesk.knowledge.retrieval import hybrid_search
+from frontdesk.tenancy.pack import Language, NonBlankStr
+
+
+class DatasetError(ValueError):
+    """A retrieval dataset cannot be read, or some of its cases are invalid."""
 
 
 @dataclass(frozen=True)
@@ -42,7 +50,7 @@ class CaseResult:
 class RetrievalReport:
     business_id: str
     k: int
-    embedder: str
+    embedder: str  # the identity of the embedder, e.g. "hash-v1" or "fastembed:<model>"
     results: tuple[CaseResult, ...]
 
     @property
@@ -74,18 +82,51 @@ def reciprocal_rank(retrieved: Sequence[str], relevant: Sequence[str]) -> float:
     return 0.0
 
 
+class _CaseSpec(BaseModel):
+    """A case as the dataset file writes it. A field that is not listed here is a typo: an error."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: NonBlankStr
+    question: NonBlankStr
+    language: Language
+    relevant: list[NonBlankStr] = Field(min_length=1)
+    tags: list[NonBlankStr] = Field(default_factory=list)
+
+
 def load_cases(path: Path) -> list[RetrievalCase]:
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    return [
-        RetrievalCase(
-            id=item["id"],
-            question=item["question"],
-            language=item["language"],
-            relevant=tuple(item["relevant"]),
-            tags=tuple(item.get("tags", [])),
+    """The cases of a dataset file; every problem in it is reported at once, naming file and case."""
+    cases: list[RetrievalCase] = []
+    problems: list[str] = []
+    positions: dict[str, int] = {}
+    for position, item in enumerate(_read_items(path), start=1):
+        if not isinstance(item, dict):
+            kind = type(item).__name__
+            problems.append(f"{path}: case #{position}: expected a mapping, not a {kind}")
+            continue
+        try:
+            spec = _CaseSpec.model_validate(item)
+        except ValidationError as error:
+            problems.append(f"{path}: {_label(position, item)}: {_describe(error)}")
+            continue
+        if spec.id in positions:
+            problems.append(
+                f"{path}: case '{spec.id}': duplicate id, case #{positions[spec.id]} has it too"
+            )
+            continue
+        positions[spec.id] = position
+        cases.append(
+            RetrievalCase(
+                id=spec.id,
+                question=spec.question,
+                language=spec.language,
+                relevant=tuple(spec.relevant),
+                tags=tuple(spec.tags),
+            )
         )
-        for item in raw
-    ]
+    if problems:
+        raise DatasetError("\n".join(problems))
+    return cases
 
 
 def run_retrieval_eval(
@@ -118,7 +159,7 @@ def run_retrieval_eval(
                 reciprocal_rank=reciprocal_rank(keys, case.relevant),
             )
         )
-    return RetrievalReport(business_id, k, type(embedder).__name__, tuple(results))
+    return RetrievalReport(business_id, k, embedder.identity, tuple(results))
 
 
 def render_markdown(report: RetrievalReport) -> str:
@@ -175,3 +216,48 @@ def _grouped(
         key: (fmean(r.recall for r in items), fmean(r.reciprocal_rank for r in items))
         for key, items in sorted(groups.items())
     }
+
+
+def _read_items(path: Path) -> list[Any]:
+    """The entries of a dataset file; a file that is not a non-empty list of them is an error."""
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except OSError as error:
+        raise DatasetError(f"{path}: cannot be read ({error.strerror or error})") from error
+    except UnicodeDecodeError as error:
+        raise DatasetError(f"{path}: not valid UTF-8 text (save the file as UTF-8)") from error
+    except yaml.YAMLError as error:
+        raise DatasetError(f"{path}: invalid YAML{_where(error)}") from error
+    if not raw:
+        raise DatasetError(f"{path}: no cases")
+    if not isinstance(raw, list):
+        raise DatasetError(f"{path}: expected a list of cases, one '- id: ...' entry for each")
+    return raw
+
+
+def _where(error: yaml.YAMLError) -> str:
+    """` at line L, column C: reason` for an error PyYAML placed in the text; else `: reason`."""
+    if isinstance(error, yaml.MarkedYAMLError) and error.problem_mark is not None:
+        mark = error.problem_mark
+        return f" at line {mark.line + 1}, column {mark.column + 1}: {error.problem}"
+    return ": " + " ".join(str(error).split())
+
+
+def _label(position: int, item: object) -> str:
+    """How an error names a case: by its id when it has a usable one, else by its position."""
+    case_id = item.get("id") if isinstance(item, dict) else None
+    if isinstance(case_id, str) and case_id.strip():
+        return f"case '{case_id}'"
+    return f"case #{position}"
+
+
+def _describe(error: ValidationError) -> str:
+    """The problems of one case, each with its field: `relevant: Field required`."""
+    return "; ".join(
+        _problem(problem) for problem in error.errors(include_url=False, include_input=False)
+    )
+
+
+def _problem(problem: ErrorDetails) -> str:
+    field = ".".join(str(part) for part in problem["loc"])
+    return f"{field}: {problem['msg']}" if field else problem["msg"]

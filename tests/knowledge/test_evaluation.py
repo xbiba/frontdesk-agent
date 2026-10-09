@@ -11,6 +11,7 @@ from frontdesk.db.models import EMBEDDING_DIM
 from frontdesk.knowledge.embedders import Embedder, HashEmbedder
 from frontdesk.knowledge.evaluation import (
     CaseResult,
+    DatasetError,
     RetrievalCase,
     RetrievalReport,
     load_cases,
@@ -77,7 +78,7 @@ def test_harness_reports_every_case(
     assert set(report.by_language()) == {"en", "it", "sq"}
     markdown = render_markdown(report)
     assert "| case | language | recall@5 | RR |" in markdown
-    assert "HashEmbedder" in markdown
+    assert "hash-v1" in markdown
 
 
 def test_recall_only_counts_the_top_k_and_divides_by_the_relevant_documents() -> None:
@@ -105,7 +106,7 @@ def _report() -> RetrievalReport:
     return RetrievalReport(
         business_id="demo",
         k=5,
-        embedder="HashEmbedder",
+        embedder="hash-v1",
         results=(
             _result("a", "it", 0.5, 1.0, "paraphrase", "cross-lingual"),
             _result("b", "en", 1.0, 1.0),
@@ -121,7 +122,7 @@ def test_means_cover_every_case() -> None:
 
 
 def test_an_empty_report_scores_zero_and_still_renders() -> None:
-    report = RetrievalReport(business_id="demo", k=5, embedder="HashEmbedder", results=())
+    report = RetrievalReport(business_id="demo", k=5, embedder="hash-v1", results=())
     assert (report.mean_recall, report.mrr) == (0.0, 0.0)
     assert report.by_language() == {}
     assert report.by_tag() == {}
@@ -142,7 +143,7 @@ def test_markdown_tabulates_the_cases_then_the_groups() -> None:
         [
             "# Retrieval evaluation — demo",
             "",
-            "Embedder: HashEmbedder · k = 5 · cases: 3",
+            "Embedder: hash-v1 · k = 5 · cases: 3",
             "Mean recall@5: 0.50 · MRR: 0.67",
             "",
             "| case | language | recall@5 | RR |",
@@ -164,7 +165,7 @@ def test_markdown_tabulates_the_cases_then_the_groups() -> None:
 def test_json_carries_the_summary_and_every_case() -> None:
     raw = to_json(_report())
     data = json.loads(raw)
-    assert (data["business_id"], data["k"], data["embedder"]) == ("demo", 5, "HashEmbedder")
+    assert (data["business_id"], data["k"], data["embedder"]) == ("demo", 5, "hash-v1")
     assert data["mean_recall"] == pytest.approx(0.5)
     assert data["mrr"] == pytest.approx(2 / 3)
     assert [result["case"]["id"] for result in data["results"]] == ["a", "b", "c"]
@@ -209,6 +210,162 @@ def test_cases_load_as_immutable_values(tmp_path: Path) -> None:
     ]
 
 
+FINE_CASE = "- id: fine\n  question: Is there parking?\n  language: en\n  relevant: [parking-en]\n"
+
+
+def _dataset(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / "retrieval.yaml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _refusal(path: Path) -> str:
+    with pytest.raises(DatasetError) as refused:
+        load_cases(path)
+    return str(refused.value)
+
+
+@pytest.mark.parametrize(
+    ("bad_case", "named"),
+    [
+        pytest.param(
+            "- id: no-relevant\n  question: Q?\n  language: en\n",
+            ("case 'no-relevant'", "relevant"),
+            id="relevant missing",
+        ),
+        pytest.param(
+            "- id: no-documents\n  question: Q?\n  language: en\n  relevant: []\n",
+            ("case 'no-documents'", "relevant"),
+            id="relevant empty",
+        ),
+        pytest.param(
+            "- id: one-name\n  question: Q?\n  language: en\n  relevant: parking-en\n",
+            ("case 'one-name'", "relevant"),
+            id="relevant is text, not a list",
+        ),
+        pytest.param(
+            "- id: blank-name\n  question: Q?\n  language: en\n  relevant: ['  ']\n",
+            ("case 'blank-name'", "relevant"),
+            id="relevant names a blank document",
+        ),
+        pytest.param(
+            "- id: blank-tag\n  question: Q?\n  language: en\n  relevant: [a]\n  tags: ['']\n",
+            ("case 'blank-tag'", "tags"),
+            id="tags has a blank tag",
+        ),
+        pytest.param(
+            "- id: french\n  question: Q?\n  language: fr\n  relevant: [a]\n",
+            ("case 'french'", "language"),
+            id="unknown language",
+        ),
+        pytest.param(
+            "- id: no-language\n  question: Q?\n  relevant: [a]\n",
+            ("case 'no-language'", "language"),
+            id="language missing",
+        ),
+        pytest.param(
+            "- id: no-question\n  language: en\n  relevant: [a]\n",
+            ("case 'no-question'", "question"),
+            id="question missing",
+        ),
+        pytest.param(
+            "- id: blank-question\n  question: ''\n  language: en\n  relevant: [a]\n",
+            ("case 'blank-question'", "question"),
+            id="question blank",
+        ),
+        pytest.param(
+            "- id: typo\n  question: Q?\n  language: en\n  relevant: [a]\n  tag: [x]\n",
+            ("case 'typo'", "tag"),
+            id="unknown field",
+        ),
+        pytest.param(
+            "- id: one-tag\n  question: Q?\n  language: en\n  relevant: [a]\n  tags: paraphrase\n",
+            ("case 'one-tag'", "tags"),
+            id="tags is text, not a list",
+        ),
+        pytest.param(
+            "- question: Q?\n  language: en\n  relevant: [a]\n",
+            ("case #2", "id"),
+            id="id missing",
+        ),
+        pytest.param(
+            "- id: ' '\n  question: Q?\n  language: en\n  relevant: [a]\n",
+            ("case #2", "id"),
+            id="id is blank",
+        ),
+        pytest.param(
+            "- id: 7\n  question: Q?\n  language: en\n  relevant: [a]\n",
+            ("case #2", "id"),
+            id="id is a number",
+        ),
+        pytest.param("- just a sentence\n", ("case #2", "a mapping"), id="case is not a mapping"),
+    ],
+)
+def test_a_malformed_case_is_refused_naming_the_file_and_the_case(
+    tmp_path: Path, bad_case: str, named: tuple[str, ...]
+) -> None:
+    path = _dataset(tmp_path, FINE_CASE + bad_case)
+    message = _refusal(path)
+    assert str(path) in message
+    for fragment in named:
+        assert fragment in message
+    assert "case 'fine'" not in message  # the good case is not blamed
+
+
+def test_every_malformed_case_is_reported_at_once(tmp_path: Path) -> None:
+    path = _dataset(
+        tmp_path,
+        "- id: french\n  question: Q?\n  language: fr\n  relevant: [a]\n"
+        + FINE_CASE
+        + "- id: no-documents\n  question: Q?\n  language: en\n  relevant: []\n",
+    )
+    message = _refusal(path)
+    assert "case 'french'" in message
+    assert "case 'no-documents'" in message
+    assert "case 'fine'" not in message
+
+
+def test_a_repeated_id_is_refused_naming_the_file_and_the_id(tmp_path: Path) -> None:
+    path = _dataset(tmp_path, FINE_CASE + FINE_CASE)
+    message = _refusal(path)
+    assert str(path) in message
+    assert "case 'fine'" in message
+    assert "duplicate" in message
+
+
+@pytest.mark.parametrize(
+    ("content", "named"),
+    [
+        pytest.param("", "no cases", id="empty file"),
+        pytest.param("[]\n", "no cases", id="empty list"),
+        pytest.param("id: fine\nquestion: Q?\n", "list of cases", id="one mapping, not a list"),
+        pytest.param("- id: [unclosed\n", "invalid YAML", id="broken YAML"),
+    ],
+)
+def test_a_file_that_is_not_a_list_of_cases_is_refused_naming_the_file(
+    tmp_path: Path, content: str, named: str
+) -> None:
+    path = _dataset(tmp_path, content)
+    message = _refusal(path)
+    assert str(path) in message
+    assert named in message
+
+
+def test_a_file_that_is_not_utf8_text_is_refused_naming_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "retrieval.yaml"
+    path.write_bytes("- id: caffè\n".encode("latin-1"))
+    message = _refusal(path)
+    assert str(path) in message
+    assert "UTF-8" in message
+
+
+def test_a_missing_file_is_refused_naming_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "evals" / "retrieval.yaml"
+    message = _refusal(path)
+    assert str(path) in message
+    assert "cannot be read" in message
+
+
 @pytest.mark.parametrize("business", ["demo-clinic", "demo-shop"])
 def test_dataset_cases_point_at_documents_and_languages_of_their_business(
     businesses_dir: Path, business: str
@@ -251,7 +408,7 @@ def test_a_report_keeps_each_top_document_once_and_no_more_than_k(
     factory = activate_pack(clinic_pack)
     cases = load_cases(businesses_dir / "demo-clinic" / "evals" / "retrieval.yaml")
     report = _evaluate(factory, clinic_pack, cases, k=2)
-    assert (report.business_id, report.k, report.embedder) == (clinic_pack.id, 2, "HashEmbedder")
+    assert (report.business_id, report.k, report.embedder) == (clinic_pack.id, 2, "hash-v1")
     assert [result.case for result in report.results] == cases
     for result in report.results:
         # Six chunks (k * 3) of five documents repeat a document, which must still count once.
@@ -265,7 +422,7 @@ def test_the_right_document_ranks_first_when_only_it_shares_the_question_words(
 ) -> None:
     """With k = 1 recall is not saturated. Only the right document contains a search term of these
     questions, so its best chunk is ranked by both searches and beats every chunk that only the
-    vector search found, whatever order equal scores take (ties follow random chunk ids)."""
+    vector search found, whatever way the equal scores among those are ordered."""
     unambiguous = {
         "parking-en",
         "physio-prepare-it",
@@ -361,7 +518,7 @@ def test_the_question_is_embedded_by_the_given_embedder(
     embedder = _ParkingEmbedder()
     report = _evaluate(factory, clinic_pack, [case], k=1, embedder=embedder)
     assert embedder.questions == ["qqq zzz"]
-    assert report.embedder == "_ParkingEmbedder"
+    assert report.embedder == "parking-test"
     # No document contains these words, so only the vector can have found the parking section.
     assert report.results[0].retrieved == ("parking-en",)
 

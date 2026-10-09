@@ -2,17 +2,20 @@
 
 Filters come first — business, active version, validity dates — so nothing
 unauthorized or expired is ever a candidate.
+
+Equal scores are ranked by place, the document key and then the position in the document, never by
+chunk id: ids are random, so the same knowledge would rank differently in every database.
 """
 
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Row, Select, func, or_, select
 from sqlalchemy.orm import Session
 
 from frontdesk.db.models import Chunk, Document
@@ -22,6 +25,15 @@ from frontdesk.safety.normalize import tokens
 
 RRF_K = 60
 MIN_TOKEN_LENGTH = 3
+# Where a chunk sits in the knowledge: its document key and its position in the document. Equal in
+# every database that loads the same pack, and unique within a version: the database makes document
+# keys unique, and the chunker numbers the chunks of a document one by one.
+Place = tuple[str, int]
+
+# What the queries that rank chunks select: the chunk id, then its place.
+type _PlacedSelect = Select[uuid.UUID, str, int]
+type _PlacedRow = Row[uuid.UUID, str, int]
+
 STOPWORDS = frozenset(
     {
         # sq
@@ -102,13 +114,14 @@ class RetrievedChunk:
 
 
 def rrf_fuse(
-    rankings: Sequence[Sequence[uuid.UUID]], *, k: int = RRF_K
+    rankings: Sequence[Sequence[uuid.UUID]], places: Mapping[uuid.UUID, Place], *, k: int = RRF_K
 ) -> list[tuple[uuid.UUID, float]]:
+    """Reciprocal Rank Fusion; chunks with equal scores come in the order of their places."""
     scores: dict[uuid.UUID, float] = {}
     for ranking in rankings:
         for rank, item in enumerate(ranking, start=1):
             scores[item] = scores.get(item, 0.0) + 1.0 / (k + rank)
-    return sorted(scores.items(), key=lambda pair: (-pair[1], str(pair[0])))
+    return sorted(scores.items(), key=lambda pair: (-pair[1], places[pair[0]]))
 
 
 def build_tsquery(query: str) -> str | None:
@@ -133,28 +146,30 @@ def hybrid_search(
 
     The first chunk is always returned; later ones only while they fit in `max_chars`. A query
     vector of all zeros (a message without tokens) counts as no vector: only the terms are searched.
+    Chunks with equal scores, in either search or after fusion, come in the order of their places.
     """
     version_id = active_version_id(session, business_id)
     if version_id is None:
         return []
     eligible = _eligible(business_id, version_id, today)
-    rankings: list[list[uuid.UUID]] = []
+    ranked: list[Sequence[_PlacedRow]] = []
     tsquery = build_tsquery(query)
     if tsquery is not None:
         ts = func.to_tsquery("simple", tsquery)
-        rankings.append(
-            list(
-                session.scalars(
-                    eligible.where(Chunk.tsv.op("@@")(ts))
-                    .order_by(func.ts_rank_cd(Chunk.tsv, ts).desc(), Chunk.id)
-                    .limit(candidates)
-                )
-            )
+        by_terms = (
+            eligible.where(Chunk.tsv.op("@@")(ts))
+            .order_by(func.ts_rank_cd(Chunk.tsv, ts).desc(), Document.doc_key, Chunk.ordinal)
+            .limit(candidates)
         )
+        ranked.append(session.execute(by_terms).all())
     if query_vector is not None and _has_direction(query_vector):
         nearest = _nearest(eligible, list(query_vector), candidates)
-        rankings.append(list(session.scalars(nearest)))
-    return _load(session, rrf_fuse(rankings)[:limit], max_chars)
+        ranked.append(session.execute(nearest).all())
+    places: dict[uuid.UUID, Place] = {
+        row.id: (row.doc_key, row.ordinal) for ranking in ranked for row in ranking
+    }
+    rankings = [[row.id for row in ranking] for ranking in ranked]
+    return _load(session, rrf_fuse(rankings, places)[:limit], max_chars)
 
 
 def chunk_evidence(chunk: RetrievedChunk) -> Evidence:
@@ -172,16 +187,18 @@ def _has_direction(vector: Sequence[float]) -> bool:
     """False for the zero vector, which HashEmbedder returns for text without tokens.
 
     pgvector measures the cosine distance from a zero vector to every chunk as NaN, so the vector
-    side would rank the chunks by id: arbitrary evidence. Such a query is searched by terms alone.
+    side would rank the chunks by place alone: arbitrary evidence. Such a query is searched by
+    terms alone.
     """
     return any(value != 0.0 for value in vector)
 
 
-def _nearest(eligible: Select[Any], vector: list[float], candidates: int) -> Select[Any]:
+def _nearest(eligible: _PlacedSelect, vector: list[float], candidates: int) -> _PlacedSelect:
     """The eligible chunks nearest to the vector by cosine distance, found exactly.
 
     The eligible chunks are materialized first, so the sort cannot run on the HNSW index, which
     filters after its scan and returns few or no rows once retired versions hold the same chunks.
+    Chunks at the same distance come in the order of their places.
     """
     pool = (
         eligible.add_columns(Chunk.embedding)
@@ -190,15 +207,17 @@ def _nearest(eligible: Select[Any], vector: list[float], candidates: int) -> Sel
         .prefix_with("MATERIALIZED")
     )
     return (
-        select(pool.c.id)
-        .order_by(pool.c.embedding.cosine_distance(vector), pool.c.id)
+        select(pool.c.id, pool.c.doc_key, pool.c.ordinal)
+        .order_by(pool.c.embedding.cosine_distance(vector), pool.c.doc_key, pool.c.ordinal)
         .limit(candidates)
     )
 
 
-def _eligible(business_id: str, version_id: uuid.UUID, today: date) -> Select[Any]:
+def _eligible(business_id: str, version_id: uuid.UUID, today: date) -> _PlacedSelect:
+    """The chunks a query may use, each with its place (a chunk's document key and ordinal)."""
     return (
-        select(Chunk.id)
+        select(Chunk.id, Document.doc_key, Chunk.ordinal)
+        .select_from(Chunk)
         .join(Document, Document.id == Chunk.document_id)
         .where(
             Chunk.business_id == business_id,
