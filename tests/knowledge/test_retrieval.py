@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
@@ -19,12 +20,13 @@ from frontdesk.knowledge.retrieval import (
     hybrid_search,
     rrf_fuse,
 )
-from frontdesk.knowledge.versions import create_draft
+from frontdesk.knowledge.versions import active_version_id, create_draft
 from frontdesk.tenancy.loader import load_pack
 from frontdesk.tenancy.pack import BusinessPack
 
 TODAY = date(2026, 10, 7)
 Activate = Callable[..., sessionmaker[Session]]
+PARKING_TEXT = "Parking\nKlinika Demo has six free parking spaces behind the building."
 
 
 def test_rrf_prefers_items_ranked_by_both_lists() -> None:
@@ -106,14 +108,19 @@ def _with_parking(pack: BusinessPack, **changes: Any) -> BusinessPack:
     return pack.model_copy(update={"documents": documents})
 
 
+def _with_rooftop_garage(pack: BusinessPack) -> BusinessPack:
+    """The same pack with another parking text: a second version of the same knowledge."""
+    parking = next(doc for doc in pack.documents if doc.key == "parking-en")
+    body = parking.body.replace("six free parking spaces", "a rooftop garage")
+    return _with_parking(pack, body=body)
+
+
 @pytest.mark.db
 def test_only_the_active_version_is_searched(
     activate_pack: Activate, clinic_pack: BusinessPack
 ) -> None:
     factory = activate_pack(clinic_pack)
-    parking = next(doc for doc in clinic_pack.documents if doc.key == "parking-en")
-    body = parking.body.replace("six free parking spaces", "a rooftop garage")
-    edited = _with_parking(clinic_pack, body=body)
+    edited = _with_rooftop_garage(clinic_pack)
     with business_session(factory, edited.id) as session:
         create_draft(session, edited)
 
@@ -126,6 +133,51 @@ def test_only_the_active_version_is_searched(
     activate_pack(edited)
     assert finds("rooftop")
     assert not finds("spaces")  # the retired version is gone
+
+
+@pytest.mark.db
+def test_vector_search_sees_only_the_active_version(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    factory = activate_pack(clinic_pack)
+    edited = _with_rooftop_garage(clinic_pack)
+    vector = HashEmbedder().embed([PARKING_TEXT])[0]  # nearest to the first version's chunk
+    with business_session(factory, clinic_pack.id) as session:
+        first = active_version_id(session, clinic_pack.id)
+        create_draft(session, edited)
+    hits = _search(factory, clinic_pack.id, "", query_vector=vector)
+    assert {hit.version_id for hit in hits} == {first}  # the draft waits for approval
+    activate_pack(edited)
+    with business_session(factory, clinic_pack.id) as session:
+        second = active_version_id(session, clinic_pack.id)
+    hits = _search(factory, clinic_pack.id, "", query_vector=vector)
+    assert {hit.version_id for hit in hits} == {second}  # the retired version is gone
+
+
+@pytest.mark.db
+def test_vector_search_stays_exact_when_the_planner_prefers_the_hnsw_index(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    """An HNSW scan filters after it scans: a retired copy must not hide the active chunks."""
+    factory = activate_pack(clinic_pack)
+    activate_pack(_with_rooftop_garage(clinic_pack))  # the first version is retired, vectors kept
+    vector = HashEmbedder().embed(["six free parking spaces"])[0]  # nearest to the retired chunk
+    with business_session(factory, clinic_pack.id) as session:
+        for statement in (
+            "SET LOCAL enable_seqscan = off",  # prefer index scans...
+            "SET LOCAL enable_sort = off",  # ...and an index-ordered scan to a sort
+            "SET LOCAL hnsw.ef_search = 1",  # the index then returns one row only
+        ):
+            session.execute(text(statement))
+        hits = hybrid_search(
+            session,
+            business_id=clinic_pack.id,
+            query="",
+            query_vector=vector,
+            today=TODAY,
+            limit=3,
+        )
+    assert len(hits) == 3
 
 
 @pytest.mark.db
@@ -162,22 +214,38 @@ def test_expired_documents_are_excluded(
     assert all(hit.document_key != "parking-en" for hit in hits)
 
 
+def _parking_hits(
+    factory: sessionmaker[Session], pack: BusinessPack, *, by_vector: bool
+) -> list[RetrievedChunk]:
+    """One search through one side only: the term "parking", or a vector near the parking chunk."""
+    if by_vector:
+        vector = HashEmbedder().embed([PARKING_TEXT])[0]
+        return _search(factory, pack.id, "", query_vector=vector)
+    return _search(factory, pack.id, "parking", query_vector=None)
+
+
 @pytest.mark.db
+@pytest.mark.parametrize("by_vector", [False, True], ids=["terms", "vector"])
 @pytest.mark.parametrize(
     ("window", "searchable"),
     [
         ({"valid_from": TODAY + timedelta(days=1)}, False),
         ({"valid_from": TODAY}, True),
+        ({"valid_until": TODAY - timedelta(days=1)}, False),
         ({"valid_until": TODAY}, True),
     ],
-    ids=["starts tomorrow", "starts today", "ends today"],
+    ids=["starts tomorrow", "starts today", "ended yesterday", "ends today"],
 )
 def test_documents_are_searchable_from_their_first_to_their_last_day(
-    activate_pack: Activate, clinic_pack: BusinessPack, window: dict[str, date], searchable: bool
+    activate_pack: Activate,
+    clinic_pack: BusinessPack,
+    window: dict[str, date],
+    searchable: bool,
+    by_vector: bool,
 ) -> None:
     pack = _with_parking(clinic_pack, **window)
     factory = activate_pack(pack)
-    hits = _search(factory, pack.id, "parking", query_vector=None)
+    hits = _parking_hits(factory, pack, by_vector=by_vector)
     assert any(hit.document_key == "parking-en" for hit in hits) is searchable
 
 

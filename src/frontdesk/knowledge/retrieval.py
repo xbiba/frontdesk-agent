@@ -152,18 +152,8 @@ def hybrid_search(
             )
         )
     if query_vector is not None and _has_direction(query_vector):
-        # The id after the distance does more than break ties: a second sort key keeps Postgres off
-        # the HNSW index, which filters after its scan and returns few or no rows once retired
-        # versions hold copies of the same chunks. Without it the search would not be exact.
-        rankings.append(
-            list(
-                session.scalars(
-                    eligible.where(Chunk.embedding.is_not(None))
-                    .order_by(Chunk.embedding.cosine_distance(list(query_vector)), Chunk.id)
-                    .limit(candidates)
-                )
-            )
-        )
+        nearest = _nearest(eligible, list(query_vector), candidates)
+        rankings.append(list(session.scalars(nearest)))
     return _load(session, rrf_fuse(rankings)[:limit], max_chars)
 
 
@@ -185,6 +175,25 @@ def _has_direction(vector: Sequence[float]) -> bool:
     side would rank the chunks by id: arbitrary evidence. Such a query is searched by terms alone.
     """
     return any(value != 0.0 for value in vector)
+
+
+def _nearest(eligible: Select[Any], vector: list[float], candidates: int) -> Select[Any]:
+    """The eligible chunks nearest to the vector by cosine distance, found exactly.
+
+    The eligible chunks are materialized first, so the sort cannot run on the HNSW index, which
+    filters after its scan and returns few or no rows once retired versions hold the same chunks.
+    """
+    pool = (
+        eligible.add_columns(Chunk.embedding)
+        .where(Chunk.embedding.is_not(None))
+        .cte("eligible_vectors")
+        .prefix_with("MATERIALIZED")
+    )
+    return (
+        select(pool.c.id)
+        .order_by(pool.c.embedding.cosine_distance(vector), pool.c.id)
+        .limit(candidates)
+    )
 
 
 def _eligible(business_id: str, version_id: uuid.UUID, today: date) -> Select[Any]:
