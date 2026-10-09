@@ -356,7 +356,7 @@ async def test_a_phone_number_gets_the_personal_data_text_before_any_model_runs(
         document_responder(),
     )
     result, _ = await handle_message(
-        "Il mio numero è 0691234567", ConversationState(turns=1), runtime
+        "Il mio numero è +355 00 111 2222", ConversationState(turns=1), runtime
     )
     assert result.outcome is TurnOutcome.FIXED
     assert result.text == _text(clinic_pack, "it", FixedTextKey.PERSONAL_DATA)

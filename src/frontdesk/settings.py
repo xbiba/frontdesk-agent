@@ -1,4 +1,4 @@
-"""Process settings. One process serves exactly one business (spec §3)."""
+"""Process settings. One process serves exactly one business (ADR-0008)."""
 
 from __future__ import annotations
 

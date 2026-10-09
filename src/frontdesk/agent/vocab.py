@@ -1,4 +1,4 @@
-"""Closed vocabularies the classifier must answer with (spec §6)."""
+"""Closed vocabularies the classifier must answer with (ADR-0006)."""
 
 from __future__ import annotations
 

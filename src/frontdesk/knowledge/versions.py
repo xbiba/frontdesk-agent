@@ -1,8 +1,10 @@
-"""Versioned knowledge with approval (spec §7; blueprint §11).
+"""Versioned knowledge with approval.
 
 draft -> approved -> active -> retired. Only an approved version can become
 active, and embeddings are computed at activation, after approval. Every
-transition is one guarded UPDATE, so a concurrent change cannot slip in between.
+transition is one guarded UPDATE, so a version that is not in the expected state is refused;
+two concurrent activations are stopped by the unique index on active versions, and the one that
+loses gets an `IntegrityError`.
 Each version records which embedder computed its vectors: vectors from two
 models are never compared (ADR-0005).
 """

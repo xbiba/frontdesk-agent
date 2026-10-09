@@ -2,7 +2,7 @@
 
 Facts from records are written by code. The responder answers from document
 passages only, as claims that each carry a verbatim quote; code checks every
-claim before anything is sent (Task 19).
+claim before anything is sent.
 """
 
 from __future__ import annotations

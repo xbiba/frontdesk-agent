@@ -13,7 +13,7 @@ Checking a generated reply with patterns cannot prove it right. A check on numbe
 
 ## Decision
 The second option.
-- Prices, opening hours, address and contacts, services, doctors, orientation and order status are written by code from the approved records, with fixed phrasing in each language, including the opening and the closing question. No model writes them.
+- Prices, opening hours, address and contacts, services, doctors and orientation are written by code from the approved records, and the status of an order from the shop's order data, with fixed phrasing in each language, including the lead-in of an orientation and the closing question. No model writes them.
 - Questions answered from documents go to the responder, which returns at most four claims. Each claim is one sentence in the person's language, the ID of a document passage and a quote copied from that passage. Code checks that the passage was provided, that the quote is in it word for word, that every number in the sentence is in the quote, that the sentence names no price, that it uses no diagnostic language and that it is close in meaning to its quote (cosine similarity of their embeddings at least `min_support_similarity`).
 - Clarifying questions are chosen by the model from a closed list and written by code. The list is the one that each profile's prompt offers (the shop's offers none). A handoff always uses the approved fixed texts.
 

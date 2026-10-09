@@ -17,7 +17,7 @@ services:
       retries: 30
 
   temporal:
-    image: temporalio/temporal:latest  # pin a version in the M3 plan, when Temporal Cloud is chosen
+    image: temporalio/temporal:latest  # pin a version in the M4 plan, where Temporal is reconsidered
     command: ["server", "start-dev", "--ip", "0.0.0.0"]
     ports:
       - "127.0.0.1:7233:7233"

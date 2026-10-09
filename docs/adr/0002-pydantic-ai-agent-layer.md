@@ -4,7 +4,7 @@
 Accepted (2026-10-07).
 
 ## Context
-The blueprint's default is plain code plus structured model calls; a framework is allowed when it brings a measurable advantage, recorded in an ADR (ARC-AGT-001).
+The default is plain code plus structured model calls; a framework is allowed when it brings a measurable advantage, recorded in an ADR.
 
 ## Options considered
 - Hand-written tool loop on the Anthropic SDK.
@@ -20,4 +20,4 @@ Pydantic AI for the classifier and the responder: typed tools and outputs, usage
 - Safety rules, validation and domain logic stay outside the framework, in plain Python.
 
 ## Exit plan
-The framework touches only `frontdesk.agent`; tools call domain functions, so replacing it means rewriting two agent factories and the toolset.
+The framework lives in `frontdesk.agent` and in the model gateway, which builds the provider models, and the conversation turn uses its `Agent` type and `AgentRunError`. Tools call domain functions, so replacing it means rewriting two agent factories, the toolset, the demo models, the gateway's model builder and those two names in the turn.

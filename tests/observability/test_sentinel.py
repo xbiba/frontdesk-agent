@@ -115,7 +115,7 @@ def _turn_attributes(exporter: InMemorySpanExporter) -> dict[str, Any]:
 
 
 def test_redaction_masks_phones_and_emails() -> None:
-    assert redact("call +355691234567 or a1234567@b.example") == "call [phone] or [email]"
+    assert redact("call +355001112222 or a1234567@b.example") == "call [phone] or [email]"
 
 
 def test_failed_spans_record_only_the_exception_type(span_exporter: InMemorySpanExporter) -> None:
@@ -248,11 +248,11 @@ async def test_content_capture_is_explicit_and_redacted(
         document_responder(),
         capture_content=True,
     )
-    await handle_message("my number is +355691234567", ConversationState(turns=1), runtime)
+    await handle_message("my number is +355001112222", ConversationState(turns=1), runtime)
     exported = _exported(span_exporter)
     assert "frontdesk.content" in exported
     assert "[phone]" in exported
-    assert "691234567" not in exported
+    assert "001112222" not in exported
 
 
 # What a turn span does carry, and what holds around it. The tests above show what it never carries.

@@ -360,7 +360,7 @@ async def test_passages_in_the_prompt_are_answered_without_searching() -> None:
     assert len(requests) == 1
 
 
-# Deps and tool results are plain data: frozen, and they survive a JSON round trip (Temporal, M3).
+# Deps and tool results are plain data: frozen, and they survive a JSON round trip (Temporal, M4).
 
 
 def test_deps_and_tool_results_survive_a_json_round_trip() -> None:

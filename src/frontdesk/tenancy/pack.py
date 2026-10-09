@@ -1,4 +1,4 @@
-"""Business pack: everything that makes one business different, kept outside the code (spec §3)."""
+"""Business pack: everything that makes one business different, kept outside the code (ADR-0007)."""
 
 from __future__ import annotations
 

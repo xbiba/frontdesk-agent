@@ -155,7 +155,7 @@ async def test_demo_responder_quotes_only_relevant_passages() -> None:
     assert (await ask("Can I bring my son?")).action is AnswerAction.HANDOFF
 
 
-# --- The claim checks of Task 19 (ADR-0009) on what the demo responder writes ---------------------
+# --- The claim checks (ADR-0009) on what the demo responder writes --------------------------------
 
 
 async def _respond(question: str, passages: Sequence[Evidence]) -> ResponderOutput:

@@ -1,4 +1,4 @@
-"""Evidence gathered by code (spec §4, step 5): records for facts, passages for documents.
+"""Evidence gathered by code: records for facts, passages for documents.
 
 Queries are built from validated fields only, never from the original message.
 """

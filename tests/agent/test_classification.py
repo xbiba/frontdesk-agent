@@ -145,7 +145,9 @@ def test_general_question_text_is_checked() -> None:
     assert isinstance(ok, ValidatedFields)
     assert ok.general_question == "Is there parking?"
     phone = _validate(
-        category="administrative", intent="general_question", general_question="call 0691234567"
+        category="administrative",
+        intent="general_question",
+        general_question="call +355 00 111 2222",
     )
     assert phone == Rejection(reason="text_has_identifiers")
     symptom = _validate(

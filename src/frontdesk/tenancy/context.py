@@ -1,4 +1,4 @@
-"""Execution context: who a unit of work belongs to, always built by code (blueprint §7.1)."""
+"""Execution context: who a unit of work belongs to, always built by code."""
 
 from __future__ import annotations
 

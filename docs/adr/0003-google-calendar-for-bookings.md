@@ -1,7 +1,7 @@
 # ADR-0003: Google Calendar for bookings
 
 ## Status
-Accepted (2026-10-07). Implemented in M4.
+Accepted (2026-10-07). Implemented in M6.
 
 ## Context
 Reception manages appointments from one account and needs several doctors bookable in parallel.

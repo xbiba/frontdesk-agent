@@ -1,4 +1,4 @@
-"""Exact facts from approved records (spec §7): rendered per language, values kept verbatim."""
+"""Exact facts from approved records (ADR-0009): rendered per language, values kept verbatim."""
 
 from __future__ import annotations
 

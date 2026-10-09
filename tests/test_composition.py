@@ -46,7 +46,7 @@ def _deployment(
     return deployment if now is None else replace(deployment, now=now)
 
 
-# --- The business day (controller ruling 1) --------------------------------------------------------
+# --- The business day -----------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(

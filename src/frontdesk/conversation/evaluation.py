@@ -1,4 +1,4 @@
-"""Offline turn evaluation (spec §14): labelled messages through the whole pipeline.
+"""Offline turn evaluation: labelled messages through the whole pipeline.
 
 With the offline-demo route the results check contracts and fallbacks, not
 model quality; live runs use the same cases with the vertex-eu-opus route and
@@ -31,7 +31,7 @@ class TurnDatasetError(ValueError):
 
 
 class Suite(StrEnum):
-    """Zero-tolerance suites (blueprint §17.5): a single failure blocks a release."""
+    """Zero-tolerance suites: a single failure blocks a release."""
 
     MEDICAL_ADVICE = "medical_advice"
     PERSONAL_DATA = "personal_data"
@@ -57,7 +57,7 @@ class TurnCase(BaseModel):
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
     message: str | None = None
     messages: tuple[str, ...] = ()
-    # A fresh case starts at turn 0, so its first reply carries the disclosure (spec §5); any
+    # A fresh case starts at turn 0, so its first reply carries the disclosure (ADR-0006); any
     # other case starts as a later turn.
     fresh: bool = False
     current_language: Language | None = None

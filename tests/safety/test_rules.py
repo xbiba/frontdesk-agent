@@ -133,9 +133,9 @@ def test_practical_messages_are_not_emergencies(text: str) -> None:
         ("cfare ilaci duhet te marr per shpinen", Verdict.CLINICAL_ADVICE),
         ("posso prendere un antinfiammatorio?", Verdict.CLINICAL_ADVICE),
         ("can you interpret my blood test results?", Verdict.CLINICAL_ADVICE),
-        ("Il mio numero è 069 123 4567", Verdict.PERSONAL_DATA),
-        ("call me +355691234567", Verdict.PERSONAL_DATA),
-        ("+39 333 123 4567", Verdict.PERSONAL_DATA),
+        ("Il mio numero è +355 00 111 2222", Verdict.PERSONAL_DATA),
+        ("call me +355001112222", Verdict.PERSONAL_DATA),
+        ("+39 00 1111 2222", Verdict.PERSONAL_DATA),
         ("scrivetemi a mario.rossi@example.com", Verdict.PERSONAL_DATA),
         ("Mi chiamo Mario Rossi", Verdict.PERSONAL_DATA),
         ("Quanto costa la fisioterapia?", Verdict.PASS),
@@ -150,9 +150,9 @@ def test_practical_messages_are_not_emergencies(text: str) -> None:
         ("Vorrei venire il 10.10.2026", Verdict.PASS),
         ("Vorrei venire il 10-10-2026", Verdict.PASS),
         ("Siete aperti dalle 09.00-17.00?", Verdict.PASS),
-        ("Il mio numero è 3331234567", Verdict.PERSONAL_DATA),
+        ("Il mio numero è 0011112222", Verdict.PERSONAL_DATA),
         ("Il mio ordine è 1234567890", Verdict.PERSONAL_DATA),
-        ("chiamami al 3331234567 il 10.10.2026", Verdict.PERSONAL_DATA),
+        ("chiamami al 0011112222 il 10.10.2026", Verdict.PERSONAL_DATA),
         ("Il mio numero è 12-34-5678", Verdict.PERSONAL_DATA),
     ],
 )
@@ -161,15 +161,15 @@ def test_rule_verdicts(text: str, verdict: Verdict) -> None:
 
 
 def test_emergency_wins_over_everything() -> None:
-    result = evaluate("chest pain, my number is +355691234567")
+    result = evaluate("chest pain, my number is +355001112222")
     assert result.verdict is Verdict.EMERGENCY
 
 
 def test_expected_fields_do_not_trip_the_rule() -> None:
     assert (
-        evaluate("+355691234567", expected=frozenset({PersonalField.PHONE})).verdict is Verdict.PASS
+        evaluate("+355001112222", expected=frozenset({PersonalField.PHONE})).verdict is Verdict.PASS
     )
-    assert evaluate("+355691234567", expected=frozenset({PersonalField.EMAIL})).verdict is (
+    assert evaluate("+355001112222", expected=frozenset({PersonalField.EMAIL})).verdict is (
         Verdict.PERSONAL_DATA
     )
 
@@ -208,7 +208,7 @@ def test_the_emergency_net_alone_leaves_practical_messages_alone(text: str) -> N
     ("text", "verdict"),
     [
         ("Che farmaco devo prendere per la schiena?", Verdict.CLINICAL_ADVICE),
-        ("Il mio numero è 069 123 4567", Verdict.PERSONAL_DATA),
+        ("Il mio numero è +355 00 111 2222", Verdict.PERSONAL_DATA),
         ("scrivetemi a mario.rossi@example.com", Verdict.PERSONAL_DATA),
     ],
 )

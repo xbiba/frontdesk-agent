@@ -1,7 +1,7 @@
 # ADR-0005: Embeddings and reranking chosen by evaluation
 
 ## Status
-Proposed. Decided after the retrieval evaluation runs on real models (M1 harness, M5 data).
+Proposed. Decided after the retrieval evaluation runs on real models (M1 harness; approved clinic data from M3; decided before production in M5).
 
 ## Context
 Retrieval must work in Albanian, Italian and English, including a question in one language against a document in another. Query embeddings derive from patient messages, so they must run on approved EU routes.
@@ -20,4 +20,4 @@ Current decision: the demo uses `paraphrase-multilingual-MiniLM-L12-v2` locally 
 - Each knowledge version records which embedder computed its vectors. A deployment refuses to start when the configured embedder differs, until `frontdesk knowledge reembed` recomputes them: vectors from two models are never compared.
 
 ## Exit plan
-Embedders implement one protocol; changing model is configuration plus a migration.
+Embedders implement one protocol; changing model is configuration plus `frontdesk knowledge reembed`, and a migration when the dimension differs.

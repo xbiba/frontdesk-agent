@@ -1,4 +1,4 @@
-"""Deterministic rules that run before any model call (spec §6, first level).
+"""Deterministic rules that run before any model call (ADR-0006: the first level).
 
 Emergencies, explicit requests for medical advice and personal data stop here.
 Emergencies match as phrases and as word stems close to each other ("dolore

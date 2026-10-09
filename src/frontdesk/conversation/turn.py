@@ -1,4 +1,4 @@
-"""One conversation turn (spec §4, §6; ADR-0006, ADR-0009).
+"""One conversation turn (ADR-0006, ADR-0009).
 
 precheck → deterministic rules → classifier → validation → facts written by
 code, or document evidence → responder → claim checks. Model failures, other
@@ -85,10 +85,13 @@ class TurnOutcome(StrEnum):
 
 @dataclass(frozen=True)
 class TurnTrace:
-    """Metadata only: never message text or evidence content.
+    """Metadata about a turn, never message text or evidence content, with one exception.
 
     `evidence_ids` lists documents and records. Live evidence (an order's status) is only counted
     in `live_evidence`: its ID is derived from the order reference, so it is never listed.
+    `sources` can hold `order:<reference>`, and the reference is the customer's own data: a caller
+    never logs, stores or exports it. The terminal chat hides it, and offline reports keep it
+    because they hold synthetic data only.
     """
 
     rule: str
@@ -258,7 +261,7 @@ async def _route(
         return _handoff(pack, language, FixedTextKey.EMERGENCY, trace)
     notice = _NOTICES.get(fields.category)
     if fields.intent in {Intent.HUMAN, Intent.BOOKING}:
-        # Bookings arrive with M4; until then reception takes them. A clinical notice stays.
+        # Bookings arrive with M6; until then reception takes them. A clinical notice stays.
         return _handoff(pack, language, notice or FixedTextKey.HANDOFF, trace)
     if notice is None:
         if fields.category is Category.ADMINISTRATIVE and fields.intent in _SMALL_TALK:
@@ -266,7 +269,7 @@ async def _route(
         return await _answer(fields, state, catalog, runtime, trace)
     if fields.intent not in ADMINISTRATIVE_INTENTS:
         return _handoff(pack, language, notice, trace)
-    # Spec §6: answer only the administrative question, then hand off.
+    # A clinical message with an administrative question: answer only that question, then hand off.
     reply = await _answer(fields, state, catalog, runtime, trace, with_closing=False)
     prefix = reply.text if reply.outcome is TurnOutcome.REPLIED else None
     # A question that was not shown to the person is not a pending one.
@@ -550,7 +553,7 @@ def _emergency(pack: BusinessPack, language: Language, rule: str) -> TurnResult:
 
 
 def _with_disclosure(pack: BusinessPack, language: Language, result: TurnResult) -> TurnResult:
-    """Spec §5: the first reply says the assistant is automatic. An emergency still reads first."""
+    """The first reply says the assistant is automatic (ADR-0006). An emergency still reads first."""
     disclosure = _fixed_text(pack, language, FixedTextKey.DISCLOSURE)
     emergency = _fixed_text(pack, language, FixedTextKey.EMERGENCY)
     if result.trace.category is Category.EMERGENCY and result.text.startswith(emergency):

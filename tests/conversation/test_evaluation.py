@@ -417,7 +417,7 @@ def test_the_json_report_keeps_accents_readable() -> None:
     assert "documento d'identità" in text
 
 
-# --- The demo datasets follow the spec (§14) --------------------------------------------------------
+# --- The demo datasets keep to their rules --------------------------------------------------------
 
 
 def test_the_demo_datasets_have_the_size_and_the_kinds_of_case_the_spec_names(

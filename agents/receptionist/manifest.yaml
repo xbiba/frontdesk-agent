@@ -8,7 +8,7 @@ limits:
   classifier_model_requests: 2
   responder_model_requests: 2
   responder_tool_calls: 1
-tools:   # risk classes, blueprint §9.6
+tools:   # the risk class of each tool; R0 only reads approved documents
   search_information: R0
 written_by_code: [prices, opening hours, address and contacts, services, doctors, orientation, clarifying questions, handoff texts]
 inputs: validated classifier fields and approved document passages; never the original message

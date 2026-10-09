@@ -1,4 +1,4 @@
-"""Metadata-only structured logs (spec §13; blueprint OBS-TRC-001).
+"""Metadata-only structured logs (ADR-0006).
 
 Call sites pass an event name and keyword fields. Each record becomes one JSON line with
 its level and logger name, and:

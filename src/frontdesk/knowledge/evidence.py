@@ -1,4 +1,4 @@
-"""Typed provenance (spec §7): document passage, approved record, live tool result."""
+"""Typed provenance: document passage, approved record, live tool result."""
 
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ class Evidence(BaseModel):
 
 
 def render_evidence(items: Sequence[Evidence]) -> str:
-    """Evidence blocks for prompts. Content is data, never instructions (blueprint SEC-002)."""
+    """Evidence blocks for prompts. Content is data, never instructions."""
     return "\n".join(
         f'<evidence id="{item.evidence_id}" kind="{item.kind}" title="{_attribute(item.title)}">\n'
         f"{_escape(item.content)}\n</evidence>"

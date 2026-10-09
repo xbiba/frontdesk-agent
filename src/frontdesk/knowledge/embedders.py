@@ -32,7 +32,7 @@ class HashEmbedder:
     """Deterministic bag-of-tokens vectors for tests and CI.
 
     It says nothing about semantic quality: evaluations run with it only check
-    contracts (spec §14).
+    contracts.
     """
 
     dimension = EMBEDDING_DIM

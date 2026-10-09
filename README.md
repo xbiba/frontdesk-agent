@@ -7,12 +7,12 @@ The code is one conversation engine. Channels connect to it through adapters ([A
 ## What it does
 
 - Answers in Albanian, Italian or English, in the customer's language.
-- Writes prices, opening hours, contacts and order status in code, from approved records: no model words them, so they cannot be misstated.
+- Writes prices, opening hours, contacts and orientation in code from approved records, and an order's status in code from the shop's order data: no model words them, so they cannot be misstated.
 - Answers other questions from approved documents found with hybrid retrieval (full text plus vectors, fused with Reciprocal Rank Fusion). Every sentence carries a quote from its passage, and code checks the quote, its numbers and its closeness in meaning before anything is sent.
 - Clinics: points patients to the right service using a map the doctors approved, and never assesses symptoms.
 - Shops: looks up an order's status from the order number and postal code written in the message, with a limited number of attempts per conversation.
 - Recognises emergencies with rules, and with the classifier as a second net, and always answers them with an approved fixed text.
-- Hands the conversation to a person for emergencies, medical questions, personal data, or anything it cannot ground in evidence. The reply says how to reach a person and never promises a call: notifying staff arrives with the first channel.
+- Hands the conversation to a person for emergencies, medical questions, or anything it cannot ground in evidence. The reply says how to reach a person and never promises a call: notifying staff arrives with the first channel. A message with personal details, such as a phone number or an email address, gets a fixed privacy text instead: the details are never used.
 
 ## One engine, many channels
 
@@ -54,14 +54,14 @@ uv run frontdesk chat --env-file deploy/demo-clinic.env
 
 Try `Sa kushton fizioterapia?`, `Ho mal di schiena, da chi devo andare?` and `Is there parking near the clinic?`. Type `exit` to leave, and `docker compose down` to stop the database (its data stays in a Docker volume).
 
-The demo replaces the models with deterministic keyword stand-ins: it shows the pipeline (rules, validation, facts written by code, retrieval, claim checks, handoffs), not model quality. For real multilingual retrieval, install the local embedding model (`uv sync --extra demo`, which downloads about 0.22 GB on first use) and set `FRONTDESK_EMBEDDING_BACKEND=fastembed` before bootstrapping.
+The demo replaces the models with deterministic keyword stand-ins: it shows the pipeline (rules, validation, facts written by code, retrieval, claim checks, handoffs), not model quality. For real multilingual retrieval, install the local embedding model (`uv sync --extra demo`) and set `FRONTDESK_EMBEDDING_BACKEND=fastembed`, for bootstrapping and also for `chat` and `eval`: the active knowledge records which embedder computed its vectors, and a deployment with another one refuses to start until `frontdesk knowledge reembed` runs. The model's 0.22 GB are downloaded with the first bootstrap.
 
 A second deployment, `deploy/demo-shop.env`, runs a shop with its own profile and order status, and without any clinic data or calendar. Run the same `db upgrade` and `bootstrap-demo` commands with that file, then chat and ask `Dov'è il mio ordine ORD-10427? CAP 20121`.
 
 ## Evaluation
 
-- `uv run frontdesk eval turns --env-file deploy/demo-clinic.env`: labelled messages and short conversations, 78 cases over the two demo businesses (55 for the clinic, 23 for the shop), including zero-tolerance suites for medical advice, personal data, data access and prompt injection. CI runs them for both demo businesses, together with a suite of plausible but wrong answers that must never reach a person.
-- `uv run frontdesk eval retrieval --env-file deploy/demo-clinic.env`: recall@k and MRR per question, language and tag (cross-lingual, no diacritics, paraphrase).
+- `uv run frontdesk eval turns --env-file deploy/demo-clinic.env`: labelled messages and short conversations, 79 cases over the two demo businesses (56 for the clinic, 23 for the shop), including zero-tolerance suites for medical advice, personal data, data access and prompt injection. CI runs them for both demo businesses, together with a suite of plausible but wrong answers that must never reach a person.
+- `uv run frontdesk eval retrieval --env-file deploy/demo-clinic.env`: recall@k and MRR per question, language and tag (cross-lingual, no diacritics, paraphrase). It exits 1 instead of reporting zeros when the business has no active knowledge or a question names a document that does not exist.
 
 Offline runs check contracts and fallbacks. Runs with real models are recorded in [`docs/evals`](docs/evals).
 

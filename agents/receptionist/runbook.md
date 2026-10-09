@@ -4,4 +4,4 @@
 - **Wrong or outdated facts:** prices, hours and contacts are written from records. Roll back knowledge with `frontdesk knowledge rollback --env-file deploy/<business>.env`, fix the business pack, then draft, review, approve and activate a new version.
 - **Classifier rejections spike:** read the `reason` field in the logs (`unknown_service_id`, `text_has_clinical_terms`, …); a new service needs a knowledge version, not a prompt change.
 - **The deployment refuses to start after an embedder change:** run `frontdesk knowledge reembed --env-file deploy/<business>.env`.
-- **Stop the bot:** until the M3 kill switch exists, stop the process; conversations stay visible to staff on Instagram.
+- **Stop the bot:** until the kill switch exists (M5), stop the process; conversations stay visible to staff on Instagram.

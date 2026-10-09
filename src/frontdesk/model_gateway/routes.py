@@ -1,4 +1,4 @@
-"""Approved model routes per data class (blueprint §12; ADR-0004).
+"""Approved model routes per data class (ADR-0004).
 
 Text derived from patient messages — original or rewritten — may only reach a
 route approved for it. Any other route is refused in code.

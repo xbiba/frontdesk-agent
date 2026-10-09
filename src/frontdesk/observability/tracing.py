@@ -1,4 +1,4 @@
-"""Metadata-only spans (spec §13; blueprint OBS-TRC-001, §26.11).
+"""Metadata-only spans (ADR-0006).
 
 A turn span carries IDs, categories, outcomes, prompt versions and evidence IDs: the verified
 ones, plus the number of invalid ones. An ID the model wrote that matched no provided passage is

@@ -148,7 +148,7 @@ def test_retrieval_evaluation_command(
     assert report.exists()
 
 
-# --- Controller rulings for Task 23 ---------------------------------------------------------------
+# --- The business day, broken datasets, the banner and the trace ----------------------------------
 
 # No connection is ever opened with these: the tests that use them stop before the database.
 NO_DATABASE = (

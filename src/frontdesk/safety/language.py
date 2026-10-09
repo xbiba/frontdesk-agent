@@ -1,4 +1,4 @@
-"""Language detection for sq/it/en (spec §5). Short neutral replies keep the current language.
+"""Language detection for sq/it/en. Short neutral replies keep the current language.
 
 Marker words and letters only one language uses (ë and ç for Albanian, accented
 vowels for Italian). An emergency must be answered in the person's language, so

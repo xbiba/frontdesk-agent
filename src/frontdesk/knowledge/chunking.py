@@ -1,4 +1,4 @@
-"""Split Markdown knowledge documents into heading-aware chunks (spec §7)."""
+"""Split Markdown knowledge documents into heading-aware chunks."""
 
 from __future__ import annotations
 

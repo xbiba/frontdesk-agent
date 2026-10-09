@@ -1,1 +1,1 @@
-"""HTTP entrypoint (webhooks arrive in M3)."""
+"""HTTP entrypoint (webhooks arrive in M4)."""

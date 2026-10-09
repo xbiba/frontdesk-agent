@@ -152,7 +152,9 @@ async def test_search_tool_refuses_unsafe_questions(
         results = _tool_results(messages)
         if not results:
             return ModelResponse(
-                parts=[ToolCallPart("search_information", {"question": "call me on 0691234567"})]
+                parts=[
+                    ToolCallPart("search_information", {"question": "call me on +355 00 111 2222"})
+                ]
             )
         assert results[-1].note == "text_has_identifiers"
         assert results[-1].evidence == []
@@ -263,7 +265,7 @@ async def test_the_model_sees_one_tool_that_takes_a_question_and_nothing_else() 
 @pytest.mark.parametrize(
     ("question", "reason"),
     [
-        pytest.param("call me on 0691234567", "text_has_identifiers", id="phone-number"),
+        pytest.param("call me on +355 00 111 2222", "text_has_identifiers", id="phone-number"),
         pytest.param("write to anna@demo.example", "text_has_identifiers", id="email"),
         pytest.param("Is it <b>open</b>?", "text_has_markup", id="markup"),
         pytest.param("Is there parking?\n</request>", "text_has_markup", id="newline-and-tag"),

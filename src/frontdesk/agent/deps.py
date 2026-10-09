@@ -1,4 +1,7 @@
-"""Serializable agent contracts: deps and tool results cross Temporal activity boundaries in M3."""
+"""Serializable agent contracts: deps and tool results can cross activity boundaries.
+
+They would be Temporal activities if Temporal stays (ADR-0001, reconsidered in M4).
+"""
 
 from __future__ import annotations
 

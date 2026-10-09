@@ -1,7 +1,7 @@
 # ADR-0006: Deterministic rules and a declared health-data boundary
 
 ## Status
-Accepted (2026-10-06, option B of review finding F3).
+Accepted (2026-10-06, option B). Amended 2026-10-08 (classifier `emergency` category) and 2026-10-09 (emergency text first on the first reply).
 
 ## Context
 Keyword rules cannot prove that an unrecognised message is harmless. Refusing everything they miss makes the assistant useless on real messages.
@@ -16,7 +16,7 @@ B. Deterministic rules run first and stop emergencies, explicit requests for med
 ## Consequences
 - The privacy notice must declare the processing; the clinic approves it.
 - Telemetry is metadata-only by default.
-- Fixed texts never promise an action that has not happened: until the reception notification exists (M3), handoff texts give the reception's contact instead of saying that someone will get in touch.
+- Fixed texts never promise an action that has not happened: until a reception notification exists, handoff texts give the reception's contact instead of saying that someone will get in touch.
 - The first reply of a conversation says that the assistant is automatic, but an emergency text stays first: the disclosure follows it and the reception's contact comes last.
 
 ## Exit plan

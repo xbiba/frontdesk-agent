@@ -1,4 +1,4 @@
-"""HTTP entrypoint. M0 exposes /health; channel webhooks arrive in M3."""
+"""HTTP entrypoint. M0 exposes /health; channel webhooks arrive in M4."""
 
 from __future__ import annotations
 

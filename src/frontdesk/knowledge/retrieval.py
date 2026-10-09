@@ -1,4 +1,4 @@
-"""Hybrid retrieval: full-text plus vector search fused with Reciprocal Rank Fusion (spec §7).
+"""Hybrid retrieval: full-text plus vector search fused with Reciprocal Rank Fusion.
 
 Filters come first — business, active version, validity dates — so nothing
 unauthorized or expired is ever a candidate.

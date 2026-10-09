@@ -1,4 +1,4 @@
-"""Classifier output contract and its validation (spec §6, second level).
+"""Classifier output contract and its validation (ADR-0006: the second level, after the rules).
 
 The model may answer only with closed vocabularies and allowlisted IDs. Code
 checks everything; anything off-contract is rejected and handed to a person.

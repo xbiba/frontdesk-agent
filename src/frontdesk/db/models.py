@@ -87,7 +87,7 @@ class Record(Base):
 
 
 class OrderLookupAttempts(Base):
-    """Order lookups used by one conversation; committed before each lookup (Task 22)."""
+    """Order lookups used by one conversation; committed before each lookup."""
 
     __tablename__ = "order_lookup_attempts"
 

@@ -199,7 +199,7 @@ async def test_empty_emoji_and_long_messages_skip_the_models(
             {
                 "category": "administrative",
                 "intent": "general_question",
-                "general_question": "call me on 0691234567",
+                "general_question": "call me on +355 00 111 2222",
             },
             "text_has_identifiers",
         ),

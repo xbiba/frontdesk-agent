@@ -1,4 +1,4 @@
-"""Retrieval evaluation (spec §14): recall@k and MRR per case, language and tag.
+"""Retrieval evaluation (ADR-0005): recall@k and MRR per case, language and tag.
 
 Results with HashEmbedder check contracts only; quality numbers come from runs
 with a real embedder, recorded separately.
