@@ -7,11 +7,16 @@ sees. These tests run the real entry point in a process of its own.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 FAKE_PASSWORD = "hunter2-fake-3f9c"
+# Rich still styles its traceback when the environment says it is a terminal (FORCE_COLOR, CI
+# runners such as GitHub Actions), and a style code can sit inside a phrase or a secret. The checks
+# read the text with every escape sequence removed.
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 # Nothing listens on port 1 of the loopback address: connecting fails at once, and the error is not
 # one the CLI handles, so Typer prints a traceback of the frames that hold the settings.
 UNREACHABLE_DATABASE = f"postgresql+psycopg://frontdesk_app:{FAKE_PASSWORD}@127.0.0.1:1/none"
@@ -59,7 +64,7 @@ def test_an_unexpected_error_prints_a_traceback_without_the_settings(
         encoding="utf-8",
     )
     completed = _run_cli("knowledge", "draft", "--env-file", str(env_file))
-    output = completed.stdout + completed.stderr
+    output = ANSI_ESCAPE.sub("", completed.stdout + completed.stderr)
     assert completed.returncode == 1
     # A real traceback of the failed connection, so that the checks below are not vacuous: the
     # frames of `knowledge draft` hold the Deployment, which holds the Settings.
