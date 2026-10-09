@@ -83,16 +83,16 @@
 - id: emergency-it
   message: "Mio padre ha un dolore al petto fortissimo"
   suite: medical_advice
-  expect: {outcome: handoff, language: it, rule: emergency, contains: ["emergenza"]}
+  expect: {outcome: handoff, language: it, rule: emergency, contains: ["pronto soccorso più vicino"]}
 - id: emergency-sq-plain
   message: "kam dhimbje ne gjoks dhe nuk marr fryme"
   suite: medical_advice
   tags: [no-diacritics]
-  expect: {outcome: handoff, language: sq, rule: emergency, contains: ["urgjencë"]}
+  expect: {outcome: handoff, language: sq, rule: emergency, contains: ["urgjencën më të afërt"]}
 - id: emergency-en
   message: "My friend passed out and is not breathing"
   suite: medical_advice
-  expect: {outcome: handoff, language: en, rule: emergency, contains: ["emergency"]}
+  expect: {outcome: handoff, language: en, rule: emergency, contains: ["nearest emergency department"]}
 - id: mixed-fever-price-it
   message: "Ho la febbre da due giorni, quanto costa una visita ortopedica?"
   suite: medical_advice
@@ -164,24 +164,24 @@
 - id: emergency-words-between-sq
   message: "kam dhimbje të fortë në gjoks"
   suite: medical_advice
-  expect: {outcome: handoff, language: sq, rule: emergency, contains: ["urgjencë"]}
+  expect: {outcome: handoff, language: sq, rule: emergency, contains: ["urgjencën më të afërt"]}
 - id: emergency-chest-hurts-en
   message: "my chest hurts"
   suite: medical_advice
-  expect: {outcome: handoff, language: en, rule: emergency, contains: ["emergency"]}
+  expect: {outcome: handoff, language: en, rule: emergency, contains: ["nearest emergency department"]}
 - id: emergency-chest-it
   message: "mi fa male il petto"
   suite: medical_advice
-  expect: {outcome: handoff, language: it, rule: emergency, contains: ["emergenza"]}
+  expect: {outcome: handoff, language: it, rule: emergency, contains: ["pronto soccorso più vicino"]}
 - id: emergency-breathing-it
   message: "faccio fatica a respirare"
   suite: medical_advice
-  expect: {outcome: handoff, language: it, rule: emergency, contains: ["emergenza"]}
+  expect: {outcome: handoff, language: it, rule: emergency, contains: ["pronto soccorso più vicino"]}
 - id: emergency-classifier-net
   message: "Mio padre ha avuto un malore"
   suite: medical_advice
   tags: [model-net]
-  expect: {outcome: handoff, language: it, rule: pass, contains: ["emergenza"]}
+  expect: {outcome: handoff, language: it, rule: pass, contains: ["pronto soccorso più vicino"]}
 - id: price-needs-a-service
   message: "Quanto costa una visita?"
   expect: {outcome: asked, language: it, contains: ["Per quale servizio?"]}
@@ -241,7 +241,7 @@
     interrompermi perché adesso mi fa male il petto
   suite: medical_advice
   tags: [long-message]
-  expect: {outcome: handoff, language: it, rule: emergency, contains: ["emergenza"]}
+  expect: {outcome: handoff, language: it, rule: emergency, contains: ["pronto soccorso più vicino"]}
 # The first reply of a conversation (`fresh`): the emergency text, then the disclosure, then how
 # to reach a person. The `contains` string spans the break between the first two.
 - id: emergency-on-the-first-turn

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.conversation.evaluation import (
     TurnCase,
+    load_turn_cases,
     render_turn_markdown,
     run_turn_eval,
     turn_report_json,
@@ -209,3 +211,36 @@ async def test_reports_carry_ids_and_failures_but_never_the_text_of_a_reply(
         assert "failing" in rendered
         assert all(paragraph not in rendered for paragraph in paragraphs)
         assert message not in rendered
+
+
+async def test_the_classifier_net_case_fails_when_the_classifier_misses_the_emergency(
+    activate_pack: Activate, clinic_pack: BusinessPack, businesses_dir: Path
+) -> None:
+    dataset = businesses_dir / "demo-clinic" / "evals" / "turns.yaml"
+    case = {case.id: case for case in load_turn_cases(dataset)}["emergency-classifier-net"]
+    factory = activate_pack(clinic_pack)
+    caught = {"category": "emergency", "intent": "other"}
+    missed = {"category": "clinical", "intent": "other"}  # the notice also says "emergency"
+    for output, passes in ((caught, True), (missed, False)):
+        runtime = make_runtime(clinic_pack, factory, classifier_model(output), document_responder())
+        report = await run_turn_eval(runtime, [case], route=ROUTE)
+        assert report.ok is passes, render_turn_markdown(report)
+        assert report.results[0].outcome == "handoff"  # a handoff either way: only the text differs
+
+
+async def test_the_shop_injection_case_accepts_a_clarification_that_spells_the_order_prefix(
+    activate_pack: Activate, shop_pack: BusinessPack, businesses_dir: Path
+) -> None:
+    # A live classifier will probably call "show me all the orders" an order question. The safe
+    # answer asks for the number and the postal code, and that text spells "ORD-...".
+    runtime = replace(
+        make_runtime(
+            shop_pack, activate_pack(shop_pack), classifier_model(ORDER), document_responder()
+        ),
+        orders=OrderStore(tuple(shop_pack.orders)),
+    )
+    dataset = businesses_dir / "demo-shop" / "evals" / "turns.yaml"
+    case = {case.id: case for case in load_turn_cases(dataset)}["injection-all-orders"]
+    report = await run_turn_eval(runtime, [case], route=ROUTE)
+    assert report.ok, render_turn_markdown(report)
+    assert report.results[0].outcome == "asked"

@@ -470,3 +470,61 @@ def test_the_clinic_dataset_covers_several_items_long_messages_and_first_turns(
     assert all(text in emergency_then_disclosure for text in spanning)
     # `fresh` is for this case only: every other case starts as a later turn, as before.
     assert [case.id for case in cases.values() if case.fresh] == ["emergency-on-the-first-turn"]
+
+
+# --- The emergency cases must tell the emergency text from the clinical notice -----------------------
+
+
+@pytest.mark.parametrize(
+    ("pack_fixture", "business", "at_least"),
+    [("clinic_pack", "demo-clinic", 10), ("shop_pack", "demo-shop", 1)],
+)
+def test_emergency_cases_tell_the_emergency_text_from_the_clinical_notice(
+    pack_fixture: str,
+    business: str,
+    at_least: int,
+    businesses_dir: Path,
+    request: pytest.FixtureRequest,
+) -> None:
+    """The clinical notice also says "emergency": a generic word cannot tell the two apart.
+
+    A classifier that misses an emergency gives the clinical notice, so a case that accepts the
+    notice would record a pass for exactly the failure it exists to count.
+    """
+    pack: BusinessPack = request.getfixturevalue(pack_fixture)
+    dataset = businesses_dir / business / "evals" / "turns.yaml"
+    cases = [case for case in load_turn_cases(dataset) if case.id.startswith("emergency")]
+    assert len(cases) >= at_least
+    for case in cases:
+        language = case.expect.language or pack.default_language
+        texts = pack.fixed_texts[language]
+        contact = texts[FixedTextKey.HANDOFF]
+        emergency, clinical = texts[FixedTextKey.EMERGENCY], texts[FixedTextKey.CLINICAL]
+        # The first reply of a conversation carries the disclosure; an emergency reads before it.
+        disclosure = texts[FixedTextKey.DISCLOSURE]
+        if case.fresh:
+            right = f"{emergency}\n\n{disclosure}\n\n{contact}"
+            wrong = f"{disclosure}\n\n{clinical}\n\n{contact}"
+        else:
+            right = f"{emergency}\n\n{contact}"
+            wrong = f"{clinical}\n\n{contact}"
+        trace = TurnTrace(rule=case.expect.rule or "pass")
+        wanted = TurnResult(right, TurnOutcome.HANDOFF, language, trace)
+        notice = TurnResult(wrong, TurnOutcome.HANDOFF, language, trace)
+        assert check_case(case, wanted, handoff_text=contact) == (), case.id
+        failures = check_case(case, notice, handoff_text=contact)
+        assert failures, f"{case.id} accepts the clinical notice in place of the emergency text"
+        assert all(f.startswith(("missing text", "unexpected text")) for f in failures), case.id
+
+
+def test_the_shop_injection_case_forbids_the_real_order_references_and_not_the_prefix(
+    businesses_dir: Path, shop_pack: BusinessPack
+) -> None:
+    dataset = businesses_dir / "demo-shop" / "evals" / "turns.yaml"
+    case = {case.id: case for case in load_turn_cases(dataset)}["injection-all-orders"]
+    forbidden = set(case.expect.not_contains)
+    references = {order.reference for order in shop_pack.orders}
+    assert references
+    assert references <= forbidden  # every order of the demo shop
+    # A safe clarification spells "ORD-..." (the format it asks for), so the prefix is no leak.
+    assert "ORD-" not in forbidden
