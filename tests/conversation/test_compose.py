@@ -2,7 +2,7 @@ import uuid
 
 from frontdesk.agent.classification import ValidatedFields
 from frontdesk.agent.vocab import Category, ClarifyField, Intent
-from frontdesk.conversation.compose import clarify_question, closing, compose_facts
+from frontdesk.conversation.compose import clarify_question, closing, compose_facts, unanswered
 from frontdesk.knowledge.evidence import Evidence, EvidenceKind
 from frontdesk.knowledge.facts import Catalog
 
@@ -74,3 +74,66 @@ def test_clarifying_questions_are_written_by_code() -> None:
         "Per quale servizio? Per esempio: Osteopatia, Fisioterapia."
     )
     assert "ORD-" in clarify_question(ClarifyField.ORDER_DETAILS, "en", CATALOG)
+
+
+def test_unanswered_names_the_asked_items_without_a_record() -> None:
+    fields = ValidatedFields(
+        category=Category.ADMINISTRATIVE,
+        intent=Intent.PRICE,
+        language="it",
+        service_ids=("physiotherapy", "osteopathy"),
+    )
+    assert unanswered(fields, [PRICE]) == ("osteopathy",)
+    assert unanswered(fields, []) == ("physiotherapy", "osteopathy")
+    assert unanswered(_fields(Intent.HOURS), []) == ()
+    assert unanswered(_fields(Intent.SERVICE_INFO, Category.ORIENTATION), [BACK]) == ()
+
+
+def test_unanswered_reads_doctors_for_doctor_questions_and_services_for_service_questions() -> None:
+    doctors = ValidatedFields(
+        category=Category.ADMINISTRATIVE,
+        intent=Intent.DOCTOR_INFO,
+        language="it",
+        doctor_ids=("dr-arben-demo", "ft-elira-shembull"),
+        service_ids=("physiotherapy",),  # not what a doctor question asks about
+    )
+    arben = Evidence.create(
+        kind=EvidenceKind.RECORD,
+        source_ref="doctor:dr-arben-demo",
+        version="v",
+        title="Medico",
+        content="Dr. Arben Demo: Visita ortopedica",
+    )
+    assert unanswered(doctors, [arben]) == ("ft-elira-shembull",)
+    services = ValidatedFields(
+        category=Category.ADMINISTRATIVE,
+        intent=Intent.SERVICE_INFO,
+        language="it",
+        service_ids=("physiotherapy", "osteopathy"),
+    )
+    physiotherapy = Evidence.create(
+        kind=EvidenceKind.RECORD,
+        source_ref="service:physiotherapy",
+        version="v",
+        title="Servizio",
+        content="Fisioterapia\nDurata: 45 minuti",
+    )
+    assert unanswered(services, [physiotherapy]) == ("osteopathy",)
+
+
+def test_missing_items_follow_the_answered_ones_and_are_never_alone() -> None:
+    missing = ["Osteopatia: Non ho questa informazione."]
+    answered = compose_facts(_fields(Intent.PRICE), [PRICE], with_closing=False, missing=missing)
+    assert answered == "Fisioterapia: 30 EUR (a seduta)\nOsteopatia: Non ho questa informazione."
+    assert compose_facts(_fields(Intent.PRICE), [], missing=missing) is None
+
+
+def test_unanswered_ignores_a_service_named_alongside_an_orientation_question() -> None:
+    fields = ValidatedFields(
+        category=Category.ORIENTATION,
+        intent=Intent.SERVICE_INFO,
+        language="it",
+        problem_category_id="back",
+        service_ids=("physiotherapy",),
+    )
+    assert unanswered(fields, [BACK]) == ()

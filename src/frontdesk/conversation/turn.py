@@ -37,7 +37,13 @@ from frontdesk.agent.responder import (
     render_turn_prompt,
 )
 from frontdesk.agent.vocab import ADMINISTRATIVE_INTENTS, Category, ClarifyField, Intent
-from frontdesk.conversation.compose import FACT_INTENTS, clarify_question, closing, compose_facts
+from frontdesk.conversation.compose import (
+    FACT_INTENTS,
+    clarify_question,
+    closing,
+    compose_facts,
+    unanswered,
+)
 from frontdesk.conversation.preload import document_evidence, fact_evidence
 from frontdesk.conversation.state import ConversationState
 from frontdesk.db.engine import business_session
@@ -132,8 +138,7 @@ async def _run_turn(text: str, state: ConversationState, runtime: TurnRuntime) -
         log_event(logger, "turn.failed", business_id=pack.id, reason=type(error).__name__)
         result = _handoff(pack, language, FixedTextKey.HANDOFF, TurnTrace(rule="error"))
     if state.turns == 0:
-        disclosure = _fixed_text(pack, language, FixedTextKey.DISCLOSURE)
-        result = replace(result, text=f"{disclosure}\n\n{result.text}")
+        result = _with_disclosure(pack, language, result)
     return result
 
 
@@ -212,10 +217,10 @@ async def _route(
     )
     if fields.category is Category.EMERGENCY:
         return _handoff(pack, language, FixedTextKey.EMERGENCY, trace)
-    if fields.intent in {Intent.HUMAN, Intent.BOOKING}:
-        # Bookings arrive with M4; until then reception takes them.
-        return _handoff(pack, language, FixedTextKey.HANDOFF, trace)
     notice = _NOTICES.get(fields.category)
+    if fields.intent in {Intent.HUMAN, Intent.BOOKING}:
+        # Bookings arrive with M4; until then reception takes them. A clinical notice stays.
+        return _handoff(pack, language, notice or FixedTextKey.HANDOFF, trace)
     if notice is None:
         if fields.category is Category.ADMINISTRATIVE and fields.intent in _SMALL_TALK:
             return _fixed(pack, language, FixedTextKey.GREETING, trace)
@@ -248,7 +253,7 @@ async def _answer(
         if missing is not None:
             return _clarify(catalog, language, missing, trace)
         facts = await asyncio.to_thread(_facts, fields, runtime)
-        return _facts_reply(pack, fields, facts, trace, with_closing=with_closing)
+        return _facts_reply(pack, fields, facts, catalog, trace, with_closing=with_closing)
     return await _document_answer(fields, catalog, runtime, trace, with_closing=with_closing)
 
 
@@ -266,17 +271,33 @@ def _facts_reply(
     pack: BusinessPack,
     fields: ValidatedFields,
     facts: Sequence[Evidence],
+    catalog: Catalog,
     trace: TurnTrace,
     *,
     with_closing: bool,
 ) -> TurnResult:
+    language = fields.language
     checked = replace(
         trace, evidence_ids=tuple(item.evidence_id for item in facts), sources=_sources(facts)
     )
-    text = compose_facts(fields, facts, with_closing=with_closing)
+    no_information = _fixed_text(pack, language, FixedTextKey.NO_INFORMATION)
+    absent = [
+        f"{_asked_name(catalog, fields, item)}: {no_information}"
+        for item in unanswered(fields, facts)
+    ]
+    text = compose_facts(fields, facts, with_closing=with_closing and not absent, missing=absent)
     if text is None:
-        return _handoff(pack, fields.language, FixedTextKey.NO_INFORMATION, checked)
-    return TurnResult(text, TurnOutcome.REPLIED, fields.language, checked)
+        return _handoff(pack, language, FixedTextKey.NO_INFORMATION, checked)
+    if absent:
+        # Part of the question has no record: say which part, then how to reach a person.
+        return _handoff(pack, language, FixedTextKey.HANDOFF, checked, prefix=text)
+    return TurnResult(text, TurnOutcome.REPLIED, language, checked)
+
+
+def _asked_name(catalog: Catalog, fields: ValidatedFields, item: str) -> str:
+    if fields.intent is Intent.DOCTOR_INFO:
+        return catalog.doctors.get(item, item)
+    return catalog.services.get(item, {}).get(fields.language, item)
 
 
 async def _document_answer(
@@ -435,3 +456,13 @@ def _emergency(pack: BusinessPack, language: Language, rule: str) -> TurnResult:
     # The category lets the next state drop the topic, as for an emergency the classifier found.
     trace = TurnTrace(rule=rule, category=Category.EMERGENCY)
     return _handoff(pack, language, FixedTextKey.EMERGENCY, trace)
+
+
+def _with_disclosure(pack: BusinessPack, language: Language, result: TurnResult) -> TurnResult:
+    """Spec §5: the first reply says the assistant is automatic. An emergency still reads first."""
+    disclosure = _fixed_text(pack, language, FixedTextKey.DISCLOSURE)
+    emergency = _fixed_text(pack, language, FixedTextKey.EMERGENCY)
+    if result.trace.category is Category.EMERGENCY and result.text.startswith(emergency):
+        contact = result.text.removeprefix(emergency)  # "\n\n" and the contact text
+        return replace(result, text=f"{emergency}\n\n{disclosure}{contact}")
+    return replace(result, text=f"{disclosure}\n\n{result.text}")

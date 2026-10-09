@@ -80,11 +80,16 @@ def closing(language: Language) -> str:
 
 
 def compose_facts(
-    fields: ValidatedFields, facts: Sequence[Evidence], *, with_closing: bool = True
+    fields: ValidatedFields,
+    facts: Sequence[Evidence],
+    *,
+    with_closing: bool = True,
+    missing: Sequence[str] = (),
 ) -> str | None:
     lines = _fact_lines(fields, facts)
     if not lines:
         return None
+    lines = [*lines, *missing]
     if not with_closing:
         return "\n".join(lines)
     kind = "orientation" if fields.category is Category.ORIENTATION else "default"
@@ -125,3 +130,13 @@ def _fact_lines(fields: ValidatedFields, facts: Sequence[Evidence]) -> list[str]
 
 def _with_prefix(facts: Sequence[Evidence], prefix: str) -> list[Evidence]:
     return [item for item in facts if item.source_ref.startswith(prefix)]
+
+
+def unanswered(fields: ValidatedFields, facts: Sequence[Evidence]) -> tuple[str, ...]:
+    """The services or doctors the person named that no record answers (a service with no price)."""
+    prefix = _SOURCE_PREFIX.get(fields.intent)
+    if prefix is None or fields.category is Category.ORIENTATION:
+        return ()
+    asked = fields.doctor_ids if fields.intent is Intent.DOCTOR_INFO else fields.service_ids
+    answered = {item.source_ref for item in facts}
+    return tuple(item for item in asked if f"{prefix}{item}" not in answered)

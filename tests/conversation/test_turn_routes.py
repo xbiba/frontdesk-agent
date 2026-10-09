@@ -25,9 +25,11 @@ from frontdesk.agent.prompts import load_prompt
 from frontdesk.agent.responder import RESPONDER_LIMITS
 from frontdesk.agent.vocab import Category, ClarifyField, Intent
 from frontdesk.conversation.compose import closing
+from frontdesk.conversation.preload import fact_evidence
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import RESPONDER_CLARIFY_FIELDS, TurnOutcome, handle_message
 from frontdesk.db.engine import make_engine, make_session_factory
+from frontdesk.knowledge.evidence import Evidence
 from frontdesk.tenancy.pack import BusinessPack, Features, FixedTextKey, Profile
 from tests.conversation.helpers import (
     classifier_model,
@@ -581,3 +583,140 @@ async def test_only_general_questions_reach_the_responder_and_every_handoff_ends
         (Category.CLINICAL, Intent.GENERAL_QUESTION),
         (Category.UNCERTAIN, Intent.GENERAL_QUESTION),
     }
+
+
+async def test_a_price_question_says_which_service_has_no_price(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    args = {
+        "category": "administrative",
+        "intent": "price",
+        "service_ids": ["physiotherapy", "osteopathy"],  # osteopathy has no price record
+    }
+    runtime = make_runtime(
+        clinic_pack, activate_pack(clinic_pack), classifier_model(args), document_responder()
+    )
+    result, _ = await handle_message(
+        "Quanto costano fisioterapia e osteopatia?", ConversationState(turns=1), runtime
+    )
+    no_information = _text(clinic_pack, "it", FixedTextKey.NO_INFORMATION)
+    assert result.outcome is TurnOutcome.HANDOFF
+    assert result.text == (
+        f"Fisioterapia: 30 EUR (a seduta)\nOsteopatia: {no_information}\n\n"
+        f"{_text(clinic_pack, 'it', FixedTextKey.HANDOFF)}"
+    )
+    assert result.trace.sources == ("price:physiotherapy",)
+
+
+async def test_a_price_question_with_every_record_keeps_the_closing_question(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    args = {
+        "category": "administrative",
+        "intent": "price",
+        "service_ids": ["physiotherapy", "orthopedics-visit"],
+    }
+    runtime = make_runtime(
+        clinic_pack, activate_pack(clinic_pack), classifier_model(args), document_responder()
+    )
+    result, _ = await handle_message(
+        "Quanto costano fisioterapia e visita ortopedica?", ConversationState(turns=1), runtime
+    )
+    assert result.outcome is TurnOutcome.REPLIED
+    assert result.text == (
+        f"Fisioterapia: 30 EUR (a seduta)\nVisita ortopedica: 40 EUR\n\n{closing('it')}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("message", "args"),
+    [
+        pytest.param("mi fa male il petto", None, id="rule"),
+        pytest.param(
+            "mio padre ha avuto un malore",
+            {"category": "emergency", "intent": "other"},
+            id="classifier",
+        ),
+        pytest.param(
+            "Vorrei sapere gli orari. " * 100 + "Aiuto, mi fa male il petto", None, id="long"
+        ),
+    ],
+)
+async def test_the_emergency_text_comes_first_on_the_first_turn(
+    activate_pack: Activate, clinic_pack: BusinessPack, message: str, args: dict[str, Any] | None
+) -> None:
+    runtime = make_runtime(
+        clinic_pack, activate_pack(clinic_pack), classifier_model(args), document_responder()
+    )
+    result, _ = await handle_message(message, ConversationState(), runtime)  # turns == 0
+    emergency = _text(clinic_pack, "it", FixedTextKey.EMERGENCY)
+    disclosure = _text(clinic_pack, "it", FixedTextKey.DISCLOSURE)
+    handoff = _text(clinic_pack, "it", FixedTextKey.HANDOFF)
+    assert result.text == f"{emergency}\n\n{disclosure}\n\n{handoff}"
+
+
+@pytest.mark.parametrize("intent", ["booking", "human"])
+async def test_a_clinical_message_that_asks_for_a_person_keeps_the_clinical_text(
+    activate_pack: Activate, clinic_pack: BusinessPack, intent: str
+) -> None:
+    args = {"category": "clinical", "intent": intent}
+    runtime = make_runtime(
+        clinic_pack, activate_pack(clinic_pack), classifier_model(args), document_responder()
+    )
+    result, _ = await handle_message(
+        "Ho la febbre da tre giorni, vorrei un operatore", ConversationState(turns=1), runtime
+    )
+    assert result.text == _handoff(clinic_pack, "it", FixedTextKey.CLINICAL)
+
+
+async def test_a_doctor_question_says_which_doctor_has_no_record(
+    activate_pack: Activate, clinic_pack: BusinessPack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = fact_evidence
+
+    def without_elira(*args: Any, **kwargs: Any) -> list[Evidence]:
+        # As if the knowledge changed between reading the catalog and reading the records.
+        return [
+            item for item in real(*args, **kwargs) if item.source_ref != "doctor:ft-elira-shembull"
+        ]
+
+    monkeypatch.setattr("frontdesk.conversation.turn.fact_evidence", without_elira)
+    args = {
+        "category": "administrative",
+        "intent": "doctor_info",
+        "doctor_ids": ["dr-arben-demo", "ft-elira-shembull"],
+    }
+    runtime = make_runtime(
+        clinic_pack, activate_pack(clinic_pack), classifier_model(args), document_responder()
+    )
+    result, _ = await handle_message(
+        "Cosa fanno il dottor Arben ed Elira?", ConversationState(turns=1), runtime
+    )
+    no_information = _text(clinic_pack, "it", FixedTextKey.NO_INFORMATION)
+    assert result.outcome is TurnOutcome.HANDOFF
+    assert result.text == (
+        f"Dr. Arben Demo: Visita ortopedica\nElira Shembull: {no_information}\n\n"
+        f"{_text(clinic_pack, 'it', FixedTextKey.HANDOFF)}"
+    )
+    assert result.trace.sources == ("doctor:dr-arben-demo",)
+
+
+async def test_an_orientation_answer_is_complete_even_if_a_service_is_named_too(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    args = {
+        "category": "orientation",
+        "intent": "service_info",
+        "problem_category_id": "back",
+        "service_ids": ["physiotherapy"],
+    }
+    runtime = make_runtime(
+        clinic_pack, activate_pack(clinic_pack), classifier_model(args), document_responder()
+    )
+    result, _ = await handle_message(
+        "Ho mal di schiena, da chi devo andare?", ConversationState(turns=1), runtime
+    )
+    assert result.outcome is TurnOutcome.REPLIED
+    assert result.text == (
+        "Se ne occupano: Visita ortopedica, Osteopatia.\n\nVuoi sapere prezzi o orari?"
+    )

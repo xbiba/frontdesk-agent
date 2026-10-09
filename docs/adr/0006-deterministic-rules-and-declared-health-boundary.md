@@ -17,6 +17,7 @@ B. Deterministic rules run first and stop emergencies, explicit requests for med
 - The privacy notice must declare the processing; the clinic approves it.
 - Telemetry is metadata-only by default.
 - Fixed texts never promise an action that has not happened: until the reception notification exists (M3), handoff texts give the reception's contact instead of saying that someone will get in touch.
+- The first reply of a conversation says that the assistant is automatic, but an emergency text stays first: the disclosure follows it and the reception's contact comes last.
 
 ## Exit plan
 Switching to A is a configuration of the routing step: unclassified messages get the fixed clarification.
