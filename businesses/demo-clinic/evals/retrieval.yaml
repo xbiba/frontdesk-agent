@@ -1,0 +1,38 @@
+# Synthetic, labelled questions. `relevant` lists document keys that answer the question.
+- id: parking-en
+  question: "Is there parking near the clinic?"
+  language: en
+  relevant: [parking-en]
+- id: first-visit-it
+  question: "Cosa devo portare alla prima visita?"
+  language: it
+  relevant: [first-visit-it]
+- id: physio-prepare-it
+  question: "Come mi preparo alla fisioterapia?"
+  language: it
+  relevant: [physiotherapy-it]
+- id: physio-prepare-sq-plain
+  question: "si te pergatiteni per fizioterapia"
+  language: sq
+  relevant: [physiotherapy-sq]
+  tags: [no-diacritics]
+- id: payments-sq
+  question: "A pranoni karte bankare per pagesen?"
+  language: sq
+  relevant: [payments-sq]
+  tags: [no-diacritics]
+- id: accessibility-en
+  question: "Is the entrance accessible with a wheelchair?"
+  language: en
+  relevant: [parking-en]
+  tags: [paraphrase]
+- id: physio-prepare-en
+  question: "How should I get ready for physiotherapy?"
+  language: en
+  relevant: [physiotherapy-it, physiotherapy-sq]
+  tags: [cross-lingual]
+- id: payments-it
+  question: "Si può pagare con la carta?"
+  language: it
+  relevant: [payments-sq]
+  tags: [cross-lingual]

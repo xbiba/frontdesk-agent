@@ -1,0 +1,3 @@
+- {id: dr-arben-demo, name: "Dr. Arben Demo", service_ids: [orthopedics-visit]}
+- {id: dr-giulia-esempio, name: "Dr.ssa Giulia Esempio", service_ids: [dermatology-visit, ultrasound]}
+- {id: ft-elira-shembull, name: "Elira Shembull", service_ids: [physiotherapy, osteopathy]}

@@ -1,0 +1,139 @@
+[project]
+name = "frontdesk-agent"
+version = "0.1.0"
+description = "Messaging agent for small businesses: grounded answers and safe handoff to staff. Synthetic demo data only."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "alembic>=1.20.0",
+    "anthropic[vertex]>=1.12.1",
+    "fastapi>=0.143.0",
+    "opentelemetry-api>=1.45.1",
+    "opentelemetry-sdk>=1.45.1",
+    "pgvector>=0.5.0",
+    "psycopg[binary]>=3.3.6",
+    "pydantic>=2.14.0",
+    "pydantic-ai-slim[anthropic]>=2.54.0",
+    "pydantic-settings>=2.15.0",
+    "pyyaml>=6.0.3",
+    "sqlalchemy>=2.1.4",
+    "temporalio>=1.34.0",
+    "typer>=0.27.3",
+    "tzdata>=2026.5",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.scripts]
+frontdesk = "frontdesk.cli.main:app"
+
+[project.optional-dependencies]
+demo = [
+    "fastembed>=0.9.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/frontdesk"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+  "db: needs Docker (Postgres via testcontainers)",
+  "temporal: starts the Temporal test server",
+  "slow: downloads models or takes several seconds",
+  "eval: offline evaluations over the demo businesses",
+]
+
+[tool.coverage.run]
+source = ["frontdesk"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 80
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "S", "PT", "N", "ASYNC", "TID251"]
+ignore = ["E501"]  # the formatter owns line length; long string literals stay whole
+
+# import-linter cannot forbid submodules of external packages, so ruff keeps the pydantic-ai
+# provider modules inside the model gateway. Add a line per provider when its route is approved.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"pydantic_ai.providers".msg = "Build model providers in frontdesk.model_gateway only."
+"pydantic_ai.models.anthropic".msg = "Build provider models in frontdesk.model_gateway only."
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S311", "S608"]
+"tests/model_gateway/**" = ["TID251"]
+"src/frontdesk/model_gateway/**" = ["TID251"]
+"migrations/**" = ["N999", "S608"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+packages = ["frontdesk"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["fastembed.*", "pgvector.*"]
+ignore_missing_imports = true
+
+[tool.importlinter]
+root_package = "frontdesk"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Core packages never import entrypoints"
+type = "forbidden"
+source_modules = [
+  "frontdesk.agent",
+  "frontdesk.conversation",
+  "frontdesk.db",
+  "frontdesk.knowledge",
+  "frontdesk.model_gateway",
+  "frontdesk.observability",
+  "frontdesk.safety",
+  "frontdesk.shop",
+  "frontdesk.tenancy",
+]
+forbidden_modules = ["frontdesk.api", "frontdesk.cli", "frontdesk.worker", "frontdesk.composition"]
+
+[[tool.importlinter.contracts]]
+name = "Only the model gateway imports provider SDKs"
+type = "forbidden"
+source_modules = ["frontdesk"]
+forbidden_modules = ["anthropic"]
+allow_indirect_imports = true
+ignore_imports = ["frontdesk.model_gateway.** -> anthropic"]
+
+[[tool.importlinter.contracts]]
+name = "Safety rules and business packs stay framework-free"
+type = "forbidden"
+source_modules = ["frontdesk.safety", "frontdesk.tenancy"]
+forbidden_modules = ["pydantic_ai", "fastapi", "temporalio", "sqlalchemy"]
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.168.5",
+    "import-linter>=2.15",
+    "mypy>=2.4.0",
+    "pre-commit>=4.6.2",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.10",
+    "testcontainers[postgres]>=4.15.0",
+    "types-pyyaml>=6.0.12.20260906",
+]

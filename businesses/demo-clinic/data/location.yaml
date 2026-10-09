@@ -1,0 +1,6 @@
+address: "Rruga e Shembullit 1, Tiranë (adresë fiktive)"
+phone: "+355 00 000 0000"
+email: "info@klinika-demo.example"
+opening_hours:
+  - {days: "mon-fri", opens: "08:00", closes: "19:00"}
+  - {days: "sat", opens: "09:00", closes: "14:00"}
