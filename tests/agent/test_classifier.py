@@ -2,12 +2,14 @@ import re
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic_ai import ModelResponse, ToolCallPart
 from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage, ModelRequest
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models.test import TestModel
 
 from frontdesk.agent import prompts
 from frontdesk.agent.classification import (
@@ -239,6 +241,31 @@ async def test_the_agent_runs_on_the_given_model_with_the_given_settings() -> No
     await agent.run("Sa kushton fizioterapia?", deps=_deps(), usage_limits=CLASSIFIER_LIMITS)
     assert agent.model is model
     assert requests[0][1].model_settings == {"max_tokens": 321}
+
+
+def test_a_model_id_string_is_refused_so_the_gateway_cannot_be_bypassed() -> None:
+    with pytest.raises(TypeError, match="model gateway") as refused:
+        build_classifier("anthropic:claude-opus-5-5", Profile.RECEPTIONIST)  # type: ignore[arg-type]
+    assert "claude-opus-5-5" not in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        pytest.param("test", id="harmless-model-name"),
+        pytest.param("", id="empty-string"),
+        pytest.param(None, id="none"),
+        pytest.param(FunctionModel, id="class-instead-of-instance"),
+    ],
+)
+def test_anything_else_that_is_not_a_model_object_is_refused_too(model: Any) -> None:
+    with pytest.raises(TypeError, match="model gateway"):
+        build_classifier(model, Profile.RECEPTIONIST)
+
+
+def test_a_test_model_object_is_accepted() -> None:
+    agent = build_classifier(TestModel(), Profile.RECEPTIONIST)
+    assert agent.name == "receptionist-classifier"
 
 
 async def test_the_shop_classifier_has_its_own_name_and_prompt() -> None:

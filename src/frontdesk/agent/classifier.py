@@ -118,6 +118,12 @@ def render_catalog(deps: ClassifierDeps) -> str:
 def build_classifier(
     model: Model, profile: Profile, *, model_settings: ModelSettings | None = None
 ) -> Agent[ClassifierDeps, ClassifierOutput]:
+    # The annotation is not enough: an untyped caller could pass "anthropic:..." and skip the gateway.
+    if not isinstance(model, Model):
+        raise TypeError(
+            f"the classifier needs a Model object, not {type(model).__name__}: build live models "
+            "in the model gateway, because a model-id string would skip its EU pin"
+        )
     agent = Agent(
         model,
         name=f"{profile.value}-classifier",
