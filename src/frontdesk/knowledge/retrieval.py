@@ -28,9 +28,9 @@ RRF_K = 60
 MIN_TOKEN_LENGTH = 3
 # Where a chunk sits in the knowledge: its document key and its position in the document. Equal in
 # every database that loads the same pack, and unique within a version: the database makes document
-# keys unique, and the chunker numbers the chunks of a document one by one. Document keys compare by
-# code point: the SQL sorts them COLLATE "C", as Python compares strings, so that no database
-# collation (en_US.utf8 ignores hyphens: "faqs" before "faq-zones") changes a ranking.
+# keys unique within a version and the positions within a document unique (migration 0004). Document
+# keys compare by code point: the SQL sorts them COLLATE "C", as Python compares strings, so that no
+# database collation (en_US.utf8 ignores hyphens: "faqs" before "faq-zones") changes a ranking.
 Place = tuple[str, int]
 
 # What the queries that rank chunks select: the chunk id, then its place.

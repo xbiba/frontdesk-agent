@@ -1,5 +1,9 @@
+import pytest
+from pydantic import ValidationError
+
 from frontdesk.agent.vocab import Category, ClarifyField, Intent
-from frontdesk.conversation.state import TOPIC_TURNS, ConversationState
+from frontdesk.conversation.state import MAX_CONVERSATION_ID_CHARS, TOPIC_TURNS, ConversationState
+from frontdesk.db.models import OrderLookupAttempts
 
 
 def _advance(state: ConversationState, **changes: object) -> ConversationState:
@@ -44,3 +48,21 @@ def test_pending_clarification_lasts_one_turn_and_intents_are_bounded() -> None:
     for _ in range(10):
         state = _advance(state)
     assert len(state.previous_intents) == 5
+
+
+def test_a_conversation_id_fits_the_column_it_is_stored_under() -> None:
+    # The order lookup attempts are keyed by it in a String(64) column: a longer id would make
+    # every order turn fail at the database.
+    assert OrderLookupAttempts.conversation_id.type.length == MAX_CONVERSATION_ID_CHARS  # type: ignore[attr-defined]
+    assert len(ConversationState().conversation_id) <= MAX_CONVERSATION_ID_CHARS
+
+
+@pytest.mark.parametrize("length", [1, 64])
+def test_conversation_ids_up_to_the_limit_are_accepted(length: int) -> None:
+    assert ConversationState(conversation_id="c" * length).conversation_id == "c" * length
+
+
+@pytest.mark.parametrize("conversation_id", ["", "c" * 65])
+def test_an_empty_or_over_long_conversation_id_is_rejected(conversation_id: str) -> None:
+    with pytest.raises(ValidationError, match="conversation_id"):
+        ConversationState(conversation_id=conversation_id)

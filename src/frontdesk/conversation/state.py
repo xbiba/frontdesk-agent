@@ -13,12 +13,17 @@ from frontdesk.tenancy.pack import Language
 
 MAX_REMEMBERED_INTENTS: Final = 5
 TOPIC_TURNS: Final = 3  # turns a topic survives without being mentioned again
+# The key of the order lookup attempts is a String(64) column: a longer id would fail every order
+# turn at the database.
+MAX_CONVERSATION_ID_CHARS: Final = 64
 
 
 class ConversationState(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    conversation_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    conversation_id: str = Field(
+        default_factory=lambda: uuid.uuid4().hex, min_length=1, max_length=MAX_CONVERSATION_ID_CHARS
+    )
     language: Language | None = None
     turns: int = 0
     previous_intents: tuple[Intent, ...] = ()

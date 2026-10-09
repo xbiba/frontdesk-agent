@@ -10,7 +10,13 @@ from frontdesk.db.models import KnowledgeVersion
 
 pytestmark = pytest.mark.db
 
-KNOWLEDGE_TABLES = {"knowledge_versions", "documents", "chunks", "records"}
+BUSINESS_TABLES = {
+    "knowledge_versions",
+    "documents",
+    "chunks",
+    "records",
+    "order_lookup_attempts",
+}
 
 
 def _insert_version(owner_url: str, business_id: str, status: str = "draft") -> None:
@@ -88,5 +94,24 @@ def test_every_business_table_has_row_level_security_enabled_and_forced(
         ).all()
     engine.dispose()
     protected = {name: enabled and forced for name, enabled, forced in rows}
-    assert protected.keys() >= KNOWLEDGE_TABLES, "the check must see the knowledge tables"
+    assert protected.keys() >= BUSINESS_TABLES, "the check must see every business table"
     assert [name for name, ok in sorted(protected.items()) if not ok] == []
+
+
+def test_every_policy_fails_closed_when_the_scope_is_empty(migrated_url: str) -> None:
+    # A policy that compares with the bare setting accepts '' (what a reused pooled connection
+    # reads after a scoped transaction). The scope must go through NULLIF, in USING and WITH CHECK.
+    engine = create_engine(migrated_url)
+    with engine.connect() as connection:
+        policies = connection.execute(
+            text("SELECT tablename, qual, with_check FROM pg_policies WHERE schemaname = 'public'")
+        ).all()
+    engine.dispose()
+    fails_closed = "nullif(current_setting('app.business_id'"
+    assert {table for table, _, _ in policies} >= BUSINESS_TABLES
+    weak = [
+        table
+        for table, using, check in policies
+        if fails_closed not in using.lower() or fails_closed not in check.lower()
+    ]
+    assert weak == []

@@ -468,14 +468,17 @@ def test_equal_fused_scores_rank_by_document_key_then_position_in_every_database
 def test_equal_scores_rank_by_position_in_the_document_not_by_where_the_row_is_stored(
     new_database: NewDatabase, clinic_pack: BusinessPack, by_vector: bool
 ) -> None:
-    """With the positions of the sections reversed, the one stored first must come last."""
+    """With the positions of the sections reversed, the one stored first must come last.
+
+    The positions are negated, not mirrored (`1 - ordinal` would pass through a repeated position,
+    which the unique constraint on a document's positions refuses)."""
     if by_vector:
         pack, query = clinic_pack, "zzzz"
     else:
         pack, query = _pack_of_copies(clinic_pack, 8, {"first-visit-it": "visit"}), "visita"
     factory = _activated_in_new_database(new_database, pack)
     with business_session(factory, pack.id) as session:
-        session.execute(text("UPDATE chunks SET ordinal = 1 - ordinal"))
+        session.execute(text("UPDATE chunks SET ordinal = -ordinal"))
     vector = HashEmbedder().embed([query])[0] if by_vector else None
     ranking = _ranking(factory, pack, query, query_vector=vector, limit=20)
     expected = [

@@ -19,7 +19,12 @@ def make_session_factory(engine: Engine) -> sessionmaker[Session]:
 
 @contextmanager
 def business_session(factory: sessionmaker[Session], business_id: str) -> Iterator[Session]:
-    """One transaction scoped to one business; commits on success, rolls back on error."""
+    """One transaction scoped to one business; commits on success, rolls back on error.
+
+    A blank id is refused: a scope that names no business must never be mistaken for one.
+    """
+    if not business_id.strip():
+        raise ValueError("business_session needs a business id, got a blank one")
     with factory() as session, session.begin():
         session.execute(
             text("SELECT set_config('app.business_id', :business_id, true)"),

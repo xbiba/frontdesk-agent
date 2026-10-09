@@ -1,4 +1,4 @@
-"""ORM models. Every business table has business_id and an RLS policy (migrations 0002, 0003)."""
+"""ORM models. Every business table has business_id and an RLS policy (migrations 0002-0004)."""
 
 from __future__ import annotations
 
