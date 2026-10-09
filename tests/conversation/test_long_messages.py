@@ -15,6 +15,7 @@ from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import MAX_MESSAGE_CHARS, TurnOutcome, TurnRuntime, handle_message
 from frontdesk.tenancy.pack import BusinessPack, FixedTextKey, Language
 from tests.conversation.helpers import classifier_model, document_responder, make_runtime
+from tests.timing import LINEAR_TIME_LIMIT_SECONDS
 
 # A session factory bound to no database: a long message must not reach the database either.
 NO_DATABASE: sessionmaker[Session] = sessionmaker(expire_on_commit=False)
@@ -107,7 +108,7 @@ async def test_a_very_long_message_is_checked_in_linear_time(
     runtime = _runtime(clinic_pack, prompts)
     started = time.perf_counter()
     result, _ = await handle_message(message, ConversationState(turns=1), runtime)
-    assert time.perf_counter() - started < 1.0
+    assert time.perf_counter() - started < LINEAR_TIME_LIMIT_SECONDS
     assert result.outcome is TurnOutcome.HANDOFF
     assert result.trace.rule == rule
     assert prompts == []

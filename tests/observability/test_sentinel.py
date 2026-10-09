@@ -35,6 +35,7 @@ from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.loader import load_pack
 from frontdesk.tenancy.pack import BusinessPack, Language, Profile
 from tests.conversation.helpers import classifier_model, document_responder, make_runtime
+from tests.timing import LINEAR_TIME_LIMIT_SECONDS
 
 Activate = Callable[..., sessionmaker[Session]]
 MESSAGE_SENTINEL = "SENTINELMSG"
@@ -476,7 +477,7 @@ def test_digits_inside_an_address_do_not_make_it_a_phone_number() -> None:
 def test_redaction_takes_time_linear_in_the_length(text: str) -> None:
     started = time.perf_counter()
     redact(text)
-    assert time.perf_counter() - started < 1.0
+    assert time.perf_counter() - started < LINEAR_TIME_LIMIT_SECONDS
 
 
 async def test_content_capture_of_a_very_long_message_takes_linear_time(
@@ -488,7 +489,7 @@ async def test_content_capture_of_a_very_long_message_takes_linear_time(
     )
     started = time.perf_counter()
     await handle_message("a" * 100_000, ConversationState(turns=1), runtime)
-    assert time.perf_counter() - started < 1.0
+    assert time.perf_counter() - started < LINEAR_TIME_LIMIT_SECONDS
     assert "frontdesk.content" in _exported(span_exporter)
 
 

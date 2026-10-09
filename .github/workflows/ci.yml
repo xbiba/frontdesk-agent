@@ -18,9 +18,16 @@ jobs:
       - run: uv run mypy
       - run: uv run lint-imports
       - run: uv run pytest -m "not eval"
+      - name: coverage (all tests, branches, fails under 80%)
+        run: uv run pytest --cov --cov-report=term-missing
       - name: offline evaluations
         run: uv run pytest -m eval -v
       - name: audit runtime dependencies
         run: |
           uv export --format requirements-txt --no-dev --no-emit-project --output-file requirements-audit.txt
           uvx pip-audit --disable-pip --requirement requirements-audit.txt
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t frontdesk:ci .

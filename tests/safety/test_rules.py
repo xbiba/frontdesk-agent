@@ -12,6 +12,7 @@ from frontdesk.safety.rules import (
     emergency_rule,
     evaluate,
 )
+from tests.timing import LINEAR_TIME_LIMIT_SECONDS
 
 EMERGENCIES: dict[str, list[str]] = {
     "sq": [
@@ -245,4 +246,4 @@ def test_the_emergency_net_reads_all_of_a_long_text() -> None:
 def test_the_emergency_net_alone_takes_time_linear_in_the_length(text: str) -> None:
     started = time.perf_counter()
     assert emergency_rule(text) is None
-    assert time.perf_counter() - started < 1.0
+    assert time.perf_counter() - started < LINEAR_TIME_LIMIT_SECONDS

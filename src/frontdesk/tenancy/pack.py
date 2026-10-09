@@ -7,8 +7,9 @@ from collections.abc import Iterable
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
+from functools import cache
 from typing import Annotated, Literal
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import available_timezones
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
@@ -31,13 +32,17 @@ def _not_blank(value: str) -> str:
 NonBlankStr = Annotated[str, AfterValidator(_not_blank)]
 
 
+@cache
+def _iana_zone_names() -> frozenset[str]:
+    # Scanning the zone files takes about ten milliseconds, and every pack load asks.
+    return frozenset(available_timezones())
+
+
 def _known_time_zone(value: str) -> str:
-    try:
-        ZoneInfo(value)
-    except (ZoneInfoNotFoundError, ValueError) as error:
-        raise ValueError(
-            f"unknown time zone '{value}' (use an IANA name such as Europe/Tirane)"
-        ) from error
+    # Matched against the list of names, not by opening a zone file: a Mac opens "europe/tirane"
+    # because its file system ignores case, while the Linux container image does not.
+    if value not in _iana_zone_names():
+        raise ValueError(f"unknown time zone '{value}' (use an IANA name such as Europe/Tirane)")
     return value
 
 

@@ -158,7 +158,25 @@ def test_timezone_must_be_a_known_iana_zone(
         load_pack(pack_dir)
 
 
-@pytest.mark.parametrize("zone", ["UTC", "Europe/Rome", "America/Argentina/Buenos_Aires"])
+@pytest.mark.parametrize("zone", ["europe/tirane", "EUROPE/TIRANE", "Europe/tirane", "utc"])
+def test_timezone_names_are_matched_case_sensitively(
+    businesses_dir: Path, tmp_path: Path, zone: str
+) -> None:
+    """A Mac opens these zone files (its file system ignores case) and Linux does not.
+
+    The container image runs on Linux, so a mis-cased name that loads on a laptop would only fail
+    when the container starts. The pack refuses it everywhere.
+    """
+    pack_dir = copy_pack(businesses_dir, CLINIC, tmp_path)
+    edit_yaml(pack_dir / "business.yaml", lambda data: data.update(timezone=zone))
+    message = rf"\ntimezone\n\s+Value error, unknown time zone '{re.escape(zone)}'"
+    with pytest.raises(PackError, match=message):
+        load_pack(pack_dir)
+
+
+@pytest.mark.parametrize(
+    "zone", ["UTC", "Europe/Tirane", "Europe/Rome", "America/Argentina/Buenos_Aires"]
+)
 def test_timezone_may_be_any_iana_zone(businesses_dir: Path, tmp_path: Path, zone: str) -> None:
     pack_dir = copy_pack(businesses_dir, CLINIC, tmp_path)
     edit_yaml(pack_dir / "business.yaml", lambda data: data.update(timezone=zone))

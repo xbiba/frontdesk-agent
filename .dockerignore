@@ -1,0 +1,14 @@
+.git
+.venv
+**/__pycache__
+.mypy_cache
+.ruff_cache
+.pytest_cache
+evals/reports
+requirements-audit.txt
+# Local files that .gitignore already keeps out of the repository: never bake them into an image.
+.env
+*.env.local
+.coverage
+htmlcov
+.fastembed_cache
