@@ -104,7 +104,7 @@ source_modules = [
   "frontdesk.shop",
   "frontdesk.tenancy",
 ]
-forbidden_modules = ["frontdesk.api", "frontdesk.cli", "frontdesk.worker"]
+forbidden_modules = ["frontdesk.api", "frontdesk.cli", "frontdesk.worker", "frontdesk.composition"]
 
 [[tool.importlinter.contracts]]
 name = "Only the model gateway imports provider SDKs"
