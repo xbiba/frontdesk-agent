@@ -252,8 +252,17 @@ def test_a_price_is_written_in_the_customers_language(
         ({"amount": "9", "max_amount": "10"}, "9-10 EUR"),  # 10 is above 9 as a number, not as text
         ({"amount": "40.50"}, "40.50 EUR"),
         ({"currency": "ALL", "amount": "4000"}, "4000 ALL"),
+        ({"max_amount": "40"}, "40 EUR"),
+        ({"max_amount": "40.00"}, "40 EUR"),
     ],
-    ids=["range", "range across digit counts", "cents kept", "other currency"],
+    ids=[
+        "range",
+        "range across digit counts",
+        "cents kept",
+        "other currency",
+        "collapsed range",
+        "collapsed range in cents",
+    ],
 )
 def test_amounts_are_shown_as_the_pack_wrote_them(
     activate_pack: Activate, clinic_pack: BusinessPack, changes: dict[str, str], shown: str

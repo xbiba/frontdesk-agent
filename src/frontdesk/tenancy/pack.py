@@ -8,6 +8,7 @@ from datetime import date
 from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
@@ -28,6 +29,20 @@ def _not_blank(value: str) -> str:
 
 # Text that is shown to people (contacts, names, an order's status) must say something.
 NonBlankStr = Annotated[str, AfterValidator(_not_blank)]
+
+
+def _known_time_zone(value: str) -> str:
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError) as error:
+        raise ValueError(
+            f"unknown time zone '{value}' (use an IANA name such as Europe/Tirane)"
+        ) from error
+    return value
+
+
+# The business-local day decides which prices and documents apply, so the zone must exist.
+TimeZoneName = Annotated[str, AfterValidator(_known_time_zone)]
 
 
 class Profile(StrEnum):
@@ -149,7 +164,7 @@ class BusinessPack(Frozen):
     isolation_level: Literal["T1", "T2", "T3"]
     default_language: Language
     languages: list[Language] = Field(min_length=1)
-    timezone: str
+    timezone: TimeZoneName
     features: Features = Features()
     integrations: Integrations = Integrations()
     fixed_texts: dict[Language, dict[FixedTextKey, str]]
@@ -194,6 +209,19 @@ def _language_problems(pack: BusinessPack) -> list[str]:
         f"document '{document.key}' is in unsupported language '{document.language}'"
         for document in pack.documents
         if document.language not in pack.languages
+    ]
+    problems += [
+        f"orientation '{entry.id}' has no labels in '{language}'"
+        for entry in pack.orientation
+        for language in pack.languages
+        if not any(label.strip() for label in entry.labels.get(language, []))
+    ]
+    problems += [
+        f"price for '{price.service_id}' has no condition in '{language}'"
+        for price in pack.prices
+        if price.conditions  # a price with no conditions at all stays valid
+        for language in pack.languages
+        if not price.conditions.get(language, "").strip()
     ]
     return problems
 

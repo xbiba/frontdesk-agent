@@ -65,6 +65,34 @@ RULES = [
     ),
     pytest.param(
         CLINIC,
+        "data/orientation.yaml",
+        lambda d: d[0]["labels"].pop("en"),
+        "orientation 'back' has no labels in 'en'",
+        id="orientation-labels-in-every-language",
+    ),
+    pytest.param(
+        CLINIC,
+        "data/orientation.yaml",
+        lambda d: d[0]["labels"].update(it=[" ", ""]),
+        "orientation 'back' has no labels in 'it'",
+        id="orientation-labels-not-blank",
+    ),
+    pytest.param(
+        CLINIC,
+        "data/prices.yaml",
+        lambda d: d[1]["conditions"].pop("en"),
+        "price for 'physiotherapy' has no condition in 'en'",
+        id="price-condition-in-every-language",
+    ),
+    pytest.param(
+        CLINIC,
+        "data/prices.yaml",
+        lambda d: d[1]["conditions"].update(sq="  "),
+        "price for 'physiotherapy' has no condition in 'sq'",
+        id="price-condition-not-blank",
+    ),
+    pytest.param(
+        CLINIC,
         "data/services.yaml",
         _duplicate_first,
         "duplicate service id 'orthopedics-visit'",
@@ -178,6 +206,23 @@ def test_document_in_a_language_the_pack_does_not_offer_is_rejected(
     edit_document(pack_dir / "knowledge" / "returns-en.md", lambda meta: meta.update(language="sq"))
     with pytest.raises(PackError, match="document 'returns-en' is in unsupported language 'sq'"):
         load_pack(pack_dir)
+
+
+def test_conditions_and_labels_are_required_only_in_the_languages_the_pack_offers(
+    clinic_pack: BusinessPack,
+) -> None:
+    data = clinic_pack.model_dump()
+    data["languages"] = ["it", "en"]
+    data["default_language"] = "it"
+    data["documents"] = [doc for doc in data["documents"] if doc["language"] != "sq"]
+    for price in data["prices"]:
+        price["conditions"].pop("sq", None)
+    for entry in data["orientation"]:
+        entry["labels"].pop("sq")
+    pack = BusinessPack.model_validate(data)
+    assert pack.languages == ["it", "en"]
+    assert "sq" not in pack.prices[1].conditions
+    assert all("sq" not in entry.labels for entry in pack.orientation)
 
 
 def test_duplicate_document_keys_are_rejected(shop_pack: BusinessPack) -> None:

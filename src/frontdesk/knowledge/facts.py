@@ -6,6 +6,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -127,10 +128,12 @@ def price_evidence(
     ):
         return None
     service = Service.model_validate(service_row.payload)
+    # "40" up to "40.00" is one price, not a range: compare the ends as numbers
+    is_range = price.max_amount is not None and Decimal(price.max_amount) != Decimal(price.amount)
     amount = (
-        f"{price.amount} {price.currency}"
-        if price.max_amount is None
-        else f"{price.amount}-{price.max_amount} {price.currency}"
+        f"{price.amount}-{price.max_amount} {price.currency}"
+        if is_range
+        else f"{price.amount} {price.currency}"
     )
     condition = price.conditions.get(language)
     content = f"{service.names.get(language, service.id)}: {amount}"
