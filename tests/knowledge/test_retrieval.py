@@ -498,3 +498,27 @@ def test_the_vector_search_materializes_the_eligible_chunks(
         finally:
             event.remove(connection, "before_cursor_execute", record)
     assert any("MATERIALIZED" in statement for statement in statements)
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("by_vector", [False, True], ids=["terms", "vector"])
+def test_equal_scores_rank_document_keys_by_code_point_in_any_database_collation(
+    activate_pack: Activate, clinic_pack: BusinessPack, by_vector: bool
+) -> None:
+    """`en_US.utf8`, the collation of the test database, compares keys as if their hyphens were
+    absent and so puts "faqs" before "faq-zones". Code, and so the ranking, must not."""
+    keys = ["faqs", "faq-zones"]  # stored in the opposite order to the one expected
+    parking = next(doc for doc in clinic_pack.documents if doc.key == "parking-en")
+    copies = [parking.model_copy(update={"key": key}) for key in keys]
+    pack = clinic_pack.model_copy(update={"documents": copies})
+    factory = activate_pack(pack)
+    if by_vector:
+        # "zzzz" is at right angles to both sections of both copies: four chunks, one distance.
+        vector = HashEmbedder().embed(["zzzz"])[0]
+        hits = _search(factory, pack.id, "zzzz", query_vector=vector, limit=20)
+        expected = [key for key in sorted(keys) for _ in range(2)]
+    else:
+        # "ramp" is in the second section of each copy only: two chunks, one score.
+        hits = _search(factory, pack.id, "ramp", query_vector=None, limit=20)
+        expected = sorted(keys)
+    assert [hit.document_key for hit in hits] == expected
