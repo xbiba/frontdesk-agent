@@ -1,0 +1,17 @@
+agent_id: support-sales
+version: 0.2.0
+purpose: Answers shop questions (shipping, returns, hours, order status) and hands off to staff.
+owner: frontdesk maintainers
+isolation: declared per deployment in the business pack
+model_route: vertex-eu-opus   # offline-demo in tests and the demo
+limits:
+  classifier_model_requests: 2
+  responder_model_requests: 2
+  responder_tool_calls: 1
+tools:
+  search_information: R0
+written_by_code: [opening hours, address and contacts, order status, clarifying questions, handoff texts]
+inputs: validated classifier fields and approved document passages; never the original message
+never:
+  - reveal whether an order exists without a matching postal code
+  - answer medical questions

@@ -1,0 +1,17 @@
+agent_id: receptionist
+version: 0.2.0
+purpose: Answers administrative questions for a clinic, orients patients to services and hands off to reception.
+owner: frontdesk maintainers
+isolation: declared per deployment in the business pack (T3 for real clinics)
+model_route: vertex-eu-opus   # offline-demo in tests and the demo
+limits:
+  classifier_model_requests: 2
+  responder_model_requests: 2
+  responder_tool_calls: 1
+tools:   # risk classes, blueprint §9.6
+  search_information: R0
+written_by_code: [prices, opening hours, address and contacts, services, doctors, orientation, clarifying questions, handoff texts]
+inputs: validated classifier fields and approved document passages; never the original message
+never:
+  - diagnose, assess symptoms, judge urgency, recommend treatment or medication
+  - state a price, or a number absent from the quoted passage
