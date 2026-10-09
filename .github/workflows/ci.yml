@@ -31,3 +31,49 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t frontdesk:ci .
+      - name: the image holds the service and nothing else
+        # One run of the image, as root so that the files the build left behind can be seen. The
+        # service runs as user 10001, so the last check drops to that user before it imports and
+        # loads. Any failed check ends the job.
+        run: |
+          docker run --rm -i --user 0 --entrypoint sh frontdesk:ci -s <<'CHECK'
+          set -eu
+          fail() { echo "image check failed: $*" >&2; exit 1; }
+          cd /app
+
+          # Left out on purpose: tests, docs, deployment and CI files, git data, env files.
+          for path in tests docs deploy .github .git compose.yaml Dockerfile .dockerignore .env .env.example; do
+            [ ! -e "$path" ] || fail "/app/$path is in the image"
+          done
+          found=$(find /app -path /app/.venv -prune -o \( -name ".env*" -o -name "*.env" -o -name "*.env.*" \) -print)
+          [ -z "$found" ] || fail "env files in the image: $found"
+
+          # No uv cache left in a layer by the build.
+          found=$(find / -xdev -type d -path "*/.cache/uv" -print)
+          [ -z "$found" ] || fail "uv cache in the image: $found"
+
+          # What the service reads from /app is there ...
+          for path in alembic.ini migrations agents businesses src; do
+            [ -e "$path" ] || fail "/app/$path is missing from the image"
+          done
+
+          # ... and works for the user the image runs as.
+          python -c "
+          import os
+          os.setgroups([]); os.setgid(10001); os.setuid(10001)
+          from pathlib import Path
+          import frontdesk, frontdesk.api.app, frontdesk.cli.main
+          from alembic.script import ScriptDirectory
+          from frontdesk.agent.prompts import prompt_version
+          from frontdesk.db.migrate import alembic_config
+          from frontdesk.tenancy.loader import load_pack
+          from frontdesk.tenancy.pack import Profile
+          assert ScriptDirectory.from_config(alembic_config('postgresql+psycopg://u:p@h/d')).get_current_head()
+          for profile in Profile:
+              for name in ('classifier', 'responder'):
+                  prompt_version(profile, name)
+          for pack in ('demo-clinic', 'demo-shop'):
+              load_pack(Path('businesses') / pack)
+          "
+          echo "image check passed"
+          CHECK

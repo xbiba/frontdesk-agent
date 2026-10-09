@@ -1,14 +1,19 @@
-.git
-.venv
+# An allowlist: the image gets what the service reads and what the build needs, and nothing else.
+# Tests, docs, deployment and CI files, local tool folders and every env file stay out, wherever
+# a developer's checkout has put them. A new top-level path the image needs gets a line here; the
+# image job in CI fails when something it forbids is there or something it needs is missing.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!alembic.ini
+!migrations
+!agents
+!businesses
+!src
 **/__pycache__
-.mypy_cache
-.ruff_cache
-.pytest_cache
-evals/reports
-requirements-audit.txt
-# Local files that .gitignore already keeps out of the repository: never bake them into an image.
-.env
-*.env.local
-.coverage
-htmlcov
-.fastembed_cache
+# The directories allowed above hold code and packs, never env files: keep any that turn up out too.
+**/.env*
+**/*.env
+**/*.env.*
