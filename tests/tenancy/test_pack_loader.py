@@ -5,7 +5,7 @@ import pytest
 
 from frontdesk.tenancy.loader import PackError, load_pack
 from frontdesk.tenancy.pack import BusinessPack, FixedTextKey, Profile
-from tests.tenancy.helpers import SHOP, copy_pack, edit_yaml
+from tests.tenancy.helpers import CLINIC, SHOP, copy_pack, edit_yaml
 
 PROMISES = (
     "contatter",
@@ -283,4 +283,109 @@ def test_front_matter_must_be_a_mapping(businesses_dir: Path, tmp_path: Path, fr
     )
     message = r"^knowledge/shipping-it\.md: front matter must be a mapping$"
     with pytest.raises(PackError, match=message):
+        load_pack(pack_dir)
+
+
+# --- a key written twice is an error, because YAML would keep only the last value ----------------
+
+
+@pytest.mark.parametrize(
+    ("file", "content", "message"),
+    [
+        pytest.param(
+            "business.yaml",
+            "id: demo-shop\nname: Bottega Demo\nname: Another name\n",
+            "business.yaml: invalid YAML at line 3, column 1: "
+            "found duplicate key 'name' (first at line 2)",
+            id="business-file",
+        ),
+        pytest.param(
+            "data/location.yaml",
+            "address: Via Roma 1\nphone: +39 00 0000 0000\nemail: a@b.example\n"
+            "phone: +39 11 1111 1111\n",
+            "data/location.yaml: invalid YAML at line 4, column 1: "
+            "found duplicate key 'phone' (first at line 2)",
+            id="data-file",
+        ),
+        pytest.param(
+            "data/orders.yaml",
+            "- reference: ORD-10427\n  postal_code: '20121'\n  postal_code: '20122'\n",
+            "data/orders.yaml: invalid YAML at line 3, column 3: "
+            "found duplicate key 'postal_code' (first at line 2)",
+            id="inside-a-list-item",
+        ),
+        pytest.param(
+            "knowledge/returns-it.md",
+            "---\ntitle: Resi\nlanguage: it\ntitle: Altro\n---\nBody\n",
+            "knowledge/returns-it.md: invalid YAML at line 4, column 1: "
+            "found duplicate key 'title' (first at line 2)",
+            id="front-matter",
+        ),
+    ],
+)
+def test_a_duplicate_key_names_the_file_the_line_and_the_key(
+    businesses_dir: Path, tmp_path: Path, file: str, content: str, message: str
+) -> None:
+    pack_dir = copy_pack(businesses_dir, SHOP, tmp_path)
+    (pack_dir / file).write_text(content, encoding="utf-8")
+    with pytest.raises(PackError, match=f"^{re.escape(message)}$"):
+        load_pack(pack_dir)
+
+
+def test_a_second_handoff_text_cannot_replace_the_contact_text(
+    businesses_dir: Path, tmp_path: Path
+) -> None:
+    # Without the check the second line wins, and the pack would load with a promise.
+    pack_dir = copy_pack(businesses_dir, CLINIC, tmp_path)
+    business = pack_dir / "business.yaml"
+    lines = business.read_text(encoding="utf-8").splitlines()
+    first = next(i for i, line in enumerate(lines) if line.startswith("    handoff:"))
+    lines.insert(first + 1, '    handoff: "La reception ti contatterà presto."')
+    business.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with pytest.raises(
+        PackError,
+        match=rf"^business\.yaml: invalid YAML at line {first + 2}, column 5: "
+        rf"found duplicate key 'handoff' \(first at line {first + 1}\)$",
+    ):
+        load_pack(pack_dir)
+
+
+def test_a_key_that_overrides_a_merged_one_is_not_a_duplicate(
+    businesses_dir: Path, tmp_path: Path
+) -> None:
+    pack_dir = copy_pack(businesses_dir, SHOP, tmp_path)
+    (pack_dir / "data" / "location.yaml").write_text(
+        'address: "Via dell\'Esempio 1"\nphone: "+39 00 0000 0000"\nemail: "a@b.example"\n'
+        "opening_hours:\n"
+        '  - &weekday {days: "tue-fri", opens: "10:00", closes: "19:30"}\n'
+        '  - {<<: *weekday, days: "sat"}\n',
+        encoding="utf-8",
+    )
+    hours = load_pack(pack_dir).location.opening_hours
+    assert [(h.days, h.opens) for h in hours] == [("tue-fri", "10:00"), ("sat", "10:00")]
+
+
+# --- errors that are not YAML errors still name the file -----------------------------------------
+
+
+def test_an_impossible_date_is_a_pack_error_naming_the_file(
+    businesses_dir: Path, tmp_path: Path
+) -> None:
+    pack_dir = copy_pack(businesses_dir, CLINIC, tmp_path)
+    prices = pack_dir / "data" / "prices.yaml"
+    prices.write_text(
+        prices.read_text(encoding="utf-8") + "  valid_until: 2026-02-30\n", encoding="utf-8"
+    )
+    with pytest.raises(PackError, match=r"^data/prices\.yaml: invalid value: .*day"):
+        load_pack(pack_dir)
+
+
+@pytest.mark.parametrize("file", ["data/location.yaml", "business.yaml", "knowledge/returns-it.md"])
+def test_a_file_that_cannot_be_read_is_a_pack_error_naming_it(
+    businesses_dir: Path, tmp_path: Path, file: str
+) -> None:
+    pack_dir = copy_pack(businesses_dir, SHOP, tmp_path)
+    (pack_dir / file).unlink()
+    (pack_dir / file).mkdir()  # a directory where the file should be: reading it fails
+    with pytest.raises(PackError, match=rf"^{re.escape(file)}: cannot be read \(Is a directory\)$"):
         load_pack(pack_dir)

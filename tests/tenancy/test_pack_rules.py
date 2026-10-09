@@ -9,7 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from frontdesk.tenancy.loader import PackError, load_pack
-from frontdesk.tenancy.pack import BusinessPack
+from frontdesk.tenancy.pack import BusinessPack, FixedTextKey
 from tests.tenancy.helpers import (
     CLINIC,
     SHOP,
@@ -55,6 +55,27 @@ RULES = [
         lambda d: d["fixed_texts"].pop("en"),
         "missing fixed text 'disclosure' for language 'en'",
         id="language-without-fixed-texts",
+    ),
+    pytest.param(
+        CLINIC,
+        "business.yaml",
+        lambda d: d["fixed_texts"]["it"].update(handoff="La reception ti contatterà presto."),
+        "fixed text 'handoff' for language 'it' must contain the location phone or email",
+        id="handoff-gives-a-contact",
+    ),
+    pytest.param(
+        SHOP,
+        "business.yaml",
+        lambda d: d["fixed_texts"]["en"].update(handoff="Write to us."),
+        "fixed text 'handoff' for language 'en' must contain the location phone or email",
+        id="handoff-gives-a-contact-in-every-language",
+    ),
+    pytest.param(
+        CLINIC,
+        "data/location.yaml",
+        lambda d: d.update(phone="+355 00 111 1111", email="reception@klinika-demo.example"),
+        "fixed text 'handoff' for language 'sq' must contain the location phone or email",
+        id="handoff-names-the-current-contact",
     ),
     pytest.param(
         CLINIC,
@@ -186,6 +207,22 @@ def test_each_consistency_rule_rejects_its_violation(
     edit_yaml(pack_dir / file, change)
     with pytest.raises(PackError, match=re.escape(message)):
         load_pack(pack_dir)
+
+
+@pytest.mark.parametrize(
+    "handoff",
+    [
+        pytest.param("Scrivici a info@klinika-demo.example.", id="email-only"),
+        pytest.param("Chiama il +355 00 000 0000.", id="phone-only"),
+        pytest.param("Scrivici a INFO@Klinika-Demo.example.", id="email-in-another-case"),
+    ],
+)
+def test_a_handoff_may_give_either_the_phone_or_the_email(
+    businesses_dir: Path, tmp_path: Path, handoff: str
+) -> None:
+    pack_dir = copy_pack(businesses_dir, CLINIC, tmp_path)
+    edit_yaml(pack_dir / "business.yaml", lambda d: d["fixed_texts"]["it"].update(handoff=handoff))
+    assert load_pack(pack_dir).fixed_texts["it"][FixedTextKey.HANDOFF] == handoff
 
 
 def test_order_status_needs_the_support_sales_profile(businesses_dir: Path, tmp_path: Path) -> None:

@@ -204,6 +204,11 @@ def _language_problems(pack: BusinessPack) -> list[str]:
             for key in FixedTextKey
             if not texts.get(key, "").strip()
         ]
+        if not _gives_a_contact(texts.get(FixedTextKey.HANDOFF, ""), pack.location):
+            problems.append(
+                f"fixed text '{FixedTextKey.HANDOFF}' for language '{language}' "
+                "must contain the location phone or email"
+            )
     problems += [
         f"service '{service.id}' has no name in '{language}'"
         for service in pack.services
@@ -229,6 +234,14 @@ def _language_problems(pack: BusinessPack) -> list[str]:
         if not price.conditions.get(language, "").strip()
     ]
     return problems
+
+
+def _gives_a_contact(text: str, location: Location) -> bool:
+    """Whether a handoff text names how to reach a person. A blank text is reported on its own."""
+    text = text.strip().casefold()
+    return not text or any(
+        contact.strip().casefold() in text for contact in (location.phone, location.email)
+    )
 
 
 def _reference_problems(pack: BusinessPack) -> list[str]:
