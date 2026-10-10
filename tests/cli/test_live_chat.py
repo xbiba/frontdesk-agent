@@ -152,11 +152,16 @@ def test_without_live_the_gemini_route_is_still_refused_for_chat(
     assert "Live:" not in result.output  # nothing was metered, nothing was live
 
 
+# Rich styles the help on a CI terminal (GitHub Actions): read it without the escape codes.
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
 def test_the_help_names_the_live_options() -> None:
     result = runner.invoke(app, ["chat", "--help"])
     assert result.exit_code == 0
-    assert "--live" in result.stdout
-    assert "--budget" in result.stdout
+    help_text = ANSI_ESCAPE.sub("", result.stdout)
+    assert "--live" in help_text
+    assert "--budget" in help_text
 
 
 # --- The env files ----------------------------------------------------------------------------------
