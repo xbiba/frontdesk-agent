@@ -331,6 +331,33 @@ def test_the_vertex_route_builds_live_models_without_a_request(
 
 
 @pytest.mark.db
+@pytest.mark.parametrize(
+    ("route", "data_class"),
+    [
+        pytest.param("offline-demo", DataClass.PATIENT_DERIVED, id="offline"),
+        pytest.param("vertex-eu-opus", DataClass.PATIENT_DERIVED, id="claude"),
+        pytest.param("vertex-eu-gemini-flash-lite", DataClass.EVALUATION, id="gemini"),
+    ],
+)
+def test_the_runtime_a_deployment_builds_keeps_no_refused_answer(
+    activate_pack: Activate,
+    app_url: str,
+    clinic_pack: BusinessPack,
+    route: str,
+    data_class: DataClass,
+) -> None:
+    # Only the live evaluation turns it on, on the runtime it is given (`run_live_eval`).
+    deployment = _deployment(
+        clinic_pack,
+        activate_pack(clinic_pack),
+        app_url=app_url,
+        model_route=route,
+        gcp_project="demo-project",
+    )
+    assert build_turn_runtime(deployment, data_class=data_class).keep_drafts is False
+
+
+@pytest.mark.db
 def test_an_unregistered_route_is_refused(
     activate_pack: Activate, app_url: str, clinic_pack: BusinessPack
 ) -> None:

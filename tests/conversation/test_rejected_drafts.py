@@ -170,3 +170,21 @@ async def test_a_draft_survives_the_disclosure_that_opens_a_conversation(
     assert result.text.startswith(disclosure)
     assert result.draft is not None
     assert result.draft.claims[0].text == INVENTED
+
+
+async def test_a_runtime_keeps_no_refused_answer_unless_it_is_asked_to(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    # No `replace(keep_drafts=...)` here: the default decides. The live evaluation asks, nothing
+    # else does, because a draft is model text derived from a message.
+    runtime = make_runtime(
+        clinic_pack,
+        activate_pack(clinic_pack),
+        classifier_model(PARKING),
+        document_responder(claim=_invented),
+    )
+    assert runtime.keep_drafts is False
+    result, _ = await handle_message("Is there free parking?", ConversationState(turns=1), runtime)
+    assert result.outcome is TurnOutcome.HANDOFF
+    assert "number_not_in_quote" in result.trace.check_reasons
+    assert result.draft is None

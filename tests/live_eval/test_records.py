@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import io
 import os
+from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from frontdesk.live_eval.records import (
     RunFileError,
     RunFiles,
+    RunManifest,
     append_case,
     completed_cases,
     manifest_differences,
@@ -18,17 +21,22 @@ from frontdesk.live_eval.records import (
     read_turns,
     write_manifest,
 )
-from tests.live_eval.helpers import TEXTS, manifest, record
+from tests.live_eval.helpers import AT, TEXTS, manifest, record
 
 
 @pytest.mark.parametrize(
     ("change", "field"),
     [
+        ({"business_id": "demo-shop"}, "business_id"),
+        ({"route": "offline-demo"}, "route"),
+        ({"model_name": "gemini-3.1-flash"}, "model_name"),
+        ({"engine_commit": "def5678"}, "engine_commit"),
+        # The guard against resuming on a cases file that was edited since the first call.
+        ({"cases_digest": "e" * 64}, "cases_digest"),
         ({"knowledge_version": "kv-2"}, "knowledge_version"),
+        ({"classifier_prompt": "x" * 12}, "classifier_prompt"),
         ({"responder_prompt": "x" * 12}, "responder_prompt"),
         ({"fixed_texts": {"it": {**TEXTS, "handoff": "Chiama il 112."}}}, "fixed_texts"),
-        ({"route": "offline-demo"}, "route"),
-        ({"engine_commit": "def5678"}, "engine_commit"),
     ],
 )
 def test_a_run_resumes_only_with_the_same_knowledge_prompts_texts_route_and_engine(
@@ -218,3 +226,83 @@ def test_a_damaged_line_is_an_error_even_as_the_last_one_with_its_newline(tmp_pa
     files.turns.write_text(record("a", "uno").model_dump_json() + "\nnot json\n", encoding="utf-8")
     with pytest.raises(RunFileError, match="line 2"):
         read_turns(files)
+
+
+class _Counted:
+    """A text file that lists each string written to it."""
+
+    def __init__(self, handle: Any, writes: list[str]) -> None:
+        self._handle = handle
+        self._writes = writes
+
+    def write(self, data: str) -> int:
+        self._writes.append(data)
+        return int(self._handle.write(data))
+
+    def __enter__(self) -> _Counted:
+        self._handle.__enter__()
+        return self
+
+    def __exit__(self, *error: object) -> object:
+        return self._handle.__exit__(*error)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._handle, name)
+
+
+def test_a_case_is_appended_in_a_single_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # One write for the case, not one for each line: a stop between two writes would leave half a
+    # case that looks finished. The final bytes alone cannot tell the two apart.
+    files = RunFiles(tmp_path)
+    writes: list[str] = []
+    real_open = Path.open
+
+    def counting(self: Path, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
+        handle = real_open(self, mode, *args, **kwargs)
+        return _Counted(handle, writes) if self == files.turns and "a" in mode else handle
+
+    monkeypatch.setattr(Path, "open", counting)
+    append_case(files, [record("b", "due", turn=1, turns=2), record("b", "tre", turn=2, turns=2)])
+    assert len(writes) == 1
+    assert writes[0].count("\n") == 2  # both turns, whole, in that one write
+    assert [(r.case_id, r.turn) for r in read_turns(files)] == [("b", 1), ("b", 2)]
+
+
+# A different value for each field of the manifest.
+CHANGES: dict[str, object] = {
+    "run_id": "run-2",
+    "business_id": "demo-shop",
+    "route": "offline-demo",
+    "model_name": "gemini-3.1-flash",
+    "engine_commit": "def5678",
+    "cases_file": "evals/moved.yaml",
+    "cases_digest": "e" * 64,
+    "knowledge_version": "kv-2",
+    "classifier_prompt": "x" * 12,
+    "responder_prompt": "x" * 12,
+    "fixed_texts": {"it": {**TEXTS, "handoff": "Chiama il 112."}},
+    "budget_file": "runs/budget.yaml",
+    "started_at": AT + timedelta(days=1),
+}
+# What makes a run this run and no other. The rest (its name, where the cases file lies, which
+# budget it was started with, when) may differ when it resumes.
+IDENTIFYING = {
+    "business_id",
+    "route",
+    "model_name",
+    "engine_commit",
+    "cases_digest",
+    "knowledge_version",
+    "classifier_prompt",
+    "responder_prompt",
+    "fixed_texts",
+}
+
+
+def test_every_field_of_the_manifest_is_decided_to_identify_the_run_or_not() -> None:
+    assert set(CHANGES) == set(RunManifest.model_fields)  # a new field needs a decision here
+    for name, value in CHANGES.items():
+        differences = manifest_differences(manifest(), manifest(**{name: value}))
+        assert differences == ([name] if name in IDENTIFYING else []), name

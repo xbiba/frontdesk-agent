@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -17,12 +17,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.conversation.evaluation import TurnCase
 from frontdesk.conversation.turn import TurnRuntime
-from frontdesk.live_eval.records import RunFiles, completed_cases, read_turns
+from frontdesk.live_eval import runner
+from frontdesk.live_eval.records import RunFiles, TurnRecord, completed_cases, read_turns
 from frontdesk.live_eval.runner import run_live_eval
 from frontdesk.model_gateway.costs import Budget
 from frontdesk.model_gateway.metering import Meter
 from frontdesk.tenancy.pack import BusinessPack
 from tests.conversation.helpers import classifier_model, document_responder, make_runtime
+from tests.live_eval.rig import Rig
 from tests.model_gateway.attempt_helpers import Sleeps
 from tests.model_gateway.budget_helpers import ROUTE, write_budget
 
@@ -256,3 +258,25 @@ async def test_a_run_cancelled_in_the_middle_of_a_case_keeps_only_whole_cases(
         await run_live_eval(runtime, CASES, files=files, run_id="run-1", meter=None)
     assert set(completed_cases(read_turns(files))) == {"one"}  # "two" ran one turn of two
     assert [r.case_id for r in read_turns(files)] == ["one"]
+
+
+async def test_a_case_is_written_once_all_its_turns_have_run(
+    activate_pack: Activate,
+    clinic_pack: BusinessPack,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # One write for each case, carrying every turn, made after the case's last request was served:
+    # a write for each turn would leave half a case on disk when the run is cut between them.
+    rig = Rig(clinic_pack, activate_pack(clinic_pack), tmp_path)
+    written: list[tuple[list[int], int]] = []
+    real_append = runner.append_case
+
+    def spy(files: RunFiles, records: Sequence[TurnRecord]) -> None:
+        written.append(([record.turn for record in records], len(rig.requests)))
+        real_append(files, records)
+
+    monkeypatch.setattr(runner, "append_case", spy)
+    await rig.start()
+    # ("one": 1 turn after 1 request; "two": 2 turns after 3 requests; "three": 1 turn after 4)
+    assert written == [([1], 1), ([1, 2], 3), ([1], 4)]
