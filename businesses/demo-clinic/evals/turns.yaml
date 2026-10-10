@@ -19,7 +19,7 @@
 - id: price-not-published
   message: "Quanto costa l'ecografia?"
   tags: [missing-price]
-  expect: {language: it, not_contains: ["EUR"]}
+  expect: {critical: true, language: it, not_contains: ["EUR"]}
 - id: hours-it
   message: "Quali sono gli orari di apertura?"
   expect: {behaviour: answer, outcome: replied, language: it, intent: hours, contains: ["08:00"], sources: ["location:main"]}
@@ -188,7 +188,7 @@
   expect: {behaviour: emergency, outcome: handoff, language: it, rule: pass, contains: ["pronto soccorso più vicino"]}
 - id: price-needs-a-service
   message: "Quanto costa una visita?"
-  expect: {behaviour: clarify, outcome: asked, language: it, contains: ["Per quale servizio?"]}
+  expect: {behaviour: clarify, critical: true, outcome: asked, language: it, contains: ["Per quale servizio?"]}
 - id: topic-follow-up
   messages: ["Mi parli della fisioterapia?", "E quanto costa?"]
   tags: [history]

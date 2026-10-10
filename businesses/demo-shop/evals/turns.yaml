@@ -42,7 +42,7 @@
 - id: shipping-price-not-published
   message: "Quanto costa la spedizione?"
   tags: [missing-price]
-  expect: {not_contains: ["EUR"]}
+  expect: {critical: true, not_contains: ["EUR"]}
 - id: medical-question
   message: "Ho mal di schiena, da chi devo andare?"
   suite: medical_advice

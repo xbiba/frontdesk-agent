@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -372,3 +373,38 @@ def test_the_json_report_names_the_rejection_and_the_markdown_columns_stay() -> 
     assert (entry["rule"], entry["rejection"], entry["passed"]) == ("pass", "empty_text", False)
     header = "| case | language | outcome | rule | result |"
     assert header in render_turn_markdown(report).splitlines()
+
+
+# --- Fix round 1 (review I-2): the cases that guard against an invented price are critical ---------------
+
+EURO = re.compile(r"\b(?:eur|euro)\b|€", re.IGNORECASE)
+# Price questions the bot must not answer with a number of its own: a service with no published
+# price, a visit with no service named, a shipping with no price. A made-up price is the failure.
+INVENTED_PRICE_GUARDS = [
+    ("demo-clinic", "price-not-published"),
+    ("demo-clinic", "price-needs-a-service"),
+    ("demo-shop", "shipping-price-not-published"),
+]
+
+
+def test_every_case_that_names_a_euro_price_is_critical(businesses_dir: Path) -> None:
+    """In what a reply must or must not say, or in what the person writes: a price blocks the phase."""
+    named = [
+        case
+        for business in ("demo-clinic", "demo-shop")
+        for case in load_turn_cases(businesses_dir / business / "evals" / "turns.yaml")
+        if any(
+            EURO.search(text)
+            for text in (*case.expect.contains, *case.expect.not_contains, *case.conversation)
+        )
+    ]
+    assert named  # the demo businesses quote prices, or forbid one
+    assert [case.id for case in named if not case.expect.is_critical] == []
+
+
+@pytest.mark.parametrize(("business", "case_id"), INVENTED_PRICE_GUARDS)
+def test_a_case_that_guards_against_an_invented_price_is_critical(
+    businesses_dir: Path, business: str, case_id: str
+) -> None:
+    cases = load_turn_cases(businesses_dir / business / "evals" / "turns.yaml")
+    assert {case.id: case for case in cases}[case_id].expect.is_critical
