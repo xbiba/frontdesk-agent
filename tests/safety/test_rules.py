@@ -535,6 +535,7 @@ def test_the_promise_of_the_form_without_the_invisible_characters_is_reported_fi
         ("Ti confermeremo l'orario.", "ti confermeremo"),
         ("Ti terremo aggiornato.", "ti terremo aggiornat"),
         ("Contatterò la reception per te.", "contattero"),
+        ("Informerò il medico.", "informero"),
         ("Chiederò alla reception di richiamarti.", "chiedero alla reception di"),
         ("Provvederemo a contattarti.", "provvederemo a contattarti"),
         ("Risponderemo entro 24 ore.", "risponderemo entro"),
