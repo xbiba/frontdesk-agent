@@ -6,12 +6,15 @@ embedder (the demo's local MiniLM); each candidate is a Vertex AI route approved
 Results are saved per embedder, so a run that stopped (budget, rate limit) resumes with the next.
 
 Like the other live commands it refuses to start while a proxy, certificate or billing variable is
-set, and it holds the budget's ledger while it measures, so that no other live run spends meanwhile.
+set, proves that the ledger takes a line before the first paid text, and holds the ledger while it
+measures, so that no other live run spends meanwhile. Every way it can stop ends in one `error:`
+line (or `stopped:` for Ctrl-C) and exit code 1 (130), and the results saved so far are kept.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +25,7 @@ from sqlalchemy import make_url, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
+from frontdesk.cli.live import EXIT_INTERRUPTED
 from frontdesk.cli.live_common import (
     eur_left,
     prove_ledger,
@@ -42,7 +46,7 @@ from frontdesk.knowledge.embedder_experiment import (
     run_candidate,
 )
 from frontdesk.knowledge.embedders import Embedder, build_embedder
-from frontdesk.knowledge.evaluation import RetrievalCase, load_cases
+from frontdesk.knowledge.evaluation import RetrievalCase, load_cases, unknown_relevant_documents
 from frontdesk.knowledge.versions import (
     VersionStatus,
     activate,
@@ -60,6 +64,7 @@ from frontdesk.tenancy.pack import BusinessPack
 
 SCRATCH_SUFFIX: Final = "_experiment"
 REFERENCE: Final = "reference"
+_RESUME: Final = "run the same command again to resume"
 
 
 def vertex_candidate(route_id: str, settings: Settings, budget: Budget, run_id: str) -> Candidate:
@@ -98,6 +103,7 @@ class _Experiment:
     settings: Settings
     budget: Budget
     cases: Sequence[RetrievalCase]
+    cases_path: Path
     pack: BusinessPack
     reference: Embedder
     chosen: Sequence[Candidate]
@@ -129,6 +135,9 @@ def eval_embedders(
         left = eur_left(budget, spent_usd(budget))
     except ValueError as error:  # a budget, a dataset or a pack: each names its file
         raise fail(str(error)) from error
+    again = next((route for route in candidates if candidates.count(route) > 1), None)
+    if again is not None:
+        raise fail(f"candidate '{again}' is given more than once")
     chosen = [vertex_candidate(route, settings, budget, run_dir.name) for route in candidates]
     reference = build_embedder(settings.embedding_backend)
     typer.echo(
@@ -138,16 +147,19 @@ def eval_embedders(
     if not yes and not typer.confirm("Start the experiment?", default=False):
         raise typer.Exit(1)
     _require_scratch_server(settings.migration_database_url)
-    experiment = _Experiment(settings, budget, cases, pack, reference, chosen, run_dir)
+    experiment = _Experiment(settings, budget, cases, cases_path, pack, reference, chosen, run_dir)
     try:
-        results = _measure(experiment)
-    except BudgetError as error:
+        report = _conclude(experiment, _measure(experiment))
+    except KeyboardInterrupt as stop:  # the request in flight has its line in the ledger
+        typer.echo(f"stopped: {_RESUME}", err=True)
+        raise typer.Exit(EXIT_INTERRUPTED) from stop
+    except BudgetError as error:  # the ledger, or another run that holds it
         raise fail(str(error)) from error
-    decision = decide(results[0], results[1:])
-    report = render_experiment(
-        results, decision, usd_per_eur=budget.config.exchange_rate.usd_per_eur
-    )
-    (run_dir / "embedders.md").write_text(report, encoding="utf-8")
+    except OSError as error:  # a run directory or a file in it that cannot be made, read or written
+        # A rename names the file it was moving first and the one it was moving it to second.
+        raise fail(
+            f"{error.filename2 or error.filename or run_dir}: {error.strerror or error}"
+        ) from error
     typer.echo(report)
 
 
@@ -164,6 +176,7 @@ def _measure(experiment: _Experiment) -> list[CandidateResult]:
         upgrade_to_head(settings.migration_database_url)
         factory = make_session_factory(make_engine(settings.migration_database_url))
         _activate(factory, experiment.pack, experiment.reference)
+        _require_known_documents(factory, experiment)
         run_dir.mkdir(parents=True, exist_ok=True)
         return _run_all(
             factory,
@@ -173,6 +186,15 @@ def _measure(experiment: _Experiment) -> list[CandidateResult]:
             run_dir,
             experiment.budget,
         )
+
+
+def _conclude(experiment: _Experiment, results: Sequence[CandidateResult]) -> str:
+    """The decision of the rule on the results, as the report that is saved and shown."""
+    decision = decide(results[0], results[1:])
+    rate = experiment.budget.config.exchange_rate.usd_per_eur
+    report = render_experiment(results, decision, usd_per_eur=rate)
+    _save(experiment.run_dir / "embedders.md", report)
+    return report
 
 
 def _run_all(
@@ -188,7 +210,7 @@ def _run_all(
     for candidate in everyone:
         saved = run_dir / f"{candidate.name}.json"
         if saved.exists():
-            results.append(result_from_json(saved.read_text(encoding="utf-8")))
+            results.append(_read_saved(saved))
             continue
         try:
             with business_session(factory, pack.id) as session:
@@ -208,9 +230,31 @@ def _run_all(
             raise fail(
                 f"{error}; the results so far are kept; run the same command to resume"
             ) from error
-        saved.write_text(result_json(result) + "\n", encoding="utf-8")
+        _save(saved, result_json(result) + "\n")
         results.append(result)
     return results
+
+
+def _read_saved(path: Path) -> CandidateResult:
+    try:
+        return result_from_json(path.read_text(encoding="utf-8"))
+    except (ValueError, LookupError, TypeError, AttributeError) as error:
+        raise fail(
+            f"{path}: is not a result of this experiment; delete it to measure that embedder again"
+        ) from error
+
+
+def _save(path: Path, text: str) -> None:
+    """Write a file whole or not at all: a stop in the middle leaves the old file, or none, never
+    half of one that the next run would trip on."""
+    partial = path.with_name(f"{path.name}.partial")
+    partial.write_text(text, encoding="utf-8")
+    try:
+        partial.replace(path)
+    except OSError:
+        with suppress(OSError):
+            partial.unlink()
+        raise
 
 
 def _check_scratch(settings: Settings) -> None:
@@ -246,6 +290,22 @@ def _require_scratch_server(url: str) -> None:
             f"the experiment writes tables: the server says this URL reaches '{reached}', whose "
             f"name does not end in '{SCRATCH_SUFFIX}' (FRONTDESK_MIGRATION_DATABASE_URL)"
         )
+
+
+def _require_known_documents(factory: sessionmaker[Session], experiment: _Experiment) -> None:
+    """Refuse a case whose relevant document is not one of the knowledge, as `eval retrieval` does:
+    a mistyped key can never be found, so it would score 0 for every embedder without a word."""
+    pack = experiment.pack
+    with business_session(factory, pack.id) as session:
+        unknown = unknown_relevant_documents(session, business_id=pack.id, cases=experiment.cases)
+    for case_id, key in unknown:
+        typer.echo(
+            f"error: {experiment.cases_path}: case '{case_id}': '{key}' is not a document of the "
+            "active knowledge version (a document key is its file name without .md)",
+            err=True,
+        )
+    if unknown:
+        raise typer.Exit(1)
 
 
 def _activate(factory: sessionmaker[Session], pack: BusinessPack, reference: Embedder) -> None:

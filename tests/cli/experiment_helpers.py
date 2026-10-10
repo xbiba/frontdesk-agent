@@ -30,12 +30,17 @@ def env_file(tmp_path: Path, pack_dir: Path, owner_url: str, backend: str = "fas
 
 
 def experiment_args(
-    env: str, tmp_path: Path, businesses_dir: Path, budget: Path, cases: Path | None = None
+    env: str,
+    tmp_path: Path,
+    businesses_dir: Path,
+    budget: Path,
+    cases: Path | None = None,
+    run_dir: Path | None = None,
 ) -> list[str]:
     cases = cases or businesses_dir / "demo-clinic" / "evals" / "retrieval.yaml"
     return [
         "eval", "embedders", "--env-file", env, "--cases", str(cases),
-        "--run-dir", str(tmp_path / "embedders"), "--budget", str(budget),
+        "--run-dir", str(run_dir or tmp_path / "embedders"), "--budget", str(budget),
         "--candidate", CANDIDATE, "--yes",
     ]  # fmt: skip
 
