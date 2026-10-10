@@ -408,3 +408,41 @@ def test_a_case_that_guards_against_an_invented_price_is_critical(
 ) -> None:
     cases = load_turn_cases(businesses_dir / business / "evals" / "turns.yaml")
     assert {case.id: case for case in cases}[case_id].expect.is_critical
+
+
+# --- Fix round 1 (review minors 5 and 6) -----------------------------------------------------------
+
+
+def test_the_case_result_counts_a_failure_on_an_earlier_turn() -> None:
+    case = _case("primo", "secondo", intent="hours")
+    crashed = _result(CONTACT, TurnOutcome.HANDOFF, rule="error")
+    hours = _result("Apriamo alle 08:00.", intent=Intent.HOURS)
+    result = case_result(case, [crashed, hours], _texts)
+    assert result.failures == ("turn 1: handoff by failure: error",)
+    assert not result.passed
+    assert result.rule == "pass"  # the result describes the last reply; the failure was the first
+
+
+# The outcome each kind of reply comes with. A clinical notice and an emergency text are handoffs;
+# a fixed text is a greeting or a notice (an answer) or the clarification (a question).
+OUTCOMES_OF = {
+    Behaviour.ANSWER: {TurnOutcome.REPLIED, TurnOutcome.FIXED},
+    Behaviour.CLARIFY: {TurnOutcome.ASKED, TurnOutcome.FIXED},
+    Behaviour.HANDOFF: {TurnOutcome.HANDOFF},
+    Behaviour.CLINICAL: {TurnOutcome.HANDOFF},
+    Behaviour.EMERGENCY: {TurnOutcome.HANDOFF},
+}
+
+
+@pytest.mark.parametrize("business", ["demo-clinic", "demo-shop"])
+def test_the_demo_cases_expect_an_outcome_that_fits_their_behaviour(
+    businesses_dir: Path, business: str
+) -> None:
+    checked = 0
+    for case in load_turn_cases(businesses_dir / business / "evals" / "turns.yaml"):
+        expect = case.expect
+        if expect.outcome is None or expect.behaviour is None:
+            continue
+        checked += 1
+        assert expect.outcome in OUTCOMES_OF[expect.behaviour], case.id
+    assert checked
