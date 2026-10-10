@@ -176,7 +176,7 @@ def test_text_nobody_explains_is_treated_as_an_answer() -> None:
 
 def test_an_emergency_is_no_answer_whatever_the_reply_holds() -> None:
     alarm = case("alarm", behaviour="emergency")
-    reply = f"Aperto 24 ore su 24.\n\n{TEXTS[FixedTextKey.EMERGENCY]}\n\n{CONTACT}"
+    reply = f"{TEXTS[FixedTextKey.EMERGENCY]}\n\nAperto 24 ore su 24.\n\n{CONTACT}"
     sent = record(
         "alarm", reply, outcome="handoff", rule="emergency", category="emergency", sources=("x",)
     )

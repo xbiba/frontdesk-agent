@@ -90,7 +90,8 @@ def test_a_case_that_expects_the_fallback_takes_it_as_given() -> None:
 
 def test_the_rule_of_the_turn_is_the_one_recorded() -> None:
     wanted = case("alarm", behaviour="emergency", rule="emergency")
-    sent = record("alarm", CONTACT, outcome="handoff", rule="pass", category="emergency")
+    alarm = f"{TEXTS['emergency']}\n\n{CONTACT}"
+    sent = record("alarm", alarm, outcome="handoff", rule="pass", category="emergency")
     [verdict] = judge([wanted], [sent], FIXED_TEXTS, {})
     assert verdict.failures == ("rule: pass",)
 

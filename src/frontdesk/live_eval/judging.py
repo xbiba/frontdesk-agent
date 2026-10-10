@@ -19,7 +19,7 @@ in any turn, that is not a record answer or a text of the pack (`model_text`).
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final, Literal
 
@@ -242,7 +242,7 @@ def _verdict(
     texts: Callable[[Language], Mapping[FixedTextKey, str]],
     label: Label | None,
 ) -> CaseVerdict:
-    results = [as_result(turn) for turn in turns]
+    results = [_read(as_result(turn), texts(turn.language)) for turn in turns]
     kinds = [observed_behaviour(result, texts(result.language)) for result in results]
     written = [
         _answer_given(turn, kind, texts(turn.language))
@@ -260,6 +260,19 @@ def _verdict(
         model_text=any(written),
         label=label,
     )
+
+
+def _read(result: TurnResult, fixed: Mapping[FixedTextKey, str]) -> TurnResult:
+    """A recorded turn as the checks should read it: an emergency also needs the pack's emergency
+    text at the head of the reply. The trace says the pipeline meant one; the reply is what the
+    person was told, and the pipeline keeps the text first, even ahead of the disclosure of a first
+    reply. Without it the turn is read as what its reply is, so the case fails and the emergency
+    counts as missed."""
+    if result.trace.category is Category.EMERGENCY and not result.text.startswith(
+        fixed[FixedTextKey.EMERGENCY]
+    ):
+        return replace(result, trace=replace(result.trace, category=None))
+    return result
 
 
 def _answer_given(turn: TurnRecord, observed: Behaviour, fixed: Mapping[FixedTextKey, str]) -> str:
