@@ -30,7 +30,10 @@ VERTEX_HOSTS: Final[Mapping[str, str]] = MappingProxyType(
     }
 )
 VERTEX_API_VERSION: Final = "v1"
-# One turn may take 45 seconds in all (conversation.turn.TURN_TIMEOUT_SECONDS).
+# One turn may take 45 seconds in all (conversation.turn.TURN_TIMEOUT_SECONDS), which bounds the
+# requests of a turn and their retries. For Gemini, google-genai sends this value as the timeout of
+# each request, and that replaces the 5 second connect timeout of model_http_client (Claude's
+# client keeps it): a Gemini connection may take up to 30 seconds to open.
 MODEL_TIMEOUT_SECONDS: Final = 30.0
 # 429 and 5xx answers are retried with growing waits of 2, 4 and 8 seconds (M3 design §6).
 GOOGLE_RETRIES: Final = HttpRetryOptions(
