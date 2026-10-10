@@ -20,6 +20,7 @@ from typing import IO
 
 import pytest
 
+from frontdesk.model_gateway.access import ENVIRONMENT_OVERRIDES
 from tests.cli.live_chat_helpers import PRICE, Install, bootstrapped, live
 from tests.model_gateway.budget_helpers import write_budget
 
@@ -27,8 +28,11 @@ TURN_LOGGER = logging.getLogger("frontdesk.conversation.turn")
 EXIT_AFTER_CTRL_C = 130
 # Python gives SIGINT its KeyboardInterrupt handler only if the shell that started pytest did not
 # ignore it (a background job of a script does); the child asks for it, as an operator's has it.
+# The free request that proves the credentials would go to Google: the child answers it itself.
 ENTRY_POINT = (
-    "import signal; signal.signal(signal.SIGINT, signal.default_int_handler); "
+    "import asyncio, signal; signal.signal(signal.SIGINT, signal.default_int_handler); "
+    "import frontdesk.cli.live_common as common; "
+    "common.check_route_access = lambda *args, **kwargs: asyncio.sleep(0); "
     "from frontdesk.cli.main import app; app()"
 )
 
@@ -62,11 +66,13 @@ def test_an_interrupt_while_the_chat_waits_for_a_line_ends_it_with_130_and_frees
 
 
 def _environment() -> dict[str, str]:
-    """The environment of an operator's shell: no setting of ours, no Google variable."""
+    """The environment of an operator's shell: no setting of ours, no Google variable, no proxy or
+    certificate variable (a live chat refuses to start while one is set)."""
     kept = {
         name: value
         for name, value in os.environ.items()
         if not name.startswith(("FRONTDESK_", "GOOGLE_", "CLOUDSDK_", "TYPER_", "_TYPER_"))
+        and name.upper() not in ENVIRONMENT_OVERRIDES
     }
     return {**kept, "NO_COLOR": "1", "COLUMNS": "200", "PYTHONUNBUFFERED": "1"}
 

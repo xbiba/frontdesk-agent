@@ -16,21 +16,15 @@ import typer
 from sqlalchemy.orm import Session
 
 from frontdesk.cli.chat import run_chat
+from frontdesk.cli.live import eval_report, live_turns, read_cases
 from frontdesk.cli.live_chat import run_live_chat
-from frontdesk.composition import (
-    Deployment,
-    NoActiveKnowledgeError,
-    build_turn_runtime,
-    open_deployment,
-)
+from frontdesk.cli.runtime import build_runtime, without_knowledge
+from frontdesk.composition import Deployment, NoActiveKnowledgeError, open_deployment
 from frontdesk.conversation.evaluation import (
-    TurnDatasetError,
-    load_turn_cases,
     render_turn_markdown,
     run_turn_eval,
     turn_report_json,
 )
-from frontdesk.conversation.turn import TurnRuntime
 from frontdesk.db.engine import business_session
 from frontdesk.db.migrate import upgrade_to_head
 from frontdesk.knowledge.evaluation import (
@@ -42,7 +36,6 @@ from frontdesk.knowledge.evaluation import (
     unknown_relevant_documents,
 )
 from frontdesk.knowledge.versions import (
-    EmbedderMismatchError,
     KnowledgeStateError,
     VersionStatus,
     activate,
@@ -55,7 +48,7 @@ from frontdesk.knowledge.versions import (
     rollback,
     version_status,
 )
-from frontdesk.model_gateway.routes import UnapprovedRouteError
+from frontdesk.model_gateway.routes import ROUTES
 from frontdesk.settings import load_settings
 from frontdesk.tenancy.pack import BusinessPack
 
@@ -90,6 +83,27 @@ CasesPath = Annotated[
         "--cases", dir_okay=False, help="The cases file (default: evals/ inside the business pack)."
     ),
 ]
+TagOption = Annotated[
+    list[str] | None, typer.Option("--tag", help="Only the cases with this tag (repeatable).")
+]
+LiveOption = Annotated[
+    bool, typer.Option("--live", help="Run on a live model route: each call costs money.")
+]
+RouteOption = Annotated[
+    str | None, typer.Option("--route", help="The live route to run on (with --live).")
+]
+RunDirOption = Annotated[
+    Path | None,
+    typer.Option("--run-dir", file_okay=False, help="Where a live run keeps its records."),
+]
+BudgetOption = Annotated[
+    Path | None,
+    typer.Option("--budget", exists=True, dir_okay=False, help="The phase's budget file."),
+]
+LimitOption = Annotated[
+    int | None, typer.Option("--limit", min=1, help="Run at most this many cases now.")
+]
+YesOption = Annotated[bool, typer.Option("--yes", help="Start a live run without asking.")]
 
 
 @app.callback()
@@ -102,31 +116,6 @@ def _keep_output_clean() -> None:
 
 def _deployment(env_file: Path) -> Deployment:
     return open_deployment(load_settings(env_file))
-
-
-def _without_knowledge(error: NoActiveKnowledgeError, env_file: Path) -> typer.Exit:
-    """Say what to run when the business has no active knowledge; the caller raises the result."""
-    typer.echo(
-        f"{error}. Draft, approve and activate a version first "
-        f"(demo businesses: frontdesk knowledge bootstrap-demo --env-file {env_file}).",
-        err=True,
-    )
-    return typer.Exit(1)
-
-
-def _runtime(deployment: Deployment, env_file: Path) -> TurnRuntime:
-    try:
-        return build_turn_runtime(deployment)
-    except NoActiveKnowledgeError as error:
-        raise _without_knowledge(error, env_file) from error
-    except EmbedderMismatchError as error:
-        typer.echo(f"error: {error} --env-file {env_file}", err=True)
-        raise typer.Exit(1) from error
-    except UnapprovedRouteError as error:
-        # A conversation carries patient-derived text: a route approved for evaluation data only
-        # never receives one (M3 design §4.2).
-        typer.echo(f"error: {error} (--env-file {env_file})", err=True)
-        raise typer.Exit(1) from error
 
 
 @contextmanager
@@ -288,7 +277,7 @@ def eval_retrieval(
     with _session(deployment) as session:
         check_embedder(session, deployment.pack.id, deployment.embedder)
         if active_version_id(session, deployment.pack.id) is None:
-            raise _without_knowledge(NoActiveKnowledgeError(deployment.pack.id), env_file)
+            raise without_knowledge(NoActiveKnowledgeError(deployment.pack.id), env_file)
         unknown = unknown_relevant_documents(
             session, business_id=deployment.pack.id, cases=retrieval_cases
         )
@@ -315,22 +304,88 @@ def eval_retrieval(
 
 
 @eval_app.command("turns")
-def eval_turns(env_file: EnvFile, output: ReportPath = None) -> None:
-    """Run the business's labelled conversation turns; exit 1 if any case fails."""
+def eval_turns(
+    env_file: EnvFile,
+    output: ReportPath = None,
+    cases: CasesPath = None,
+    tag: TagOption = None,
+    live: LiveOption = False,
+    route: RouteOption = None,
+    run_dir: RunDirOption = None,
+    budget: BudgetOption = None,
+    limit: LimitOption = None,
+    yes: YesOption = False,
+) -> None:
+    """Run the business's labelled conversation turns; exit 1 if any case fails.
+
+    Offline by default, and free: a route that calls a model is refused without --live. With
+    --live the run records every turn in --run-dir, resumes there after a stop, and writes the
+    report and the review page (`frontdesk eval report` recomputes them with the labels).
+
+    A live run exits 0 when it is done, 1 on an error (a budget another run holds included), 3 when
+    the rate limit stopped it, 4 when the budget has no room, 5 when the model keeps failing, and
+    130 on Ctrl-C. After a stop, the same command resumes the run.
+    """
+    tags = tag or []
+    if live:
+        if route is None or run_dir is None:
+            raise _usage("--live needs --route and --run-dir")
+        if output is not None:
+            raise _usage("--output is for offline runs: a live run writes report.json in --run-dir")
+        live_turns(
+            env_file,
+            route_id=route,
+            cases_path=cases,
+            run_dir=run_dir,
+            budget_path=budget,
+            limit=limit,
+            yes=yes,
+            tags=tags,
+        )
+        return
+    if route is not None or run_dir is not None or budget is not None or limit is not None:
+        raise _usage("--route, --run-dir, --budget and --limit are for --live runs")
+    _offline_turns(env_file, output, cases, tags)
+
+
+def _offline_turns(
+    env_file: Path, output: Path | None, cases: Path | None, tags: list[str]
+) -> None:
+    """The free run: the deployment's own offline route, in memory, nothing recorded."""
     deployment = _deployment(env_file)
-    dataset = deployment.settings.require_business_pack() / "evals" / "turns.yaml"
-    try:
-        cases = load_turn_cases(dataset)
-    except TurnDatasetError as error:
-        typer.echo(str(error), err=True)
-        raise typer.Exit(1) from error
-    runtime = _runtime(deployment, env_file)
-    report = asyncio.run(run_turn_eval(runtime, cases, route=deployment.settings.model_route))
+    configured = ROUTES.get(deployment.settings.model_route)
+    if configured is not None and configured.provider != "offline":
+        raise _usage(f"route '{configured.route_id}' calls a live model: add --live and a --budget")
+    dataset = cases or deployment.settings.require_business_pack() / "evals" / "turns.yaml"
+    turn_cases = read_cases(dataset, tags)
+    runtime = build_runtime(deployment, env_file)
+    report = asyncio.run(run_turn_eval(runtime, turn_cases, route=deployment.settings.model_route))
     typer.echo(render_turn_markdown(report))
     if output is not None:
         output.write_text(turn_report_json(report), encoding="utf-8")
     if not report.ok:
         raise typer.Exit(1)
+
+
+@eval_app.command("report")
+def eval_report_command(
+    run_dir: Annotated[
+        Path,
+        typer.Option("--run-dir", exists=True, file_okay=False, help="A live run's directory."),
+    ],
+    budget: BudgetOption = None,
+    tag: Annotated[
+        list[str] | None,
+        typer.Option("--tag", help="The tags the run was started with (repeatable)."),
+    ] = None,
+) -> None:
+    """Judge a live run again with its labels.yaml; rewrite its report and review page."""
+    eval_report(run_dir, budget, tag or [])
+
+
+def _usage(message: str) -> typer.Exit:
+    typer.echo(f"error: {message}", err=True)
+    return typer.Exit(2)
 
 
 @app.command("chat")
@@ -359,7 +414,7 @@ def chat(
         run_live_chat(env_file, budget, show_trace=trace, read_line=_read_line)
         return
     deployment = _deployment(env_file)
-    runtime = _runtime(deployment, env_file)
+    runtime = build_runtime(deployment, env_file)
     typer.echo(f"{deployment.pack.name} ({deployment.pack.profile}) — type 'exit' to quit")
     asyncio.run(run_chat(runtime, read_line=_read_line, write=typer.echo, show_trace=trace))
 

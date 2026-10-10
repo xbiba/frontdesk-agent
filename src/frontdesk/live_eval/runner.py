@@ -33,7 +33,7 @@ from frontdesk.model_gateway.metering import CallRecord, Meter
 class RunProgress:
     done: int  # cases recorded, this call's and earlier ones
     total: int
-    stopped: str | None  # "budget", "rate_limited" or "ledger" when the run had to stop
+    stopped: str | None  # why the meter stopped the run (`Meter.stop_reason`), or None
 
 
 def _utc_now() -> datetime:
