@@ -553,3 +553,31 @@ def test_the_floor_in_the_env_file_is_the_default_of_the_retrieval_evaluation(
     assert UNFLOORED_ROW in evaluate(plain)
     assert FLOORED_ROW in evaluate(floored)  # no flag: the setting is the floor
     assert UNFLOORED_ROW in evaluate(floored, "--min-similarity", "0")  # an explicit 0 overrides it
+
+
+def test_the_retrieval_report_records_the_floor_that_was_used(
+    tmp_path: Path, businesses_dir: Path, database: tuple[str, str]
+) -> None:
+    env = _env(tmp_path, "clinic", businesses_dir / "demo-clinic", database)
+    env.write_text(
+        env.read_text(encoding="utf-8") + "FRONTDESK_MIN_RETRIEVAL_SIMILARITY=0.9\n",
+        encoding="utf-8",
+    )
+    _run("knowledge", "bootstrap-demo", "--env-file", str(env))
+    cases = tmp_path / "retrieval.yaml"
+    cases.write_text(UNRELATED_CASE, encoding="utf-8")
+    report = tmp_path / "report.json"
+
+    def evaluate(*flags: str) -> str:
+        args = ["eval", "retrieval", "--env-file", str(env), "--cases", str(cases)]
+        return _run(*args, "--output", str(report), *flags)
+
+    def recorded() -> float:
+        return float(json.loads(report.read_text(encoding="utf-8"))["min_similarity"])
+
+    assert "min similarity = 0.9 ·" in evaluate()  # the setting
+    assert recorded() == 0.9
+    assert "min similarity = 0.5 ·" in evaluate("--min-similarity", "0.5")  # the flag wins
+    assert recorded() == 0.5
+    assert "min similarity = 0 ·" in evaluate("--min-similarity", "0")  # and so does an explicit 0
+    assert recorded() == 0.0

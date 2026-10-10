@@ -55,6 +55,9 @@ class RetrievalReport:
     k: int
     embedder: str  # the identity of the embedder, e.g. "hash-v1" or "fastembed:<model>"
     results: tuple[CaseResult, ...]
+    # The vector side's relevance floor of the run (0: none). It has a default, so that a report
+    # built before the field existed still loads.
+    min_similarity: float = 0.0
 
     @property
     def mean_recall(self) -> float:
@@ -186,14 +189,15 @@ def run_retrieval_eval(
                 reciprocal_rank=reciprocal_rank(keys, case.relevant),
             )
         )
-    return RetrievalReport(business_id, k, embedder.identity, tuple(results))
+    return RetrievalReport(business_id, k, embedder.identity, tuple(results), min_similarity)
 
 
 def render_markdown(report: RetrievalReport) -> str:
     lines = [
         f"# Retrieval evaluation — {report.business_id}",
         "",
-        f"Embedder: {report.embedder} · k = {report.k} · cases: {len(report.results)}",
+        f"Embedder: {report.embedder} · k = {report.k} · min similarity = {report.min_similarity:g}"
+        f" · cases: {len(report.results)}",
         f"Mean recall@{report.k}: {report.mean_recall:.2f} · MRR: {report.mrr:.2f}",
         "",
         f"| case | language | recall@{report.k} | RR |",
@@ -223,6 +227,7 @@ def to_json(report: RetrievalReport) -> str:
             "business_id": report.business_id,
             "k": report.k,
             "embedder": report.embedder,
+            "min_similarity": report.min_similarity,
             "mean_recall": report.mean_recall,
             "mrr": report.mrr,
             "results": [asdict(result) for result in report.results],
