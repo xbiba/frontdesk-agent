@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import event, text
+from sqlalchemy import event, false, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
@@ -16,6 +16,7 @@ from frontdesk.knowledge.chunking import chunk_markdown
 from frontdesk.knowledge.embedders import HashEmbedder, cosine
 from frontdesk.knowledge.evidence import EvidenceKind
 from frontdesk.knowledge.retrieval import (
+    PlacedSelect,
     RetrievedChunk,
     build_tsquery,
     chunk_evidence,
@@ -579,3 +580,42 @@ def test_a_relevance_floor_leaves_the_full_text_side_alone(
         factory, clinic_pack.id, "parking", query_vector=unrelated, min_similarity=0.9
     )
     assert floored == _search(factory, clinic_pack.id, "parking", query_vector=None)
+
+
+# --- A replacement for the vector side (the embedder experiment) ------------------------------------
+
+
+@pytest.mark.db
+def test_a_replacement_vector_side_ranks_instead_of_the_vectors_of_the_chunks(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    factory = activate_pack(clinic_pack)
+    vector = HashEmbedder().embed(["free parking spaces behind the building"])[0]
+    asked: list[tuple[list[float], int]] = []
+
+    def nothing_is_near(
+        eligible: PlacedSelect, query_vector: list[float], candidates: int
+    ) -> PlacedSelect:
+        asked.append((query_vector, candidates))
+        return eligible.where(false()).limit(candidates)
+
+    # The vectors of the chunks would find the parking document (test_vector_ranking_is_used).
+    hits = _search(
+        factory, clinic_pack.id, "", query_vector=vector, candidates=7, nearest=nothing_is_near
+    )
+    assert hits == []
+    assert asked == [(vector, 7)]
+
+
+@pytest.mark.db
+def test_a_replacement_vector_side_is_left_out_when_the_query_has_no_direction(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    factory = activate_pack(clinic_pack)
+
+    def must_not_be_asked(*args: object) -> PlacedSelect:
+        raise AssertionError("a vector without direction ranks nothing")
+
+    zero = [0.0] * EMBEDDING_DIM
+    hits = _search(factory, clinic_pack.id, "parking", query_vector=zero, nearest=must_not_be_asked)
+    assert {hit.document_key for hit in hits} == {"parking-en"}

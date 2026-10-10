@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import ssl
 from collections.abc import Mapping
+from functools import cache
 from types import MappingProxyType
 from typing import Final
 
+import certifi
 import httpx2
 from google.genai import Client
 from google.genai.client import DebugConfig
@@ -37,8 +40,9 @@ VERTEX_API_VERSION: Final = "v1"
 MODEL_TIMEOUT_SECONDS: Final = 30.0
 # 429 and 5xx answers, timeouts and refused connections are retried with growing waits of 2, 4 and
 # 8 seconds (M3 design §6). The engine retries, not the SDK, so that each attempt is metered
-# (frontdesk.model_gateway.metering): the SDK makes one attempt. The delays and statuses below are
-# the policy the engine follows, and a test holds the two together.
+# (frontdesk.model_gateway.metering, and frontdesk.model_gateway.embeddings for the embedders): the
+# SDK makes one attempt. The delays and statuses below are the policy the engine follows, and a test
+# holds the two together.
 GOOGLE_RETRIES: Final = HttpRetryOptions(
     attempts=1,
     initial_delay=2.0,
@@ -65,23 +69,62 @@ def _require_project(route: ModelRoute, gcp_project: str | None) -> str:
     return gcp_project
 
 
+@cache
+def tls_context() -> ssl.SSLContext:
+    """The one context every live HTTP client verifies certificates with: certifi's bundle.
+
+    Left to default, a client takes its trust store from the operating system on macOS and Windows
+    and from SSL_CERT_FILE and SSL_CERT_DIR on any other (the Linux image of M4), and google-genai
+    reads those two variables itself when it builds a client: a missing file made `Client()` raise
+    FileNotFoundError and an empty one SSLError (review of Task 1, I2). A context built from a
+    named bundle reads neither variable, so no certificate variable moves a model request, on any
+    operating system.
+    """
+    return ssl.create_default_context(cafile=certifi.where())
+
+
 def model_http_client() -> httpx2.AsyncClient:
     """The HTTP client of every live model: nothing is taken from the environment.
 
     A client that trusts the environment sends its requests through HTTP(S)_PROXY or ALL_PROXY and
     trusts the certificates of SSL_CERT_FILE or SSL_CERT_DIR (final review P63). This one connects
-    directly and uses the system trust store.
+    directly and verifies with `tls_context()`, on every operating system.
+
+    The credentials are another path: google-auth refreshes the access token through `requests`,
+    which reads HTTPS_PROXY and REQUESTS_CA_BUNDLE, and `google.auth.default()` reads
+    GOOGLE_CLOUD_QUOTA_PROJECT, which moves the project a call is billed to. Only credentials and
+    billing attribution travel that way, never message text. A live run refuses to start while one
+    of those variables is set (`frontdesk.model_gateway.access.ENVIRONMENT_OVERRIDES`); pinning
+    that path itself is an item of M4, whose Linux deployment cannot rely on the refusal.
     """
     return httpx2.AsyncClient(
-        trust_env=False, timeout=httpx2.Timeout(MODEL_TIMEOUT_SECONDS, connect=5.0)
+        trust_env=False,
+        timeout=httpx2.Timeout(MODEL_TIMEOUT_SECONDS, connect=5.0),
+        verify=tls_context(),
+    )
+
+
+def model_http_client_sync() -> httpx2.Client:
+    """The same, for the synchronous calls of the embedders."""
+    return httpx2.Client(
+        trust_env=False,
+        timeout=httpx2.Timeout(MODEL_TIMEOUT_SECONDS, connect=5.0),
+        verify=tls_context(),
     )
 
 
 def google_http_options(location: str) -> HttpOptions:
+    context = tls_context()
     return HttpOptions(
         base_url=f"{VERTEX_HOSTS[location]}/",
         api_version=VERTEX_API_VERSION,
+        httpx_client=model_http_client_sync(),
         httpx_async_client=model_http_client(),
+        # The two clients above make every request. google-genai still looks for a context in these
+        # arguments, and builds one from SSL_CERT_FILE and SSL_CERT_DIR where it finds none (for the
+        # synchronous client, and for the websocket it never opens): give it ours.
+        client_args={"verify": context},
+        async_client_args={"verify": context, "ssl": context},
         timeout=int(MODEL_TIMEOUT_SECONDS * 1000),  # milliseconds
         retry_options=GOOGLE_RETRIES,
     )
@@ -92,7 +135,9 @@ def google_client(route: ModelRoute, *, gcp_project: str) -> Client:
 
     Explicit values win over GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION, GOOGLE_VERTEX_BASE_URL
     and an API key in the environment. The debug configuration is given in full, so that
-    GOOGLE_GENAI_CLIENT_MODE cannot make the client record requests on disk.
+    GOOGLE_GENAI_CLIENT_MODE cannot make the client record requests on disk, and so are the HTTP
+    clients and the TLS context (`google_http_options`), so that SSL_CERT_FILE and SSL_CERT_DIR
+    are never read. The token refresh of the credentials is the exception: `model_http_client`.
     """
     location = pinned_location(route)
     project = _require_project(route, gcp_project)

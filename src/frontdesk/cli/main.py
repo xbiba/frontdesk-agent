@@ -16,6 +16,7 @@ import typer
 from sqlalchemy.orm import Session
 
 from frontdesk.cli.chat import run_chat
+from frontdesk.cli.experiment import eval_embedders
 from frontdesk.cli.live import eval_report, live_turns, read_cases
 from frontdesk.cli.live_chat import run_live_chat
 from frontdesk.cli.runtime import build_runtime, without_knowledge
@@ -381,6 +382,34 @@ def eval_report_command(
 ) -> None:
     """Judge a live run again with its labels.yaml; rewrite its report and review page."""
     eval_report(run_dir, budget, tag or [])
+
+
+@eval_app.command("embedders")
+def eval_embedders_command(
+    env_file: EnvFile,
+    cases: Annotated[
+        Path, typer.Option("--cases", exists=True, dir_okay=False, help="The retrieval cases.")
+    ],
+    run_dir: Annotated[
+        Path, typer.Option("--run-dir", file_okay=False, help="Where the results are kept.")
+    ],
+    budget: Annotated[
+        Path, typer.Option("--budget", exists=True, dir_okay=False, help="The phase's budget file.")
+    ],
+    candidate: Annotated[
+        list[str], typer.Option("--candidate", help="An embedding route to compare (repeatable).")
+    ],
+    yes: Annotated[bool, typer.Option("--yes", help="Start without asking.")] = False,
+) -> None:
+    """Compare the reference embedder with the candidates on the retrieval cases (M3 §4.5)."""
+    eval_embedders(
+        env_file,
+        cases_path=cases,
+        run_dir=run_dir,
+        budget_path=budget,
+        candidates=candidate,
+        yes=yes,
+    )
 
 
 def _usage(message: str) -> typer.Exit:

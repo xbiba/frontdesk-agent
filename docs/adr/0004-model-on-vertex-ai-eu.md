@@ -1,0 +1,28 @@
+# ADR-0004: A model on Vertex AI in the EU, chosen by evaluation
+
+## Status
+Accepted (2026-10-07); amended 2026-10-10 for M3. Live evaluations in M3; first real messages in M4 (shadow mode); tests and the demo use deterministic models.
+
+## Context
+Patient messages can contain health data, so provider routes are approved per data class: `patient_derived` for any text derived from a patient's message, original or rewritten, and `evaluation` for synthetic questions and the business's approved public information. In October 2026 the EU quota for Claude Haiku was refused to the project, and Claude Opus 5.5 costs far more than closed-form classification and quoting need.
+
+## Options considered
+- Anthropic API: `inference_geo` offers `us` or `global` only.
+- Claude Opus 5.5 on Vertex AI `eu`: the first choice; its cost does not fit a receptionist's closed forms.
+- Claude Haiku on Vertex AI `eu`: no quota for the project yet.
+- Gemini 2.5 Flash-Lite on `europe-west1`: Vertex AI retires it on 2026-10-20.
+- Gemini 3.1 Flash-Lite on the `eu` multi-region: generally available since 2026-05-07, retiring "May 7, 2027 or later"; not served on `europe-west1`.
+
+## Decision
+The model is the one the M3 live evaluations choose on Vertex AI in the EU; today route `vertex-eu-gemini-flash-lite`: `gemini-3.1-flash-lite` on the `eu` multi-region (`https://aiplatform.eu.rep.googleapis.com`, API `v1`), with minimal thinking and output caps per agent (600 tokens for the classifier, 1,200 for the responder; thinking counts in them). The route is approved for evaluation data only until Vertex AI's data retention for Gemini is checked (spec §18, technical question 2), before M4; until then the composition root refuses it for conversations and `vertex-eu-opus` stays the only route approved for patient-derived text. A fallback (a more capable Gemini on `eu`, or Claude Haiku once its quota arrives) becomes a route only for a task Flash-Lite fails, on the evidence of the evaluations; Haiku, when its quota arrives, runs the same cases.
+
+## Consequences
+- Only `frontdesk.model_gateway` imports Google's model libraries (ruff and import-linter), as for Anthropic's.
+- Every live client pins its host, location, project and API version, and no environment variable can switch it to recording requests. Its model requests ignore proxy and certificate variables on every operating system: they verify with certifi's bundle through one explicit context. The credentials' token refresh is another path: google-auth reads `HTTPS_PROXY` and `REQUESTS_CA_BUNDLE`, and `GOOGLE_CLOUD_QUOTA_PROJECT` moves the project a call is billed to; only credentials and billing attribution travel it, never message text. A live run refuses to start while one of those variables is set, and pinning that path is an item of M4, before the Linux deployment.
+- A live run reserves each request against the phase budget before sending it and records what it cost (`frontdesk.model_gateway.metering`); the embedder experiment does the same for each text it embeds (`frontdesk.model_gateway.embeddings`).
+- Claude on Vertex AI (`vertex-eu-opus`) has no server-side refusal fallback, an Anthropic API feature; a refusal, from any route, becomes the fixed reply plus handoff.
+- The retirement date of the pinned version is part of its route; a version change is an engine change with its test.
+- The results of the M3 evaluations are recorded in [`docs/evals`](../evals/README.md).
+
+## Exit plan
+Routes are data in `frontdesk.model_gateway.routes`; a new route is one entry plus its evaluation results, a Haiku route one entry with provider `anthropic-vertex`. A new Vertex AI location also needs an entry in `VERTEX_HOSTS` (`frontdesk.model_gateway.factory`), which pins the host it calls.
