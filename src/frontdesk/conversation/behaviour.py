@@ -29,8 +29,9 @@ FAILURE_REJECTIONS: Final = frozenset(
 # Kept out on purpose: the handoff is the designed answer to the message. `intent_not_allowed` (the
 # business does not offer it: an order at the clinic, a price at the shop), `orientation_disabled`
 # and `order_status_disabled` (a feature it has switched off), `order_lookups_exhausted` (the limit
-# on order lookups), the `text_*` filters on the question text (privacy), and `no_active_knowledge`
-# (a deployment state: the preflight of a run refuses it).
+# on order lookups), the `text_*` filters on the question text the classifier writes (too long,
+# markup, identifiers, clinical terms, a safety rule), and `no_active_knowledge` (a deployment
+# state: the preflight of a run refuses it).
 
 
 class Behaviour(StrEnum):
