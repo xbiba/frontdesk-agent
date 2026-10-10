@@ -109,11 +109,33 @@ class TurnTrace:
 
 
 @dataclass(frozen=True)
+class DraftClaim:
+    text: str
+    evidence_id: str
+    quote: str
+
+
+@dataclass(frozen=True)
+class RejectedDraft:
+    """The responder's answer that a check refused, as the model wrote it.
+
+    Kept only when the runtime asks for it (`keep_drafts`): the live evaluation shows it to the
+    person who judges whether the refusal was right. It is model text derived from a message, so
+    nothing logs, traces or stores it otherwise.
+    """
+
+    action: str
+    claims: tuple[DraftClaim, ...]
+    clarify: str | None
+
+
+@dataclass(frozen=True)
 class TurnResult:
     text: str
     outcome: TurnOutcome
     language: Language
     trace: TurnTrace
+    draft: RejectedDraft | None = None
 
 
 def _utc_now() -> datetime:
@@ -139,6 +161,7 @@ class TurnRuntime:
     timeout_seconds: float = TURN_TIMEOUT_SECONDS
     orders: OrderStore | None = None
     now: Callable[[], datetime] = _utc_now
+    keep_drafts: bool = False  # the live evaluation keeps refused answers for its reviewer
 
 
 async def handle_message(
@@ -275,7 +298,8 @@ async def _route(
     reply = await _answer(fields, state, catalog, runtime, trace, with_closing=False)
     prefix = reply.text if reply.outcome is TurnOutcome.REPLIED else None
     # A question that was not shown to the person is not a pending one.
-    return _handoff(pack, language, notice, replace(reply.trace, clarify=None), prefix=prefix)
+    trace = replace(reply.trace, clarify=None)
+    return _handoff(pack, language, notice, trace, prefix=prefix, draft=reply.draft)
 
 
 async def _answer(
@@ -426,10 +450,12 @@ async def _document_answer(
         check_reasons=check.reasons,
         invalid_evidence_ids=check.invalid_ids,
     )
+    draft = _draft(output) if runtime.keep_drafts else None
     if not check.ok or output.action is AnswerAction.HANDOFF:
-        return _handoff(pack, language, FixedTextKey.NO_INFORMATION, checked)
+        refused = draft if not check.ok else None
+        return _handoff(pack, language, FixedTextKey.NO_INFORMATION, checked, draft=refused)
     if output.action is AnswerAction.CLARIFY:
-        return _responder_clarify(pack, catalog, language, output.clarify, checked)
+        return _responder_clarify(pack, catalog, language, output.clarify, checked, draft=draft)
     text = f"{check.text}\n\n{closing(language)}" if with_closing else check.text
     return TurnResult(text, TurnOutcome.REPLIED, language, checked)
 
@@ -440,14 +466,22 @@ def _responder_clarify(
     language: Language,
     field: ClarifyField | None,
     trace: TurnTrace,
+    *,
+    draft: RejectedDraft | None,
 ) -> TurnResult:
     """Ask the question the responder chose, if its profile's prompt offers it."""
     if field is None or field not in RESPONDER_CLARIFY_FIELDS[pack.profile]:
         # Any other question is a rejected answer: it fails like a bad claim.
         reasons = (*trace.check_reasons, "clarify_not_offered")
         rejected = replace(trace, check_reasons=reasons)
-        return _handoff(pack, language, FixedTextKey.NO_INFORMATION, rejected)
+        return _handoff(pack, language, FixedTextKey.NO_INFORMATION, rejected, draft=draft)
     return _clarify(catalog, language, field, trace)
+
+
+def _draft(output: ResponderOutput) -> RejectedDraft:
+    claims = tuple(DraftClaim(c.text, c.evidence_id, c.quote) for c in output.claims)
+    clarify = output.clarify.value if output.clarify is not None else None
+    return RejectedDraft(action=output.action.value, claims=claims, clarify=clarify)
 
 
 def _clarify(
@@ -540,13 +574,14 @@ def _handoff(
     trace: TurnTrace,
     *,
     prefix: str | None = None,
+    draft: RejectedDraft | None = None,
 ) -> TurnResult:
     """The reason's fixed text, then how to reach a person. Nothing is promised (ADR-0006)."""
     parts = [prefix] if prefix else []
     if reason is not FixedTextKey.HANDOFF:
         parts.append(_fixed_text(pack, language, reason))
     parts.append(_fixed_text(pack, language, FixedTextKey.HANDOFF))
-    return TurnResult("\n\n".join(parts), TurnOutcome.HANDOFF, language, trace)
+    return TurnResult("\n\n".join(parts), TurnOutcome.HANDOFF, language, trace, draft)
 
 
 def _emergency(pack: BusinessPack, language: Language, rule: str) -> TurnResult:

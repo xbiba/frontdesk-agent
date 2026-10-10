@@ -9,6 +9,7 @@ from typing import Any
 
 from pydantic_ai import ModelResponse, ToolCallPart
 from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
+from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -105,8 +106,8 @@ class SpyEmbedder(HashEmbedder):
 def make_runtime(
     pack: BusinessPack,
     factory: sessionmaker[Session],
-    classifier: FunctionModel,
-    responder: FunctionModel,
+    classifier: Model,
+    responder: Model,
     embedder: Embedder | None = None,
     *,
     capture_content: bool = False,
