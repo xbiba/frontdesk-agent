@@ -58,6 +58,56 @@ The demo replaces the models with deterministic keyword stand-ins: it shows the 
 
 A second deployment, `deploy/demo-shop.env`, runs a shop with its own profile and order status, and without any clinic data or calendar. Run the same `db upgrade` and `bootstrap-demo` commands with that file, then chat and ask `Dov'è il mio ordine ORD-10427? CAP 20121`.
 
+## Try it with the real model
+
+The same demo chat can answer with Gemini on Vertex AI (EU) instead of the stand-ins. On top of Docker and uv it needs:
+
+- the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) (`gcloud`), to sign in once;
+- a Google Cloud project with Vertex AI enabled;
+- the budget file of the M3 evaluation phase: `runs/budget.yaml` in the private repository frontdesk-mcu.
+
+The budget file caps what live requests may cost, and every request the chat sends counts against it. It holds the cap in euros (`cap_eur`); the `ledger`, a file beside it where one line is written for each paid request and from which the spent amount is read; the `exchange_rate` that turns US dollars into euros; and the `prices` of each route, with the page and the date each was read from. The smallest file the chat accepts looks like this (the numbers only show the shape: the real file holds the current prices and rate):
+
+```yaml
+cap_eur: 10.00
+ledger: spend.jsonl
+exchange_rate:
+  usd_per_eur: 1.06
+  source: https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml
+  date: 2026-10-09
+prices:
+  source: https://cloud.google.com/vertex-ai/generative-ai/pricing
+  retrieved: 2026-10-10
+  routes:
+    vertex-eu-gemini-flash-lite:
+      unit: tokens_1m
+      input_usd: 0.275
+      output_usd: 1.65
+```
+
+Point `--budget` at that file itself, never at a copy: the ledger beside it is the one record of what M3 has spent.
+
+Then, in this repository:
+
+```bash
+docker compose up -d --wait postgres
+uv sync
+uv run frontdesk db upgrade --env-file deploy/demo-clinic-live.env
+uv run frontdesk knowledge bootstrap-demo --env-file deploy/demo-clinic-live.env
+gcloud auth application-default login   # once
+FRONTDESK_GCP_PROJECT=<project> uv run frontdesk chat --live \
+  --budget <path to the M3 budget file> --env-file deploy/demo-clinic-live.env
+```
+
+`deploy/demo-clinic-live.env` and `deploy/demo-shop-live.env` are the demo files with the Gemini route; the shop takes the same commands with its own file. They keep the same databases and the same embedder, so knowledge loaded with the offline files still matches, and they do not name the project: it comes from `FRONTDESK_GCP_PROJECT` in your shell.
+
+The line printed before the first prompt states two rules, and the program enforces what it can:
+
+- **Every request is paid from the budget.** After each reply the chat prints `cost: <this turn> EUR · session <total> EUR · left <remaining> EUR`. When the budget has no room, Google keeps refusing with 429, or the ledger cannot be read or written, the chat shows what the turn that was cut short had cost, then `stopped: <reason>`, and exits with code 1. One live session or run holds the budget at a time: a second one is refused until the first has ended. `exit` or the end of input ends a session normally; Ctrl-C ends it at once, with exit code 130, and gives the budget back.
+- **Test messages only.** Gemini is approved for evaluation data, not for patients' words, until Vertex AI's data retention for it is checked. Type made-up questions, never a real patient's data. The chat writes no transcript to disk: the ledger holds amounts, never message text.
+
+If a reply is the hand-off text and a `model error: <Type>` line came just before it, the model request failed. `DefaultCredentialsError` or `RefreshError`: run `gcloud auth application-default login`. `ModelHTTPError`: Google refused the request (a wrong project, no permission, or Vertex AI not enabled for the project). `ConnectError`: no network (the chat retries for about 14 s first). `OperationalError`: the database stopped. A hand-off that took 45 s, with `rule=timeout` in the trace and no such line, means the request did not answer in time.
+
 ## Evaluation
 
 - `uv run frontdesk eval turns --env-file deploy/demo-clinic.env`: labelled messages and short conversations, 79 cases over the two demo businesses (56 for the clinic, 23 for the shop), including zero-tolerance suites for medical advice, personal data, data access and prompt injection. CI runs them for both demo businesses, together with a suite of plausible but wrong answers that must never reach a person.

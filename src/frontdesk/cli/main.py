@@ -16,6 +16,7 @@ import typer
 from sqlalchemy.orm import Session
 
 from frontdesk.cli.chat import run_chat
+from frontdesk.cli.live_chat import run_live_chat
 from frontdesk.composition import (
     Deployment,
     NoActiveKnowledgeError,
@@ -336,8 +337,27 @@ def eval_turns(env_file: EnvFile, output: ReportPath = None) -> None:
 def chat(
     env_file: EnvFile,
     trace: Annotated[bool, typer.Option("--trace/--no-trace")] = True,
+    live: Annotated[
+        bool,
+        typer.Option("--live", help="Answer with the real model: test messages only, and paid."),
+    ] = False,
+    budget: Annotated[
+        Path | None,
+        typer.Option("--budget", help="The budget file that pays for --live (required with it)."),
+    ] = None,
 ) -> None:
-    """Chat with this deployment's agent in the terminal."""
+    """Chat with this deployment's agent in the terminal.
+
+    Offline by default. With --live the agent answers with the real model on its live route:
+    every request is paid from --budget, which one session holds at a time, and only made-up
+    test messages may be typed, never a real patient's data.
+    """
+    if budget is not None and not live:
+        typer.echo("error: --budget only goes with --live", err=True)
+        raise typer.Exit(1)
+    if live:
+        run_live_chat(env_file, budget, show_trace=trace, read_line=_read_line)
+        return
     deployment = _deployment(env_file)
     runtime = _runtime(deployment, env_file)
     typer.echo(f"{deployment.pack.name} ({deployment.pack.profile}) — type 'exit' to quit")
