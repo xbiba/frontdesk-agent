@@ -261,6 +261,8 @@ def _manifest(
         responder_prompt=runtime.responder_prompt_version,
         fixed_texts={language: dict(texts) for language, texts in pack.fixed_texts.items()},
         budget_file=str(budget.path) if budget else None,
+        min_support_similarity=deployment.settings.min_support_similarity,
+        min_retrieval_similarity=deployment.settings.min_retrieval_similarity,
         started_at=datetime.now(UTC),
     )
 

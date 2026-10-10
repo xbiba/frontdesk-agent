@@ -73,6 +73,7 @@ def test_a_live_run_shows_what_it_could_cost_pays_from_the_budget_and_records_ev
     manifest = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     assert (manifest["route"], manifest["model_name"]) == (ROUTE, "gemini-3.1-flash-lite")
     assert manifest["budget_file"] == str(budget.path)
+    assert (manifest["min_support_similarity"], manifest["min_retrieval_similarity"]) == (0.5, 0.0)
     for report in ("report.md", "report.json", "review.html"):
         assert (run_dir / report).exists()
     with budget.exclusive():  # the run gave the budget back
