@@ -54,6 +54,7 @@ from frontdesk.knowledge.versions import (
     rollback,
     version_status,
 )
+from frontdesk.model_gateway.routes import UnapprovedRouteError
 from frontdesk.settings import load_settings
 from frontdesk.tenancy.pack import BusinessPack
 
@@ -119,6 +120,11 @@ def _runtime(deployment: Deployment, env_file: Path) -> TurnRuntime:
         raise _without_knowledge(error, env_file) from error
     except EmbedderMismatchError as error:
         typer.echo(f"error: {error} --env-file {env_file}", err=True)
+        raise typer.Exit(1) from error
+    except UnapprovedRouteError as error:
+        # A conversation carries patient-derived text: a route approved for evaluation data only
+        # never receives one (M3 design §4.2).
+        typer.echo(f"error: {error} (--env-file {env_file})", err=True)
         raise typer.Exit(1) from error
 
 

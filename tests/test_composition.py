@@ -21,7 +21,7 @@ from frontdesk.composition import Deployment, build_turn_runtime, open_deploymen
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, handle_message
 from frontdesk.knowledge.embedders import HashEmbedder
-from frontdesk.model_gateway.routes import UnapprovedRouteError
+from frontdesk.model_gateway.routes import DataClass, UnapprovedRouteError
 from frontdesk.settings import EmbeddingBackend, Settings
 from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.pack import BusinessPack, Profile
@@ -352,3 +352,48 @@ async def test_the_offline_runtime_answers_without_a_provider(
     )
     assert result.outcome is TurnOutcome.REPLIED
     assert result.text.startswith("Fisioterapia: 30 EUR (a seduta)")
+
+
+def test_a_route_approved_only_for_evaluation_never_receives_a_conversation(
+    clinic_pack: BusinessPack,
+) -> None:
+    deployment = _deployment(
+        clinic_pack, model_route="vertex-eu-gemini-flash-lite", gcp_project="demo-project"
+    )
+    with pytest.raises(UnapprovedRouteError, match="not approved for patient_derived"):
+        build_turn_runtime(deployment)  # the database URL leads nowhere: refused before it
+
+
+@pytest.mark.db
+def test_evaluation_data_reaches_the_gemini_route_through_the_given_wrapper(
+    activate_pack: Activate, app_url: str, clinic_pack: BusinessPack
+) -> None:
+    factory = activate_pack(clinic_pack)
+    wrapped: list[tuple[str, str]] = []
+
+    def wrap(model: Model, role: str) -> Model:
+        wrapped.append((model.model_name, role))
+        return model
+
+    runtime = build_turn_runtime(
+        _deployment(
+            clinic_pack,
+            factory,
+            app_url=app_url,
+            model_route="vertex-eu-gemini-flash-lite",
+            gcp_project="demo-project",
+        ),
+        data_class=DataClass.EVALUATION,
+        wrap_model=wrap,
+    )
+    assert wrapped == [
+        ("gemini-3.1-flash-lite", "classifier"),
+        ("gemini-3.1-flash-lite", "responder"),
+    ]
+    assert runtime.classifier.model_settings == {
+        "max_tokens": 600,
+        "google_thinking_config": {"thinking_level": "MINIMAL"},  # an enum that equals its value
+    }
+    responder_settings = runtime.responder.model_settings
+    assert isinstance(responder_settings, dict)
+    assert responder_settings["max_tokens"] == 1200

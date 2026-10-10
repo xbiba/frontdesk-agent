@@ -55,7 +55,8 @@ def test_the_offline_route_has_no_live_model() -> None:
 
 
 def test_live_settings_use_medium_effort_without_sampling() -> None:
-    settings = live_model_settings(max_tokens=800)
+    route = require_route("vertex-eu-opus", DataClass.PATIENT_DERIVED)
+    settings = live_model_settings(route, max_tokens=800)
     assert settings["anthropic_effort"] == "medium"
     assert settings["max_tokens"] == 800
     assert "temperature" not in settings
@@ -71,7 +72,7 @@ def test_the_vertex_route_is_pinned_to_the_eu_endpoint() -> None:
     assert isinstance(client, AsyncAnthropicVertex)
     assert client.project_id == "demo-project"
     assert client.region == "eu"
-    settings = live_model_settings(max_tokens=800)
+    settings = live_model_settings(route, max_tokens=800)
     assert settings["anthropic_effort"] == "medium"
     assert settings.keys().isdisjoint({"temperature", "top_p", "top_k"})
 
