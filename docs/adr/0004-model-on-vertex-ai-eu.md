@@ -20,7 +20,7 @@ The model is the one the M3 live evaluations choose on Vertex AI in the EU; toda
 - Only `frontdesk.model_gateway` imports Google's model libraries (ruff and import-linter), as for Anthropic's.
 - Every live client pins its host, location, project and API version, and no environment variable can switch it to recording requests. Its model requests ignore proxy and certificate variables on every operating system: they verify with certifi's bundle through one explicit context. The credentials' token refresh is another path: google-auth reads `HTTPS_PROXY` and `REQUESTS_CA_BUNDLE`, and `GOOGLE_CLOUD_QUOTA_PROJECT` moves the project a call is billed to; only credentials and billing attribution travel it, never message text. A live run refuses to start while one of those variables is set, and pinning that path is an item of M4, before the Linux deployment.
 - A live run reserves each request against the phase budget before sending it and records what it cost (`frontdesk.model_gateway.metering`); the embedder experiment does the same for each text it embeds (`frontdesk.model_gateway.embeddings`).
-- Server-side refusal fallbacks are not available on Vertex; refusals become a fixed reply plus handoff.
+- Claude on Vertex AI (`vertex-eu-opus`) has no server-side refusal fallback, an Anthropic API feature; a refusal, from any route, becomes the fixed reply plus handoff.
 - The retirement date of the pinned version is part of its route; a version change is an engine change with its test.
 - The results of the M3 evaluations are recorded in [`docs/evals`](../evals/README.md).
 

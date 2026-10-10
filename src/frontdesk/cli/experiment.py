@@ -7,8 +7,10 @@ Results are saved per embedder, so a run that stopped (budget, rate limit) resum
 
 Like the other live commands it refuses to start while a proxy, certificate or billing variable is
 set, proves that the ledger takes a line before the first paid text, and holds the ledger while it
-measures, so that no other live run spends meanwhile. Every way it can stop ends in one `error:`
-line (or `stopped:` for Ctrl-C) and exit code 1 (130), and the results saved so far are kept.
+measures, so that no other live run spends meanwhile. Each stop it expects (the budget, a rate
+limit, Vertex AI not answering or refusing, a ledger or a file it cannot use, a wrong input) ends in
+one `error:` line and exit code 1, and Ctrl-C in `stopped:` and exit code 130; the results saved so
+far are kept, and the same command resumes.
 """
 
 from __future__ import annotations

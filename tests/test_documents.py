@@ -96,6 +96,21 @@ def test_adr_0004_names_code_and_routes_that_exist() -> None:
         importlib.import_module(name)
 
 
+def test_adr_0004_states_the_output_caps_the_route_carries() -> None:
+    text = _read(ADR_4)
+    limits = ROUTES["vertex-eu-gemini-flash-lite"].output_limits
+    assert (
+        f"({limits.classifier:,} tokens for the classifier, {limits.responder:,} for the responder"
+        in text
+    )
+
+
+def test_adr_0004_says_which_route_has_no_server_side_refusal_fallback() -> None:
+    bullet = next(line for line in _read(ADR_4).splitlines() if "refusal fallback" in line)
+    assert bullet.startswith("- Claude on Vertex AI (`vertex-eu-opus`) has no server-side")
+    assert "a refusal, from any route, becomes the fixed reply plus handoff" in bullet
+
+
 def test_adr_0005_names_the_candidates_the_experiment_compares() -> None:
     text = _read(ADR_5)
     candidates = {
@@ -121,8 +136,20 @@ def test_the_readme_tells_the_state_of_m3() -> None:
     readme = _read(REPO_ROOT / "README.md")
     row = next(line for line in readme.splitlines() if line.startswith("| M3 |"))
     assert "Gemini 3.1 Flash-Lite" in row
-    assert row.endswith("| In progress |")
+    assert row.rstrip("| ").rsplit("|", 1)[-1].strip() in {"In progress", "Done"}
     assert "Claude on Vertex AI" not in readme
+
+
+def test_the_readme_says_what_the_embedder_experiment_needs() -> None:
+    paragraph = next(
+        line
+        for line in _read(REPO_ROOT / "README.md").splitlines()
+        if "frontdesk eval embedders" in line
+    )
+    assert "createdb" in paragraph  # the scratch database is made by hand, empty
+    assert "characters_1k" in paragraph  # and the budget prices each candidate per 1,000 characters
+    assert "the results saved so far are kept" in paragraph  # whatever stops it
+    assert "exit code 130" in paragraph  # Ctrl-C included
 
 
 def test_the_env_example_shows_every_setting_and_loads() -> None:

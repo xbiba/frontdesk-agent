@@ -28,6 +28,7 @@ from frontdesk.knowledge.embedder_experiment import (
 )
 from frontdesk.knowledge.embedders import HashEmbedder
 from frontdesk.knowledge.evaluation import load_cases
+from frontdesk.model_gateway.routes import ROUTES
 from frontdesk.tenancy.pack import BusinessPack
 
 TODAY = date(2026, 10, 7)
@@ -205,6 +206,14 @@ def test_each_candidate_gets_a_table_name_it_can_use() -> None:
     assert table_name("vertex-ew1-gemini-embedding-001") == (
         "embedding_experiment_vertex_ew1_gemini_embedding_001"
     )
+
+
+def test_every_embedding_route_has_a_table_name_within_the_limit_of_postgresql() -> None:
+    routes = [route for route in ROUTES.values() if route.provider == "google-vertex-embedding"]
+    assert routes
+    # The longest is exactly 63 characters, the most an identifier may have: a longer route id
+    # would be refused here, at the test, and not in the middle of a paid run.
+    assert max(len(table_name(route.route_id)) for route in routes) <= 63
 
 
 def test_a_name_too_long_for_a_table_is_refused() -> None:
