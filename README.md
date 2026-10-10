@@ -60,7 +60,34 @@ A second deployment, `deploy/demo-shop.env`, runs a shop with its own profile an
 
 ## Try it with the real model
 
-The same demo chat can answer with Gemini on Vertex AI (EU) instead of the stand-ins. It needs a Google Cloud project with Vertex AI enabled, and the budget file of the M3 evaluation phase, which caps what live requests may cost and keeps the ledger of what they did.
+The same demo chat can answer with Gemini on Vertex AI (EU) instead of the stand-ins. On top of Docker and uv it needs:
+
+- the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) (`gcloud`), to sign in once;
+- a Google Cloud project with Vertex AI enabled;
+- the budget file of the M3 evaluation phase: `runs/budget.yaml` in the private repository frontdesk-mcu.
+
+The budget file caps what live requests may cost, and every request the chat sends counts against it. It holds the cap in euros (`cap_eur`); the `ledger`, a file beside it where one line is written for each paid request and from which the spent amount is read; the `exchange_rate` that turns US dollars into euros; and the `prices` of each route, with the page and the date each was read from. The smallest file the chat accepts looks like this (the numbers only show the shape: the real file holds the current prices and rate):
+
+```yaml
+cap_eur: 10.00
+ledger: spend.jsonl
+exchange_rate:
+  usd_per_eur: 1.06
+  source: https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml
+  date: 2026-10-09
+prices:
+  source: https://cloud.google.com/vertex-ai/generative-ai/pricing
+  retrieved: 2026-10-10
+  routes:
+    vertex-eu-gemini-flash-lite:
+      unit: tokens_1m
+      input_usd: 0.275
+      output_usd: 1.65
+```
+
+Point `--budget` at that file itself, never at a copy: the ledger beside it is the one record of what M3 has spent.
+
+Then, in this repository:
 
 ```bash
 docker compose up -d --wait postgres

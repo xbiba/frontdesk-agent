@@ -10,6 +10,7 @@ sees when something goes wrong is in `test_live_chat_failures.py`.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from frontdesk.cli import main as cli_main
 from frontdesk.cli.main import app
 from frontdesk.conversation.turn import TurnRuntime
 from frontdesk.knowledge.embedders import HashEmbedder
+from frontdesk.model_gateway.costs import load_budget
 from frontdesk.model_gateway.metering import Meter, MeteredModel
 from frontdesk.model_gateway.routes import DataClass
 from frontdesk.settings import load_settings
@@ -173,6 +175,37 @@ def test_a_live_env_file_is_the_demo_file_with_the_gemini_route_and_no_project(
     assignments = [line for line in lines if not line.lstrip().startswith("#")]
     assert not any("GCP_PROJECT" in line for line in assignments)
     assert any(line.startswith("#") and "FRONTDESK_GCP_PROJECT" in line for line in lines)
+
+
+# --- The README -------------------------------------------------------------------------------------
+
+
+def _readme_section() -> str:
+    text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    start = text.index("## Try it with the real model")
+    return text[start : text.index("\n## ", start + 1)]
+
+
+def test_the_budget_file_the_readme_shows_is_a_valid_budget_for_the_live_route(
+    tmp_path: Path,
+) -> None:
+    example = re.search(r"```yaml\n(.*?)```", _readme_section(), re.DOTALL)
+    assert example, "the section shows no budget file"
+    path = tmp_path / "budget.yaml"
+    path.write_text(example.group(1), encoding="utf-8")
+    budget = load_budget(path)  # a wrong field or a missing price would raise
+    assert budget.price(ROUTE).unit == "tokens_1m"
+    assert budget.config.cap_eur > 0
+
+
+def test_the_readme_says_what_the_chat_needs_and_where_the_budget_file_lives() -> None:
+    section = _readme_section()
+    assert "frontdesk-mcu" in section
+    assert "`runs/budget.yaml`" in section
+    for part in ("cap_eur", "ledger", "exchange_rate", "prices"):
+        assert f"`{part}`" in section, f"the section does not name `{part}`"
+    # The Google Cloud CLI is listed as a prerequisite, before the first command that needs it.
+    assert 0 <= section.index("gcloud") < section.index("```bash")
 
 
 # --- A session --------------------------------------------------------------------------------------
