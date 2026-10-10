@@ -137,6 +137,16 @@ def test_a_question_answered_from_the_records_was_answered_though_wrongly() -> N
     assert not verdict.passed
 
 
+@pytest.mark.parametrize("behaviour", ["handoff", "clarify", "emergency", None])
+def test_a_case_that_expects_no_answer_has_no_document_question_whatever_it_names(
+    behaviour: str | None,
+) -> None:
+    named = case("named", behaviour=behaviour, sources=["parking-en"])
+    [verdict] = judge([named], [record("named", CONTACT, outcome="handoff")], FIXED_TEXTS, {})
+    assert not verdict.document_question
+    assert not verdict.unanswered_document_question
+
+
 def test_a_case_that_expects_no_document_answer_has_no_question_to_lose() -> None:
     wanted = case("handoff", behaviour="handoff")
     [verdict] = judge([wanted], [record("handoff", CONTACT, outcome="handoff")], FIXED_TEXTS, {})
