@@ -30,6 +30,7 @@ from frontdesk.cli.live_chat import (
 )
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, TurnResult, TurnRuntime, TurnTrace
+from frontdesk.model_gateway.costs import BudgetError
 from frontdesk.model_gateway.metering import Meter
 from frontdesk.model_gateway.routes import ROUTES
 from frontdesk.observability.logs import log_event
@@ -110,6 +111,16 @@ def test_past_the_cap_what_is_left_is_zero_not_negative(tmp_path: Path) -> None:
     budget.record(run_id="earlier", route_id=ROUTE, kind="chat", usd=1.5)
     costs = LiveCosts.begin(Meter(budget, route_id=ROUTE, run_id="chat-x"), budget)
     assert costs.cost_line().endswith("left 0.00 EUR")
+
+
+def test_a_ledger_that_becomes_unreadable_during_the_session_is_a_budget_error(
+    tmp_path: Path,
+) -> None:
+    budget = write_budget(tmp_path)
+    costs = LiveCosts.begin(Meter(budget, route_id=ROUTE, run_id="chat-x"), budget)
+    budget.ledger_path.mkdir()  # the ledger is now something that cannot be read
+    with pytest.raises(BudgetError, match=r"spend\.jsonl: cannot be read \(Is a directory\)"):
+        costs.cost_line()
 
 
 def test_the_session_stops_when_its_meter_does(tmp_path: Path) -> None:

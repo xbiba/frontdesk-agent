@@ -1,5 +1,6 @@
 """What a person sees when something goes wrong in a live chat (M3 Task 6b, fix round 1): the line
-that says why a model request failed, and what a turn cost when a stop cut it short.
+that says why a model request failed, what a turn cost when a stop cut it short, and one line, not a
+traceback, for a database or a ledger that cannot be reached or read.
 
 No model and no network: a fake Gemini sits where `build_live_model` would build the real one, so
 it takes the same `wrap_model` path, and fails on request.
@@ -8,12 +9,14 @@ it takes the same `wrap_model` path, and fails on request.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import httpx2
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 
+from frontdesk.cli.live_chat import database_location
 from tests.cli.live_chat_helpers import (
     PARKING,
     PRICE,
@@ -21,8 +24,10 @@ from tests.cli.live_chat_helpers import (
     Failure,
     Install,
     bootstrapped,
+    env_file,
     ledger,
     live,
+    refused,
 )
 from tests.model_gateway.budget_helpers import write_budget
 
@@ -175,3 +180,80 @@ def test_a_turn_cut_short_by_the_stop_shows_what_it_had_cost_before_the_stop(
     assert sent == ["classifier"]
     [entry] = ledger(budget)
     assert entry["usd"] == pytest.approx(0.013)
+
+
+# --- A database or a ledger that cannot be reached or read -------------------------------------------
+
+
+def test_a_database_that_is_down_is_one_line_without_the_password(
+    tmp_path: Path, businesses_dir: Path
+) -> None:
+    down = "postgresql+psycopg://frontdesk_app:s3cret-pw@127.0.0.1:1/frontdesk_clinic"  # port 1
+    env = env_file(tmp_path, businesses_dir / "demo-clinic", (down, down))
+    budget = write_budget(tmp_path)
+
+    result = live(env, budget, input="Ciao\n")
+
+    assert refused(result) == (
+        "error: cannot reach the database (127.0.0.1:1); "
+        "start it with: docker compose up -d --wait postgres"
+    )
+    assert "s3cret-pw" not in result.output
+    with budget.exclusive():  # the session never started, and gave the budget back
+        pass
+
+
+@pytest.mark.parametrize(
+    ("url", "shown"),
+    [
+        pytest.param(
+            "postgresql+psycopg://frontdesk_app:s3cret-pw@127.0.0.1:5432/frontdesk",
+            "127.0.0.1:5432",
+            id="with-a-port",
+        ),
+        pytest.param(
+            "postgresql+psycopg://frontdesk_app:s3cret-pw@db.example/frontdesk",
+            "db.example",
+            id="without-a-port",
+        ),
+        pytest.param(
+            "postgresql+psycopg://frontdesk_app:s3cret-pw@/frontdesk",
+            "localhost",
+            id="without-a-host",
+        ),
+    ],
+)
+def test_only_the_host_and_the_port_of_the_database_are_shown(url: str, shown: str) -> None:
+    assert database_location(url) == shown
+
+
+def test_a_ledger_that_is_a_directory_is_one_error_line(
+    tmp_path: Path, businesses_dir: Path
+) -> None:
+    env = env_file(tmp_path, businesses_dir / "demo-clinic")
+    budget = write_budget(tmp_path)
+    budget.ledger_path.mkdir()
+
+    line = refused(live(env, budget, input="Ciao\n"))
+
+    assert line == f"error: {budget.ledger_path}: cannot be read (Is a directory)"
+    with budget.exclusive():
+        pass
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read a file whatever its mode")
+def test_a_ledger_that_may_not_be_read_is_one_error_line(
+    tmp_path: Path, businesses_dir: Path
+) -> None:
+    env = env_file(tmp_path, businesses_dir / "demo-clinic")
+    budget = write_budget(tmp_path)
+    budget.ledger_path.write_text("", encoding="utf-8")
+    budget.ledger_path.chmod(0o000)
+    try:
+        line = refused(live(env, budget, input="Ciao\n"))
+    finally:
+        budget.ledger_path.chmod(0o600)
+
+    assert line == f"error: {budget.ledger_path}: cannot be read (Permission denied)"
+    with budget.exclusive():
+        pass

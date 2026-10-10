@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Final
 
 import typer
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import OperationalError
 
 from frontdesk.cli.chat import run_chat
 from frontdesk.composition import (
@@ -99,6 +101,24 @@ def _fail(message: str) -> typer.Exit:
     return typer.Exit(1)
 
 
+def database_location(url: str) -> str:
+    """`host:port` of a database URL: all of it that is safe to print (no user, no password)."""
+    parsed = make_url(url)
+    host = parsed.host or "localhost"
+    return f"{host}:{parsed.port}" if parsed.port else host
+
+
+def _spent_usd(budget: Budget) -> float:
+    """What the ledger holds. A ledger that cannot be read at all (a directory, no permission) is a
+    BudgetError that names it, like every other problem with the budget."""
+    try:
+        return budget.spent_usd()
+    except OSError as error:
+        raise BudgetError(
+            f"{budget.ledger_path}: cannot be read ({error.strerror or error})"
+        ) from error
+
+
 def chat_run_id(now: datetime) -> str:
     """The run a session's ledger lines are filed under: `chat-` and the UTC time it began."""
     return f"chat-{now.astimezone(UTC):%Y%m%dT%H%M%SZ}"
@@ -135,7 +155,7 @@ class LiveCosts:
 
     @classmethod
     def begin(cls, meter: Meter, budget: Budget) -> LiveCosts:
-        return cls(meter, budget, budget.spent_usd())
+        return cls(meter, budget, _spent_usd(budget))
 
     @property
     def stop_reason(self) -> str | None:
@@ -143,7 +163,7 @@ class LiveCosts:
 
     def cost_line(self) -> str:
         turn_usd = sum(call.usd for call in self.meter.drain())
-        spent_usd = self.budget.spent_usd()
+        spent_usd = _spent_usd(self.budget)
         return format_cost_line(
             turn_eur=self.budget.eur(turn_usd),
             session_eur=self.budget.eur(spent_usd - self.spent_before_usd),
@@ -230,6 +250,13 @@ def _build_runtime(deployment: Deployment, env_file: Path, meter: Meter) -> Turn
         ) from error
     except EmbedderMismatchError as error:
         raise _fail(f"{error} --env-file {env_file}") from error
+    except OperationalError as error:
+        # The driver's own message (its host, its port, SQLAlchemy's help link) is left out.
+        location = database_location(deployment.settings.database_url)
+        raise _fail(
+            f"cannot reach the database ({location}); "
+            "start it with: docker compose up -d --wait postgres"
+        ) from error
     except ValueError as error:
         # What is left is a setting the live route needs, such as the Google Cloud project, or a
         # route whose endpoint is not pinned. The route itself was approved by `_live_route`.
