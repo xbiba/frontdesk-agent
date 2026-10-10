@@ -34,6 +34,7 @@ def test_the_summary_of_a_language_counts_every_kind_of_case() -> None:
         missed_emergencies=1,
         document_questions=3,
         wrong_refusals=1,
+        unanswered_documents=0,
         refusals_pending=0,
         answered=2,
         wrong_answers=1,
@@ -60,6 +61,7 @@ def test_one_summary_adds_up_all_the_languages() -> None:
     )
     assert (every.emergencies, every.missed_emergencies) == (2, 1)
     assert (every.document_questions, every.wrong_refusals, every.refusals_pending) == (4, 1, 0)
+    assert every.unanswered_documents == 0  # the four were answered or refused
     assert (every.answered, every.wrong_answers, every.answers_pending) == (3, 1, 1)
     assert (every.invented_facts, every.failed_by_pipeline, every.turns) == (0, 1, 7)
     assert (every.p50_seconds, every.p95_seconds) == (2.0, 9.0)
@@ -93,6 +95,7 @@ def test_a_language_of_the_pack_with_no_case_has_an_empty_summary() -> None:
             "missed_emergencies",
             "document_questions",
             "wrong_refusals",
+            "unanswered_documents",
             "refusals_pending",
             "answered",
             "wrong_answers",

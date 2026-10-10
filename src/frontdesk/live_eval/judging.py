@@ -26,14 +26,14 @@ from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 from frontdesk.agent.answer_check import links_in, negations_in, numbers_in
 from frontdesk.agent.vocab import Category, Intent
 from frontdesk.conversation.behaviour import Behaviour, observed_behaviour
-from frontdesk.conversation.evaluation import TurnCase, check_conversation
+from frontdesk.conversation.evaluation import Expectation, TurnCase, check_conversation
 from frontdesk.conversation.turn import TurnOutcome, TurnResult, TurnTrace
 from frontdesk.live_eval.records import TurnRecord, completed_cases
 from frontdesk.tenancy.pack import FixedTextKey, Language
 
 # Failures that mean the reply the person got differs from the expected answer.
 _CONTRADICTIONS: Final = ("missing text:", "unexpected text:", "behaviour:")
-# The replies that can carry an answer ahead of them.
+# The replies that can carry an answer ahead of them, and the ones a refused answer ends in.
 _NOTICES: Final = frozenset({Behaviour.CLINICAL, Behaviour.HANDOFF})
 FixedTexts = Mapping[Language, Mapping[FixedTextKey, str]]
 
@@ -93,7 +93,18 @@ class CaseVerdict:
 
     @property
     def document_question(self) -> bool:
-        return self.case.expect.answer_in_documents
+        """A question the documents answer: the case expects the answer (alone, or ahead of the
+        clinical notice), or a check refused the answer the model wrote for it, whatever the case
+        names as its sources."""
+        return _expects_document_answer(self.case.expect) or self.refused
+
+    @property
+    def unanswered_document_question(self) -> bool:
+        """A question the documents answer that the person got no answer to, though no check
+        refused one: the reply is a handoff of any cause (a failure, the model's own choice, a wrong
+        turn), a question asked back, or a fixed text. It is as lost as a refused answer."""
+        replied = self.observed is Behaviour.ANSWER and self.turns[-1].outcome != TurnOutcome.FIXED
+        return self.document_question and not self.refused and not (replied or self.answered_prefix)
 
     @property
     def wrong_refusal(self) -> bool:
@@ -223,8 +234,7 @@ def _verdict(
     last = results[-1]
     fixed = texts(last.language)
     observed = observed_behaviour(last, fixed)
-    expects_answer = case.expect.behaviour is Behaviour.ANSWER
-    refused = expects_answer and observed is Behaviour.HANDOFF and turns[-1].draft is not None
+    refused = _expects_answer(case.expect) and observed in _NOTICES and turns[-1].draft is not None
     given = _answer_given(case, turns[-1], observed, fixed)
     return CaseVerdict(
         case=case,
@@ -255,6 +265,23 @@ def _answer_given(
     if observed in _NOTICES and not _from_records(last.sources):
         return written
     return ""
+
+
+def _names_a_document(sources: Sequence[str]) -> bool:
+    """Some source is a document (a bare key), not a record ("kind:key")."""
+    return any(":" not in source for source in sources)
+
+
+def _expects_document_answer(expect: Expectation) -> bool:
+    """The case expects an answer the documents hold, alone or ahead of the clinical notice (the
+    mixed message: a clinical complaint with a question about the clinic)."""
+    if expect.answer_in_documents:
+        return True
+    return expect.behaviour is Behaviour.CLINICAL and _names_a_document(expect.sources)
+
+
+def _expects_answer(expect: Expectation) -> bool:
+    return expect.behaviour is Behaviour.ANSWER or _expects_document_answer(expect)
 
 
 def _from_records(sources: Sequence[str]) -> bool:

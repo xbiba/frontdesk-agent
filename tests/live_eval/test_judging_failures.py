@@ -117,15 +117,17 @@ def test_a_failure_on_an_earlier_turn_is_counted_and_names_its_turn() -> None:
     assert not verdict.wrong_answer  # the failure is the earlier turn's, not a wrong answer
 
 
-def test_a_document_question_lost_to_a_failure_is_no_refusal() -> None:
+def test_a_document_question_lost_to_a_failure_is_no_refusal_but_it_is_lost() -> None:
     # No check refused a draft: the model never got to write one. It is a handoff by failure, found
-    # in its own column, and the rate of right answers refused does not move.
+    # in its own column, and it counts against the criterion all the same: the person got no answer
+    # to a question the documents answer (Task 7 review, I1).
     parking = case("parking", behaviour="answer", contains=["six"], sources=["parking-en"])
     lost = record("parking", CONTACT, outcome="handoff", rejection="unknown_service_id")
     [verdict] = judge([parking], [lost], FIXED_TEXTS, {})
     assert verdict.document_question
     assert not verdict.refused
     assert not verdict.refusal_pending
+    assert verdict.unanswered_document_question
     assert verdict.failed_by_pipeline
     summary = summarize([verdict])["it"]
     assert (summary.document_questions, summary.wrong_refusals, summary.refusals_pending) == (
@@ -133,6 +135,7 @@ def test_a_document_question_lost_to_a_failure_is_no_refusal() -> None:
         0,
         0,
     )
+    assert summary.unanswered_documents == 1
     assert (summary.failed_by_pipeline, summary.passed) == (1, 0)
 
 

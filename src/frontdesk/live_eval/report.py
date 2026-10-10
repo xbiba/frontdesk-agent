@@ -1,9 +1,10 @@
 """The report of a live run: the exit criteria, then each language (M3 design §1, §4.4).
 
-Per language: right answers refused (over the questions the documents answer), wrong answers that
-reached the person (over the answers given), missed emergencies, invented facts, cases still to
-review, response time (median and 95th percentile) and cost per message and in all. The model
-requests are summed per agent, so the output caps can be tuned (§4.3, item 10).
+Per language: right answers refused (over the questions the documents answer; a question that
+nobody answered is lost like a refused one), wrong answers that reached the person (over the
+answers given), missed emergencies, invented facts, cases still to review, response time (median
+and 95th percentile) and cost per message and in all. The model requests are summed per agent, so
+the output caps can be tuned (§4.3, item 10).
 
 No criterion passes on nothing: with no case to measure it (no emergency case, no question the
 documents answer in a language of the pack, no critical case, no answer given) it is pending, and
@@ -44,6 +45,7 @@ class LanguageSummary:
     missed_emergencies: int
     document_questions: int
     wrong_refusals: int
+    unanswered_documents: int  # document questions the person got no answer to, none refused
     refusals_pending: int
     answered: int
     wrong_answers: int
@@ -59,6 +61,13 @@ class LanguageSummary:
     @property
     def wrong_refusal_rate(self) -> float:
         return self.wrong_refusals / self.document_questions if self.document_questions else 0.0
+
+    @property
+    def lost_answer_rate(self) -> float:
+        """The share of the questions the documents answer that got no right answer: those a check
+        refused wrongly and those nobody answered."""
+        lost = self.wrong_refusals + self.unanswered_documents
+        return lost / self.document_questions if self.document_questions else 0.0
 
     @property
     def wrong_answer_rate(self) -> float:
@@ -133,15 +142,14 @@ def criteria(
     for language, summary in summaries.items():
         if language == ALL:
             continue
-        status: Status = "fail" if summary.wrong_refusal_rate > MAX_WRONG_REFUSALS else "pass"
+        status: Status = "fail" if summary.lost_answer_rate > MAX_WRONG_REFUSALS else "pass"
         if status == "pass" and (summary.refusals_pending or not summary.document_questions):
             status = "pending"
         found.append(
             Criterion(
                 f"Right answers refused ({language})",
                 f"at most {MAX_WRONG_REFUSALS:.0%}",
-                f"{summary.wrong_refusal_rate:.0%} "
-                f"({summary.wrong_refusals}/{summary.document_questions})",
+                f"{summary.lost_answer_rate:.0%} ({_lost(summary)})",
                 status,
             )
         )
@@ -271,6 +279,7 @@ def report_json(
                 name: {
                     **asdict(summary),
                     "wrong_refusal_rate": summary.wrong_refusal_rate,
+                    "lost_answer_rate": summary.lost_answer_rate,
                     "wrong_answer_rate": summary.wrong_answer_rate,
                 }
                 for name, summary in summaries.items()
@@ -288,6 +297,8 @@ def report_json(
                     "rule": v.turns[-1].rule,
                     "rejection": v.turns[-1].rejection,
                     "failed_by_pipeline": v.failed_by_pipeline,
+                    "document_question": v.document_question,
+                    "unanswered_document_question": v.unanswered_document_question,
                     "refused": v.refused,
                     "dubious": v.dubious,
                     "seconds": list(v.seconds),
@@ -313,7 +324,8 @@ def _summary(language: str, verdicts: Sequence[CaseVerdict]) -> LanguageSummary:
         emergencies=sum(1 for v in verdicts if v.expects_emergency),
         missed_emergencies=sum(1 for v in verdicts if v.missed_emergency),
         document_questions=sum(1 for v in verdicts if v.document_question),
-        wrong_refusals=sum(1 for v in verdicts if v.document_question and v.wrong_refusal),
+        wrong_refusals=sum(1 for v in verdicts if v.wrong_refusal),
+        unanswered_documents=sum(1 for v in verdicts if v.unanswered_document_question),
         refusals_pending=sum(1 for v in verdicts if v.refusal_pending),
         answered=sum(1 for v in verdicts if v.answered),
         wrong_answers=sum(1 for v in verdicts if v.wrong_answer),
@@ -342,13 +354,22 @@ def _zero(count: int, *, measured: bool) -> Status:
     return "pass" if measured else "pending"
 
 
+def _lost(summary: LanguageSummary) -> str:
+    """ "w/n": w wrong refusals among the n questions the documents answer; "w+k/n" when k of them
+    were never answered, though no check refused them."""
+    lost = f"{summary.wrong_refusals}"
+    if summary.unanswered_documents:
+        lost += f"+{summary.unanswered_documents}"
+    return f"{lost}/{summary.document_questions}"
+
+
 def _language_row(summary: LanguageSummary, budget: Budget | None) -> str:
     eur = budget.eur(summary.usd) if budget else 0.0
     per_message = eur / summary.turns if summary.turns else 0.0
     return (
         f"| {summary.language} | {summary.cases} | {summary.passed} | "
         f"{summary.critical_failures} | {summary.missed_emergencies} | "
-        f"{summary.wrong_refusals}/{summary.document_questions} | "
+        f"{_lost(summary)} | "
         f"{summary.wrong_answers}/{summary.answered} | {summary.invented_facts} | "
         f"{summary.refusals_pending + summary.answers_pending} | {summary.failed_by_pipeline} | "
         f"{summary.p50_seconds:.1f} | {summary.p95_seconds:.1f} | {summary.within_limit:.0%} | "
