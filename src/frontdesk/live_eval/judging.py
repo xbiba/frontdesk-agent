@@ -9,8 +9,11 @@ are pending, and so are the criteria that depend on them.
 
 An answer can also come ahead of a notice: a clinical message with an administrative question gets
 the answer to that question, then the clinical notice and the contact (`turn._route`). That reply
-reads as the notice, yet the answer in front of it is the model's text from the documents and can
-invent a fact as much as any other, so it is judged and reviewed as an answer (`answered_prefix`).
+reads as the notice, yet the answer in front of it is the model's text and can invent a fact as much
+as any other, so it is judged and reviewed as an answer (`answered_prefix`).
+
+What is reviewed is what reached the person, not what the case declares: the text the model wrote,
+in any turn, that is not a record answer or a text of the pack (`model_text`).
 """
 
 from __future__ import annotations
@@ -35,6 +38,8 @@ from frontdesk.tenancy.pack import FixedTextKey, Language
 _CONTRADICTIONS: Final = ("missing text:", "unexpected text:", "behaviour:")
 # The replies that can carry an answer ahead of them, and the ones a refused answer ends in.
 _NOTICES: Final = frozenset({Behaviour.CLINICAL, Behaviour.HANDOFF})
+# The replies in which the model's text can reach the person.
+_ANSWERS: Final = _NOTICES | {Behaviour.ANSWER}
 FixedTexts = Mapping[Language, Mapping[FixedTextKey, str]]
 
 
@@ -67,8 +72,11 @@ class CaseVerdict:
     observed: Behaviour
     refused: bool
     dubious: bool
-    # The last reply is a notice with an answer from the documents ahead of it.
+    # The last reply is a notice with text the model wrote ahead of it.
     answered_prefix: bool
+    # The model wrote text that reached the person, in some turn: not a record answer, not a text
+    # of the pack.
+    model_text: bool
     label: Label | None
 
     @property
@@ -104,7 +112,7 @@ class CaseVerdict:
         refused one: the reply is a handoff of any cause (a failure, the model's own choice, a wrong
         turn), a question asked back, or a fixed text. It is as lost as a refused answer."""
         replied = self.observed is Behaviour.ANSWER and self.turns[-1].outcome != TurnOutcome.FIXED
-        return self.document_question and not self.refused and not (replied or self.answered_prefix)
+        return self.document_question and not self.refused and not (replied or self.model_text)
 
     @property
     def wrong_refusal(self) -> bool:
@@ -112,18 +120,22 @@ class CaseVerdict:
         return self.refused and self.label is not None and self.label.refusal == "wrong"
 
     @property
-    def answered(self) -> bool:
-        """The person got an answer: the reply is one, or an answer from the documents comes
-        ahead of a notice."""
+    def last_answered(self) -> bool:
+        """The last reply is an answer, or a notice with an answer ahead of it."""
         return self.observed is Behaviour.ANSWER or self.answered_prefix
 
     @property
+    def answered(self) -> bool:
+        """The person got an answer: in the last reply, or the model wrote one in an earlier turn."""
+        return self.last_answered or self.model_text
+
+    @property
     def wrong_answer(self) -> bool:
-        """A wrong answer that reached the person: it contradicts the expected answer, or the
-        reviewer says it is wrong."""
+        """A wrong answer that reached the person: the last reply is an answer that contradicts the
+        expected one, or the reviewer says an answer was wrong."""
         contradicts = any(failure.startswith(_CONTRADICTIONS) for failure in self.failures)
         labelled = self.label is not None and self.label.answer == "wrong"
-        return self.answered and (contradicts or labelled)
+        return (self.last_answered and contradicts) or (self.answered and labelled)
 
     @property
     def invented_fact(self) -> bool:
@@ -231,40 +243,55 @@ def _verdict(
     label: Label | None,
 ) -> CaseVerdict:
     results = [as_result(turn) for turn in turns]
-    last = results[-1]
-    fixed = texts(last.language)
-    observed = observed_behaviour(last, fixed)
-    refused = _expects_answer(case.expect) and observed in _NOTICES and turns[-1].draft is not None
-    given = _answer_given(case, turns[-1], observed, fixed)
+    kinds = [observed_behaviour(result, texts(result.language)) for result in results]
+    written = [
+        _answer_given(turn, kind, texts(turn.language))
+        for turn, kind in zip(turns, kinds, strict=True)
+    ]
+    refused = _expects_answer(case.expect) and kinds[-1] in _NOTICES and turns[-1].draft is not None
     return CaseVerdict(
         case=case,
         turns=turns,
         failures=check_conversation(case, results, texts),
-        observed=observed,
+        observed=kinds[-1],
         refused=refused,
-        dubious=bool(given) and _adds_facts(case, given, turns[-1].language, fixed),
-        answered_prefix=observed is not Behaviour.ANSWER and bool(given),
+        dubious=_adds_facts_in_any_turn(case, turns, written, texts),
+        answered_prefix=kinds[-1] is not Behaviour.ANSWER and bool(written[-1]),
+        model_text=any(written),
         label=label,
     )
 
 
-def _answer_given(
-    case: TurnCase, last: TurnRecord, observed: Behaviour, fixed: Mapping[FixedTextKey, str]
-) -> str:
-    """The answer the model wrote from the documents for the person, without the pack's own texts
-    (a disclosure, a notice, the contact); empty when the reply holds none.
+def _answer_given(turn: TurnRecord, observed: Behaviour, fixed: Mapping[FixedTextKey, str]) -> str:
+    """The text the model wrote for the person in this reply, without the pack's own texts (a
+    disclosure, a notice, the contact); empty when the reply holds none.
 
-    Two replies hold one: an answer to a question the documents answer, and a notice with text of
-    its own ahead of it. That text is the model's unless every source of the turn is a record: then
-    code composed it from the approved data (prices, hours), and nothing in it can be invented.
-    Text no source explains counts as an answer, so a missing source cannot hide one from review.
+    An answer, or a notice with text of its own ahead of it, holds the model's text unless every
+    source of the turn is a record: then code composed it from the approved data (prices, hours)
+    and nothing in it can be invented. A fixed outcome (a greeting, the personal-data notice) is
+    the pack's own text by construction. Text no source explains counts as the model's, so a lost
+    source cannot hide an answer from review. What the case declares does not matter: the reply is
+    what reached the person.
     """
-    written = _without_fixed_texts(last.reply, fixed)
-    if observed is Behaviour.ANSWER:
-        return written if case.expect.answer_in_documents else ""
-    if observed in _NOTICES and not _from_records(last.sources):
-        return written
-    return ""
+    if observed not in _ANSWERS or turn.outcome == TurnOutcome.FIXED or _from_records(turn.sources):
+        return ""
+    return _without_fixed_texts(turn.reply, fixed)
+
+
+def _adds_facts_in_any_turn(
+    case: TurnCase,
+    turns: Sequence[TurnRecord],
+    written: Sequence[str],
+    texts: Callable[[Language], Mapping[FixedTextKey, str]],
+) -> bool:
+    """Some turn's model text holds a number, a link or a negation the expected answer lacks. The
+    expectation is the case's, which describes its last reply: an earlier answer is held to it too,
+    so what it adds is for the reviewer to see."""
+    return any(
+        _adds_facts(case, text, turn.language, texts(turn.language))
+        for turn, text in zip(turns, written, strict=True)
+        if text
+    )
 
 
 def _names_a_document(sources: Sequence[str]) -> bool:

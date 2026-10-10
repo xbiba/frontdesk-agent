@@ -297,3 +297,42 @@ def test_the_script_writes_quoted_case_ids_and_lets_an_invented_fact_decide_the_
     assert "lines.push(`${JSON.stringify(item.dataset.case)}:`, ...fields);" in page
     assert 'if (name === "answer" && inventedFact) fields.push("  answer: wrong");' in page
     assert 'if (inventedFact) fields.push("  invented_fact: true");' in page
+
+
+def test_a_conversation_shows_the_replies_before_the_last_so_an_earlier_fact_can_be_judged() -> (
+    None
+):
+    conversation = case(
+        "conv", behaviour="answer", contains=["sei"], sources=["parking-it"]
+    ).model_copy(update={"message": None, "messages": ("posti?", "e di notte?")})
+    first = record(
+        "conv",
+        "Ci sono sei posti, <b>aperti 24 ore</b> su 24.",
+        turn=1,
+        turns=2,
+        message="posti?",
+        sources=("parking-it",),
+    )
+    last = record(
+        "conv",
+        "Ci sono sei posti.",
+        turn=2,
+        turns=2,
+        message="e di notte?",
+        sources=("parking-it",),
+    )
+    [verdict] = judge([conversation], [first, last], FIXED_TEXTS, {})
+    assert verdict.dubious  # the 24 was said in turn 1
+    body = sections(render_review_page(manifest(), [verdict], {}, run_dir="d"))["conv"]
+    assert "<h3>Question</h3><pre>posti?</pre><pre>e di notte?</pre>" in body
+    assert (
+        "<h3>Earlier replies</h3>"
+        "<pre>Ci sono sei posti, &lt;b&gt;aperti 24 ore&lt;/b&gt; su 24.</pre>" in body
+    )
+    assert "<h3>Reply sent</h3><pre>Ci sono sei posti.</pre>" in body
+    assert body.index("Earlier replies") < body.index("Reply sent")
+
+
+def test_a_single_reply_has_no_earlier_replies() -> None:
+    body = sections(render_review_page(manifest(), verdicts(), {}, run_dir="d"))["hours"]
+    assert "Earlier replies" not in body

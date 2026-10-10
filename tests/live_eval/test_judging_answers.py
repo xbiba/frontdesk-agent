@@ -93,8 +93,9 @@ def test_a_reply_with_diagnostic_language_or_a_promise_is_not_a_contradiction() 
 # --- dubious: what the answer adds ----------------------------------------------------------------
 
 
-def test_only_a_question_the_documents_answer_has_answers_to_review() -> None:
-    # A price from the records is composed by code: nothing in it can be invented.
+def test_an_answer_composed_from_the_records_has_nothing_to_review() -> None:
+    # A price from the records is composed by code: nothing in it can be invented, whatever the
+    # case expects (the gate reads the sources of the reply: see test_judging_replies.py).
     prices = case("prices", behaviour="answer", contains=["30 EUR"], sources=["price:physio"])
     verdict = verdict_of(prices, "Physiotherapy: 30 EUR, 5 sessions.", sources=("price:physio",))
     assert verdict.answered

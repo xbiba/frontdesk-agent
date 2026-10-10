@@ -85,6 +85,7 @@ def _section(verdict: CaseVerdict, label: Label | None) -> str:
     case = verdict.case
     last = verdict.turns[-1]
     questions = "".join(f"<pre>{escape(turn.message)}</pre>" for turn in verdict.turns)
+    earlier = "".join(f"<pre>{escape(turn.reply)}</pre>" for turn in verdict.turns[:-1])
     expected = (
         f"<p>Behaviour: {escape(str(case.expect.behaviour or '-'))}; must say: "
         f"{escape('; '.join(case.expect.contains) or '-')}; must not say: "
@@ -94,6 +95,7 @@ def _section(verdict: CaseVerdict, label: Label | None) -> str:
         f'<section data-case="{escape(case.id)}">',
         f"<h2>{escape(case.id)} ({escape(verdict.language)})</h2>",
         f"<h3>Question</h3>{questions}",
+        *([f"<h3>Earlier replies</h3>{earlier}"] if earlier else []),
         f"<h3>Expected answer</h3>{expected}",
         f"<h3>Reply sent</h3><pre>{escape(last.reply)}</pre>",
     ]

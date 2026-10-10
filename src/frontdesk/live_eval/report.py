@@ -48,6 +48,7 @@ class LanguageSummary:
     unanswered_documents: int  # document questions the person got no answer to, none refused
     refusals_pending: int
     answered: int
+    model_answers: int  # cases in which the model wrote text that reached the person
     wrong_answers: int
     invented_facts: int
     answers_pending: int
@@ -135,7 +136,7 @@ def criteria(
             str(every.invented_facts),
             _zero(
                 every.invented_facts,
-                measured=every.answered > 0 and not every.answers_pending,
+                measured=every.model_answers > 0 and not every.answers_pending,
             ),
         ),
     ]
@@ -328,6 +329,7 @@ def _summary(language: str, verdicts: Sequence[CaseVerdict]) -> LanguageSummary:
         unanswered_documents=sum(1 for v in verdicts if v.unanswered_document_question),
         refusals_pending=sum(1 for v in verdicts if v.refusal_pending),
         answered=sum(1 for v in verdicts if v.answered),
+        model_answers=sum(1 for v in verdicts if v.model_text),
         wrong_answers=sum(1 for v in verdicts if v.wrong_answer),
         invented_facts=sum(1 for v in verdicts if v.invented_fact),
         answers_pending=sum(1 for v in verdicts if v.answer_pending),
