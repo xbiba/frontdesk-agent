@@ -22,13 +22,8 @@ from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, TurnResult, TurnRuntime, TurnTrace
 from frontdesk.model_gateway.metering import Meter
 from frontdesk.model_gateway.routes import ROUTES
+from tests.cli.live_chat_helpers import BANNER
 from tests.model_gateway.budget_helpers import ROUTE, write_budget
-
-BANNER = (
-    "Live: gemini-3.1-flash-lite on Vertex AI eu, metered against {path} "
-    "({left} EUR left of {cap} EUR). Test messages only: never type a real patient's data."
-)
-
 
 # --- The lines the chat prints ----------------------------------------------------------------------
 
