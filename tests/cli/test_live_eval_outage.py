@@ -17,9 +17,11 @@ import httpx2
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 
+from frontdesk.conversation.evaluation import load_turn_cases
 from frontdesk.conversation.turn import TURN_TIMEOUT_SECONDS
 from tests.cli.live_chat_helpers import PARKING, PRICE, Install, bootstrapped
 from tests.cli.live_eval_helpers import (
+    Behave,
     eval_live,
     failures_in,
     install_provider,
@@ -27,6 +29,7 @@ from tests.cli.live_eval_helpers import (
     recorded_cases,
     rules_of,
     write_cases,
+    write_mixed_cases,
     write_parking_cases,
 )
 from tests.model_gateway.budget_helpers import write_budget
@@ -214,3 +217,92 @@ def test_a_stop_that_dropped_nothing_says_nothing_of_it(
 
 def _status_429() -> None:
     raise ModelHTTPError(429, "gemini-3.1-flash-lite", body={"error": {"code": 429}})
+
+
+def _resets_from(number: int) -> Behave:
+    """A provider that resets every request of the classifier from the `number`-th on."""
+
+    def behave(role: str, count: int) -> None:
+        if count >= number:
+            raise httpx2.ReadError("connection reset by peer")
+
+    return behave
+
+
+def test_a_case_the_rules_decide_does_not_release_the_failure_held_before_it(
+    tmp_path: Path,
+    businesses_dir: Path,
+    database: tuple[str, str],
+    gemini: Install,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Probe H7. The price question fails (reset), the emergency is decided by the rules (it makes
+    # no request, so it shows nothing of the provider), and the third case is rate limited.
+    def behave(role: str, number: int) -> None:
+        if number == 1:
+            raise httpx2.ReadError("connection reset by peer")
+        _status_429()
+
+    sent = install_provider(monkeypatch, PRICE, behave)
+    env = bootstrapped(tmp_path, businesses_dir, database)
+    budget, cases = write_budget(tmp_path, usd_per_eur=1.0), write_mixed_cases(tmp_path)
+    run_dir = tmp_path / "runs" / "live-1"
+
+    stopped = eval_live(env, budget, run_dir, cases)
+
+    assert stopped.exit_code == 3
+    assert len(sent) == 1 + 4  # the reset, then one request and its three retries
+    assert recorded_cases(run_dir) == []  # neither the failure nor the emergency behind it
+    assert stopped.stderr.splitlines() == [
+        "stopped by the rate limit: run the same command later to resume",
+        "1 case ended in a failure just before the stop and is not recorded: "
+        "the same command runs it again (price-it)",
+    ]
+
+    sent = gemini(PRICE)  # the provider answers again
+    resumed = eval_live(env, budget, run_dir, cases)
+
+    assert resumed.exit_code == 0, resumed.output
+    assert recorded_cases(run_dir) == ["price-it", "chest-it", "price-tagged"]  # in order
+    assert rules_of(run_dir) == ["pass", "emergency", "pass"]
+    assert failures_in(run_dir) == 0
+
+
+def test_an_outage_in_the_demo_dataset_leaves_no_failed_case_in_the_evidence(
+    tmp_path: Path,
+    businesses_dir: Path,
+    database: tuple[str, str],
+    gemini: Install,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Probe H12, on the dataset of the demo clinic, where 16 of 56 cases are decided by the rules:
+    # the provider resets every request from the 20th on. The cases that fail before the run
+    # stops are followed by cases the rules decide, which release nothing.
+    dataset = businesses_dir / "demo-clinic" / "evals" / "turns.yaml"
+    names = [case.id for case in load_turn_cases(dataset)]
+    sent = install_provider(monkeypatch, PRICE, _resets_from(20))
+    env = bootstrapped(tmp_path, businesses_dir, database)
+    budget, run_dir = write_budget(tmp_path, usd_per_eur=1.0), tmp_path / "runs" / "live-1"
+
+    stopped = eval_live(env, budget, run_dir, dataset)
+
+    assert stopped.exit_code == 5, stopped.output
+    assert sent.count("classifier") == 22  # the 20th, 21st and 22nd failed in a row: the breaker
+    assert {"error", "timeout"}.isdisjoint(rules_of(run_dir))  # not one failure is in the evidence
+    first, second = stopped.stderr.splitlines()
+    assert first.startswith("stopped: the model keeps failing")
+    assert " ended in a failure just before the stop and are not recorded: " in second
+    dropped = second.rsplit("(", 1)[1].removesuffix(")").split(", ")
+    assert dropped
+    assert set(dropped) <= set(names)  # the stop line names cases of the dataset
+    assert set(dropped).isdisjoint(recorded_cases(run_dir))  # and they are not in the evidence
+    recorded = len(set(recorded_cases(run_dir)))
+
+    gemini(PRICE)  # the provider answers again
+    resumed = eval_live(env, budget, run_dir, dataset)
+
+    assert resumed.exit_code == 0, resumed.output
+    assert list(dict.fromkeys(recorded_cases(run_dir))) == names  # all of them, in order
+    assert 0 < recorded < len(names)
+    assert {"error", "timeout"}.isdisjoint(rules_of(run_dir))
+    assert failures_in(run_dir) == 0

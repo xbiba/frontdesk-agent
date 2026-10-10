@@ -8,10 +8,15 @@ runs again in full.
 A case that ends in the failure an outage causes (the turn crashed or timed out, or a model call
 failed) is held back before it is written. The provider may be down: the breaker needs three failed
 attempts to say so, and the cases that fail with fewer would stand in the evidence, where a resume
-skips them and the report counts them. So the record waits for a later case that completes without
-such a failure (then the provider answered, and the failure was that case's own), and is written at
-the normal end of the run; when the meter stops the run it is dropped, and the same command runs the
-case again. Each case is still written on its own.
+skips them and the report counts them. So the record waits for a later case that the provider
+answered (a request of it came back with its usage, and the case ended in no such failure: then the
+failure was that case's own), and is written at the normal end of the run; when the meter stops the
+run it is dropped, and the same command runs the case again.
+
+A case the rules decide (an emergency, clinical advice, personal data) makes no request and shows
+nothing of the provider. While a failure waits, such a case waits behind it, so that the file keeps
+the order of the cases, and it is written with the failure; it costs nothing to run again. Each case
+is still written on its own. The offline route has no provider that can be down, and holds nothing.
 """
 
 from __future__ import annotations
@@ -42,6 +47,9 @@ from frontdesk.model_gateway.metering import CallRecord, Meter
 # not hold, a question left blank) are the model's own mistakes and stay evidence wherever they fall.
 OUTAGE_REJECTIONS: Final = frozenset({"classifier_error", "responder_error"})
 
+# The cases written down for later, in the order of the run: the id and the turns of each.
+_Held = Sequence[tuple[str, tuple[TurnRecord, ...]]]
+
 
 @dataclass(frozen=True)
 class RunProgress:
@@ -49,7 +57,8 @@ class RunProgress:
     total: int
     stopped: str | None  # why the meter stopped the run (`Meter.stop_reason`), or None
     # The cases that ended in an outage failure and were held back when the meter stopped the run:
-    # they are not recorded, so the same command runs them again.
+    # they are not recorded, so the same command runs them again. The cases the rules decided that
+    # waited behind them are dropped as well, and are not named: they ended in no failure.
     dropped: tuple[str, ...] = ()
 
 
@@ -62,6 +71,16 @@ def ends_in_outage_failure(records: Sequence[TurnRecord]) -> bool:
     or a model call of it failed. An answer the model got wrong is not one."""
     last = records[-1]
     return last.rule in FAILURE_RULES or last.rejection in OUTAGE_REJECTIONS
+
+
+def answered_by_the_model(records: Sequence[TurnRecord]) -> bool:
+    """Whether a request of the case came back from the provider with its usage. A case the rules
+    decide (an emergency, clinical advice, personal data) makes no request, and a request that
+    came back without usage is recorded as unconfirmed, with no tokens: neither shows that the
+    provider answers."""
+    return any(
+        call.input_tokens + call.output_tokens > 0 for turn in records for call in turn.calls
+    )
 
 
 async def run_live_eval(
@@ -77,8 +96,8 @@ async def run_live_eval(
 ) -> RunProgress:
     """Run the cases not yet recorded, at most `limit` of them; drafts refused by a check are
     kept for the review. Without a meter (the offline route) nothing is reserved or recorded.
-    The records of cases that ended in an outage failure are held (see the module); the progress
-    names those a stop dropped."""
+    The records of cases that ended in an outage failure are held, and so are the cases the rules
+    decide while a failure waits (see the module); the progress names the failures a stop dropped."""
     keeping = replace(runtime, keep_drafts=True)
     done = set(completed_cases(read_turns(files)))
     pending = [case for case in cases if case.id not in done]
@@ -87,8 +106,8 @@ async def run_live_eval(
         records = await _run_case(keeping, case, run_id=run_id, meter=meter, clock=clock, now=now)
         if records is None:
             stopped = meter.stop_reason if meter else None
-            return RunProgress(len(done), len(cases), stopped, tuple(name for name, _ in held))
-        if ends_in_outage_failure(records):
+            return RunProgress(len(done), len(cases), stopped, _failures(held))
+        if _is_held_back(records, held, meter):
             held.append((case.id, records))
             continue
         done |= _write([*held, (case.id, records)], files)
@@ -97,7 +116,20 @@ async def run_live_eval(
     return RunProgress(len(done), len(cases), None)
 
 
-def _write(cases: Sequence[tuple[str, tuple[TurnRecord, ...]]], files: RunFiles) -> set[str]:
+def _is_held_back(records: Sequence[TurnRecord], held: _Held, meter: Meter | None) -> bool:
+    """Whether a case waits before it is written: it ended in an outage failure, or it shows
+    nothing of the provider while a failure waits. Only a metered run has a provider to be down."""
+    if meter is None:
+        return False
+    return ends_in_outage_failure(records) or (bool(held) and not answered_by_the_model(records))
+
+
+def _failures(held: _Held) -> tuple[str, ...]:
+    """The held cases that ended in an outage failure, in order."""
+    return tuple(name for name, records in held if ends_in_outage_failure(records))
+
+
+def _write(cases: _Held, files: RunFiles) -> set[str]:
     """Write each case on its own, in order; the ids written."""
     for _, records in cases:
         append_case(files, records)

@@ -5,9 +5,11 @@ An outage shows as fewer than three failed attempts in a case: a refusal or a re
 one case cut by the turn limit while the provider hangs. The breaker stops the run at the case that
 fails the third time, and until then the earlier cases had been written to `turns.jsonl`, where a
 resume treated them as finished and the report counted them. Now the record of such a case is held:
-written when a later case completes without that kind of failure (the provider answered, so the
-failure was the case's own), or when the run ends normally, and dropped when the meter stops the
-run, so that the same command runs the case again.
+written when a later case that a model call answered completes without that kind of failure (the
+provider answered, so the failure was the case's own), or when the run ends normally, and dropped
+when the meter stops the run, so that the same command runs the case again. A case the rules decide
+makes no request and shows nothing of the provider: while a failure waits, it waits behind it
+(fix round 2, review N-1).
 """
 
 from __future__ import annotations
@@ -19,14 +21,18 @@ from typing import Any
 
 import httpx2
 import pytest
+from pydantic_ai import ModelResponse
 from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.messages import ModelMessage
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from frontdesk.conversation.evaluation import TurnCase
 from frontdesk.live_eval import runner
 from frontdesk.live_eval.records import RunFiles, TurnRecord, read_turns
-from frontdesk.live_eval.runner import ends_in_outage_failure
+from frontdesk.live_eval.runner import answered_by_the_model, ends_in_outage_failure, run_live_eval
 from frontdesk.tenancy.pack import BusinessPack
-from tests.live_eval.helpers import record
+from tests.conversation.helpers import document_responder, make_runtime
+from tests.live_eval.helpers import call, record
 from tests.live_eval.rig import CASES, Activate, Rig
 
 db = pytest.mark.db
@@ -58,6 +64,11 @@ def _single_turn_cases(*case_ids: str) -> list[TurnCase]:
         )
         for case_id in case_ids
     ]
+
+
+def _rules_only_case(case_id: str) -> TurnCase:
+    """An emergency: the rules answer it, and no request is made."""
+    return TurnCase.model_validate({"id": case_id, "message": "Mi fa male il petto", "expect": {}})
 
 
 def _rules(records: tuple[TurnRecord, ...]) -> list[tuple[str, int, str]]:
@@ -319,3 +330,180 @@ async def test_a_run_that_nothing_stops_has_nothing_dropped(
     progress = await rig.start(CASES)
     assert (progress.done, progress.stopped, progress.dropped) == (3, None, ())
     assert rig.requests == ["classifier"] * 4
+
+
+# --- A case the rules decide says nothing about the provider (fix round 2, re-review N-1) ---------
+#
+# An emergency, clinical advice or personal data is answered by the rules: the case makes no
+# request. It cannot show that the provider answers, so it does not release the failures held before
+# it; it waits behind them, and is written with them when a case the model answered completes.
+
+
+def test_a_call_that_came_back_with_usage_is_a_case_the_model_answered() -> None:
+    answered = call(input_tokens=900, output_tokens=40, finish_reason="stop")
+    cut_off = call(input_tokens=0, output_tokens=0, finish_reason="unconfirmed", model_version=None)
+    assert answered_by_the_model([record("a", "ciao", calls=(answered,))]) is True
+    assert answered_by_the_model([record("a", "ciao", calls=())]) is False  # the rules decided
+    assert answered_by_the_model([record("a", "ciao", calls=(cut_off,))]) is False  # no usage
+    assert answered_by_the_model([record("a", "ciao", calls=(cut_off, answered))]) is True
+
+
+def test_a_conversation_is_answered_if_the_model_answered_any_of_its_turns() -> None:
+    first = record("a", "ciao", turn=1, turns=2, calls=())
+    second = record("a", "ciao", turn=2, turns=2, calls=(call(),))
+    assert answered_by_the_model([first, second]) is True
+    assert answered_by_the_model([first, record("a", "ciao", turn=2, turns=2, calls=())]) is False
+
+
+@db
+async def test_a_case_the_rules_decide_does_not_release_a_failure_held_before_it(
+    activate_pack: Activate, clinic_pack: BusinessPack, tmp_path: Path
+) -> None:
+    # Probes H7 and H12: "a" fails, "e" is decided by the rules, and the run stops in "b".
+    cases = [*_single_turn_cases("a"), _rules_only_case("e"), *_single_turn_cases("b")]
+    on_request = {1: _reset, 2: _rate_limit, 3: _rate_limit, 4: _rate_limit, 5: _rate_limit}
+    rig = Rig(clinic_pack, activate_pack(clinic_pack), tmp_path, on_request=on_request)
+
+    stopped = await rig.start(cases)
+
+    assert (stopped.done, stopped.stopped) == (0, "rate_limited")
+    assert stopped.dropped == ("a",)  # the failure is named; "e" is no failure
+    assert read_turns(rig.files) == ()  # and "e" waited behind it: it is not recorded either
+
+    resumed = await rig.start(cases)  # the provider answers again; "e" costs nothing to run again
+
+    assert (resumed.done, resumed.stopped, resumed.dropped) == (3, None, ())
+    assert _rules(read_turns(rig.files)) == [
+        ("a", 1, "pass"),
+        ("e", 1, "emergency"),
+        ("b", 1, "pass"),
+    ]
+
+
+@db
+async def test_a_case_the_model_answered_releases_the_failure_and_the_rules_only_cases_in_order(
+    activate_pack: Activate, clinic_pack: BusinessPack, tmp_path: Path
+) -> None:
+    cases = [*_single_turn_cases("a"), _rules_only_case("e"), *_single_turn_cases("b")]
+    rig = Rig(clinic_pack, activate_pack(clinic_pack), tmp_path, on_request={1: _reset})
+
+    progress = await rig.start(cases)
+
+    assert (progress.done, progress.stopped, progress.dropped) == (3, None, ())
+    # "a" failed on its own (the model answered "b"): it is evidence, and "e" is written with it,
+    # in the order of the cases.
+    assert _rules(read_turns(rig.files)) == [
+        ("a", 1, "error"),
+        ("e", 1, "emergency"),
+        ("b", 1, "pass"),
+    ]
+
+
+@db
+async def test_failures_and_rules_only_cases_are_written_one_by_one_when_a_model_answer_comes(
+    activate_pack: Activate,
+    clinic_pack: BusinessPack,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writes: list[list[str]] = []
+    real = runner.append_case
+
+    def spy(files: RunFiles, records: Any) -> None:
+        writes.append([each.case_id for each in records])
+        real(files, records)
+
+    monkeypatch.setattr(runner, "append_case", spy)
+    cases = [
+        *_single_turn_cases("a"),
+        _rules_only_case("e1"),
+        *_single_turn_cases("b"),
+        _rules_only_case("e2"),
+        *_single_turn_cases("c"),
+    ]
+    rig = Rig(clinic_pack, activate_pack(clinic_pack), tmp_path, on_request={1: _reset, 2: _reset})
+
+    progress = await rig.start(cases)
+
+    assert progress.done == 5
+    # "a" and "b" failed, "c" is the first case the model answered: all five are written then, one
+    # write for each case, in the order of the cases.
+    assert writes == [["a"], ["e1"], ["b"], ["e2"], ["c"]]
+
+
+@db
+async def test_a_stop_names_the_failures_it_dropped_and_not_the_rules_only_cases_behind_them(
+    activate_pack: Activate, clinic_pack: BusinessPack, tmp_path: Path
+) -> None:
+    cases = [
+        *_single_turn_cases("a"),
+        _rules_only_case("e"),
+        *_single_turn_cases("b", "c"),
+    ]
+    rig = Rig(
+        clinic_pack,
+        activate_pack(clinic_pack),
+        tmp_path,
+        on_request={1: _reset, 2: _reset, 3: _reset},
+    )
+
+    stopped = await rig.start(cases, breaker=3)
+
+    assert (stopped.done, stopped.stopped) == (0, "unavailable")
+    assert stopped.dropped == ("a", "b")
+    assert read_turns(rig.files) == ()
+
+
+@db
+async def test_a_case_the_rules_decide_is_written_at_once_when_no_failure_is_held(
+    activate_pack: Activate, clinic_pack: BusinessPack, tmp_path: Path
+) -> None:
+    cases = [_rules_only_case("e"), *_single_turn_cases("b")]
+    on_request = {1: _rate_limit, 2: _rate_limit, 3: _rate_limit, 4: _rate_limit}
+    rig = Rig(clinic_pack, activate_pack(clinic_pack), tmp_path, on_request=on_request)
+
+    stopped = await rig.start(cases)
+
+    assert (stopped.done, stopped.stopped, stopped.dropped) == (1, "rate_limited", ())
+    assert _rules(read_turns(rig.files)) == [("e", 1, "emergency")]
+
+
+@db
+async def test_the_rules_only_cases_held_at_the_end_of_the_run_are_written_with_the_failure(
+    activate_pack: Activate, clinic_pack: BusinessPack, tmp_path: Path
+) -> None:
+    cases = [*_single_turn_cases("a"), _rules_only_case("e")]
+    rig = Rig(clinic_pack, activate_pack(clinic_pack), tmp_path, on_request={1: _reset})
+
+    progress = await rig.start(cases)  # no model answer follows the failure: the run just ends
+
+    assert (progress.done, progress.stopped, progress.dropped) == (2, None, ())
+    assert _rules(read_turns(rig.files)) == [("a", 1, "error"), ("e", 1, "emergency")]
+
+
+@db
+async def test_the_offline_route_holds_nothing_back_it_can_have_no_outage(
+    activate_pack: Activate, clinic_pack: BusinessPack, tmp_path: Path
+) -> None:
+    requests: list[str] = []
+
+    def classifier(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        requests.append("classifier")
+        if len(requests) == 1:
+            raise httpx2.ReadError("connection reset by peer")  # the first case ends as an error
+        raise asyncio.CancelledError  # and Ctrl-C reaches the second
+
+    runtime = make_runtime(
+        clinic_pack, activate_pack(clinic_pack), FunctionModel(classifier), document_responder()
+    )
+    files = RunFiles(tmp_path / "run-1")
+    files.directory.mkdir()
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_live_eval(
+            runtime, _single_turn_cases("a", "b"), files=files, run_id="run-1", meter=None
+        )
+
+    # Without a meter there is no provider to be down: the failure of "a" is the pipeline's own,
+    # and it was written before "b" was run.
+    assert _rules(read_turns(files)) == [("a", 1, "error")]
