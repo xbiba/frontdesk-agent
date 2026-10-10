@@ -35,9 +35,12 @@ VERTEX_API_VERSION: Final = "v1"
 # each request, and that replaces the 5 second connect timeout of model_http_client (Claude's
 # client keeps it): a Gemini connection may take up to 30 seconds to open.
 MODEL_TIMEOUT_SECONDS: Final = 30.0
-# 429 and 5xx answers are retried with growing waits of 2, 4 and 8 seconds (M3 design §6).
+# 429 and 5xx answers, timeouts and refused connections are retried with growing waits of 2, 4 and
+# 8 seconds (M3 design §6). The engine retries, not the SDK, so that each attempt is metered
+# (frontdesk.model_gateway.metering): the SDK makes one attempt. The delays and statuses below are
+# the policy the engine follows, and a test holds the two together.
 GOOGLE_RETRIES: Final = HttpRetryOptions(
-    attempts=4,
+    attempts=1,
     initial_delay=2.0,
     max_delay=8.0,
     exp_base=2.0,

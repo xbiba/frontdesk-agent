@@ -106,6 +106,7 @@ source_modules = [
   "frontdesk.conversation",
   "frontdesk.db",
   "frontdesk.knowledge",
+  "frontdesk.live_eval",
   "frontdesk.model_gateway",
   "frontdesk.observability",
   "frontdesk.safety",
