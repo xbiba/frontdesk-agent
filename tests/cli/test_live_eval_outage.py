@@ -145,7 +145,7 @@ def test_a_responder_that_hangs_while_the_classifier_answers_ends_the_run(
     assert recorded_cases(run_dir) == []
     assert stopped.stderr.splitlines() == [
         "stopped: the model keeps failing (3 attempts of the responder in a row failed; the last "
-        "request ended with CancelledError): run the same command later to resume",
+        "request timed out): run the same command later to resume",
         "2 cases ended in a failure just before the stop and are not recorded: "
         "the same command runs them again (parking-1, parking-2)",
     ]

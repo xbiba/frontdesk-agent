@@ -165,6 +165,11 @@ async def test_a_request_cut_off_by_the_turn_limit_counts_too(tmp_path: Path) ->
     with pytest.raises(asyncio.CancelledError):
         await task
     assert rig.meter.stop_reason == UNAVAILABLE
+    # What cut the request off was the turn's time limit: the line says it timed out, not that it
+    # "ended with CancelledError" (review m8).
+    assert rig.meter.stop_detail == (
+        "3 attempts of the classifier in a row failed; the last request timed out"
+    )
     assert [kind for kind, _ in ledger(rig.budget)] == ["chat-unconfirmed"] * 3
     assert rig.meter.held_usd == 0.0
 

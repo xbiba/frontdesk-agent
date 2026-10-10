@@ -354,9 +354,12 @@ def _request_bytes(messages: list[ModelMessage], parameters: ModelRequestParamet
 
 
 def _ending(error: BaseException) -> str:
-    """How a request ended, without a word of what the provider wrote: a status or a type."""
+    """How a request ended, without a word of what the provider wrote: a status or a type. A
+    request cancelled while it was away timed out: the turn's time limit cut it off."""
     if isinstance(error, ModelHTTPError):
         return f"ended with HTTP {error.status_code}"
+    if isinstance(error, asyncio.CancelledError):
+        return "timed out"
     return f"ended with {type(error).__name__}"
 
 
