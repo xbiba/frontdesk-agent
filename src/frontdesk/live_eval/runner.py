@@ -4,6 +4,14 @@ Cases already recorded are skipped, so a run that stopped resumes where it stopp
 finished case is made again. A case is written only once all its turns have run, so a case cut
 short (by the budget, a rate limit, a ledger that failed or Ctrl-C) leaves no turn behind and
 runs again in full.
+
+A case that ends in the failure an outage causes (the turn crashed or timed out, or a model call
+failed) is held back before it is written. The provider may be down: the breaker needs three failed
+attempts to say so, and the cases that fail with fewer would stand in the evidence, where a resume
+skips them and the report counts them. So the record waits for a later case that completes without
+such a failure (then the provider answered, and the failure was that case's own), and is written at
+the normal end of the run; when the meter stops the run it is dropped, and the same command runs the
+case again. Each case is still written on its own.
 """
 
 from __future__ import annotations
@@ -13,7 +21,9 @@ import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
+from typing import Final
 
+from frontdesk.conversation.behaviour import FAILURE_RULES
 from frontdesk.conversation.evaluation import TurnCase, initial_state
 from frontdesk.conversation.turn import RejectedDraft, TurnResult, TurnRuntime, handle_message
 from frontdesk.live_eval.records import (
@@ -28,16 +38,30 @@ from frontdesk.live_eval.records import (
 )
 from frontdesk.model_gateway.metering import CallRecord, Meter
 
+# A model call that failed: the rejections an outage leaves. The others (an id the catalogue does
+# not hold, a question left blank) are the model's own mistakes and stay evidence wherever they fall.
+OUTAGE_REJECTIONS: Final = frozenset({"classifier_error", "responder_error"})
+
 
 @dataclass(frozen=True)
 class RunProgress:
     done: int  # cases recorded, this call's and earlier ones
     total: int
     stopped: str | None  # why the meter stopped the run (`Meter.stop_reason`), or None
+    # The cases that ended in an outage failure and were held back when the meter stopped the run:
+    # they are not recorded, so the same command runs them again.
+    dropped: tuple[str, ...] = ()
 
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def ends_in_outage_failure(records: Sequence[TurnRecord]) -> bool:
+    """Whether a case ended with the failure an outage causes: its last turn crashed or timed out,
+    or a model call of it failed. An answer the model got wrong is not one."""
+    last = records[-1]
+    return last.rule in FAILURE_RULES or last.rejection in OUTAGE_REJECTIONS
 
 
 async def run_live_eval(
@@ -52,17 +76,32 @@ async def run_live_eval(
     now: Callable[[], datetime] = _utc_now,
 ) -> RunProgress:
     """Run the cases not yet recorded, at most `limit` of them; drafts refused by a check are
-    kept for the review. Without a meter (the offline route) nothing is reserved or recorded."""
+    kept for the review. Without a meter (the offline route) nothing is reserved or recorded.
+    The records of cases that ended in an outage failure are held (see the module); the progress
+    names those a stop dropped."""
     keeping = replace(runtime, keep_drafts=True)
     done = set(completed_cases(read_turns(files)))
     pending = [case for case in cases if case.id not in done]
+    held: list[tuple[str, tuple[TurnRecord, ...]]] = []
     for case in pending[:limit]:
         records = await _run_case(keeping, case, run_id=run_id, meter=meter, clock=clock, now=now)
         if records is None:
-            return RunProgress(len(done), len(cases), meter.stop_reason if meter else None)
-        append_case(files, records)
-        done.add(case.id)
+            stopped = meter.stop_reason if meter else None
+            return RunProgress(len(done), len(cases), stopped, tuple(name for name, _ in held))
+        if ends_in_outage_failure(records):
+            held.append((case.id, records))
+            continue
+        done |= _write([*held, (case.id, records)], files)
+        held.clear()
+    done |= _write(held, files)  # the run ended normally: nothing stopped it, nothing is lost
     return RunProgress(len(done), len(cases), None)
+
+
+def _write(cases: Sequence[tuple[str, tuple[TurnRecord, ...]]], files: RunFiles) -> set[str]:
+    """Write each case on its own, in order; the ids written."""
+    for _, records in cases:
+        append_case(files, records)
+    return {name for name, _ in cases}
 
 
 async def _run_case(

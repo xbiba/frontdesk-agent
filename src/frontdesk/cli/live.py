@@ -77,6 +77,7 @@ EXIT_BUDGET: Final = 4
 EXIT_UNAVAILABLE: Final = 5
 EXIT_INTERRUPTED: Final = 130
 _RESUME: Final = "run the same command again to resume"
+_NAMED_CASES: Final = 5  # the cases a stop names when it drops some; the rest are counted
 
 
 @dataclass(frozen=True)
@@ -165,7 +166,8 @@ def live_turns(
     _write_reports(run.files, run.manifest, run.cases, budget)
     typer.echo(f"cases recorded: {progress.done}/{progress.total} in {run_dir}")
     if progress.stopped is not None:  # any stop, whatever its name: never a success
-        raise _stopped(progress.stopped, run.meter.stop_detail if run.meter else None)
+        detail = run.meter.stop_detail if run.meter else None
+        raise _stopped(progress.stopped, detail, progress.dropped)
 
 
 def eval_report(run_dir: Path, budget_path: Path | None, tags: Sequence[str] = ()) -> None:
@@ -333,35 +335,46 @@ def _show_plan(run: _Run, pending: Sequence[TurnCase]) -> None:
     )
 
 
-def _stopped(reason: str, detail: str | None) -> typer.Exit:
+def _stopped(reason: str, detail: str | None, dropped: Sequence[str] = ()) -> typer.Exit:
     """Say why the run stopped, and give the exit code a script can act on. Any reason is a stop:
-    one this function does not know exits 1 and names itself."""
+    one this function does not know exits 1 and names itself. The cases the stop dropped from the
+    evidence (see `run_live_eval`) are named on a line of their own."""
     cause = f" ({detail})" if detail else ""
     if reason == STOP_RATE_LIMITED:
-        return _stop_line(
-            EXIT_RATE_LIMITED, "stopped by the rate limit: run the same command later to resume"
+        code, line = (
+            EXIT_RATE_LIMITED,
+            "stopped by the rate limit: run the same command later to resume",
         )
-    if reason == STOP_BUDGET:
+    elif reason == STOP_BUDGET:
         # The cause says whether the budget is spent or a request cannot be bounded.
-        return _stop_line(
-            EXIT_BUDGET, f"stopped: {detail or 'the budget has no room for the next call'}"
-        )
-    if reason == STOP_UNAVAILABLE:
-        return _stop_line(
-            EXIT_UNAVAILABLE,
-            f"stopped: the model keeps failing{cause}: run the same command later to resume",
-        )
-    if reason == STOP_LEDGER:
-        return _stop_line(
-            EXIT_ERROR,
-            f"stopped: the ledger can no longer count what is spent{cause}: fix it, then {_RESUME}",
-        )
-    return _stop_line(EXIT_ERROR, f"stopped: {reason}{cause}")
-
-
-def _stop_line(code: int, line: str) -> typer.Exit:
+        code, line = EXIT_BUDGET, f"stopped: {detail or 'the budget has no room for the next call'}"
+    elif reason == STOP_UNAVAILABLE:
+        resume = "run the same command later to resume"
+        code, line = EXIT_UNAVAILABLE, f"stopped: the model keeps failing{cause}: {resume}"
+    elif reason == STOP_LEDGER:
+        counted = "stopped: the ledger can no longer count what is spent"
+        code, line = EXIT_ERROR, f"{counted}{cause}: fix it, then {_RESUME}"
+    else:
+        code, line = EXIT_ERROR, f"stopped: {reason}{cause}"
     typer.echo(line, err=True)
+    if dropped:
+        typer.echo(_dropped_line(dropped), err=True)
     return typer.Exit(code)
+
+
+def _dropped_line(dropped: Sequence[str]) -> str:
+    names = ", ".join(dropped[:_NAMED_CASES])
+    if len(dropped) > _NAMED_CASES:
+        names += f" and {len(dropped) - _NAMED_CASES} more"
+    if len(dropped) == 1:
+        return (
+            "1 case ended in a failure just before the stop and is not recorded: "
+            f"the same command runs it again ({names})"
+        )
+    return (
+        f"{len(dropped)} cases ended in a failure just before the stop and are not recorded: "
+        f"the same command runs them again ({names})"
+    )
 
 
 def _write_reports(

@@ -107,7 +107,7 @@ def fake_gemini(
         if role in failures and (failure := failures[role]()) is not None:
             raise failure
         args = (
-            _quote_the_first_passage(first_prompt(messages))
+            quote_the_first_passage(first_prompt(messages))
             if role == "responder"
             else classification
         )
@@ -118,7 +118,7 @@ def fake_gemini(
     return FunctionModel(respond)
 
 
-def _quote_the_first_passage(prompt: str) -> dict[str, Any]:
+def quote_the_first_passage(prompt: str) -> dict[str, Any]:
     found = PASSAGE.search(prompt)
     if found is None:
         return {"action": "handoff"}

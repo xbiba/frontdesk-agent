@@ -246,6 +246,59 @@ def test_every_reason_a_run_stops_is_a_non_zero_exit_and_the_cases_still_get_the
     assert (run_dir / "report.md").exists()  # and writes what it has
 
 
+@pytest.mark.parametrize(
+    ("dropped", "line"),
+    [
+        pytest.param(
+            ("price-1",),
+            "1 case ended in a failure just before the stop and is not recorded: "
+            "the same command runs it again (price-1)",
+            id="one",
+        ),
+        pytest.param(
+            ("a", "b"),
+            "2 cases ended in a failure just before the stop and are not recorded: "
+            "the same command runs them again (a, b)",
+            id="two",
+        ),
+        pytest.param(
+            tuple("abcdefg"),
+            "7 cases ended in a failure just before the stop and are not recorded: "
+            "the same command runs them again (a, b, c, d, e and 2 more)",
+            id="more-than-it-names",
+        ),
+    ],
+)
+@pytest.mark.parametrize("reason", ["rate_limited", "budget", "unavailable", "ledger", "mystery"])
+def test_whatever_the_reason_the_stop_names_the_cases_it_dropped_on_a_line_of_their_own(
+    tmp_path: Path,
+    businesses_dir: Path,
+    database: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    reason: str,
+    dropped: tuple[str, ...],
+    line: str,
+) -> None:
+    async def stopped(*args: object, **kwargs: object) -> RunProgress:
+        return RunProgress(done=1, total=9, stopped=reason, dropped=dropped)
+
+    monkeypatch.setattr(live, "run_live_eval", stopped)
+    env = bootstrapped(tmp_path, businesses_dir, database)
+
+    result = eval_live(
+        env,
+        write_budget(tmp_path),
+        tmp_path / "dry-1",
+        write_cases(tmp_path, 2),
+        route="offline-demo",
+    )
+
+    assert result.exit_code != 0
+    first, second = result.stderr.splitlines()
+    assert first.startswith("stopped")
+    assert second == line  # whatever the reason, and the first line is the stop's own
+
+
 def test_a_run_that_is_done_exits_0(
     tmp_path: Path,
     businesses_dir: Path,
@@ -348,12 +401,14 @@ def test_three_failed_requests_in_a_row_end_the_run_whatever_their_kind(
     assert stopped.exit_code == 5
     assert stopped.stderr.splitlines() == [
         "stopped: the model keeps failing (3 attempts in a row failed; the last request ended "
-        "with HTTP 403): run the same command later to resume"
+        "with HTTP 403): run the same command later to resume",
+        "2 cases ended in a failure just before the stop and are not recorded: "
+        "the same command runs them again (price-1, price-2)",
     ]
     assert sent == ["classifier"] * 3
-    # The two cases before the third failure ended as failures of the pipeline and are recorded as
-    # such (the report counts them); the case the stop cut is not.
-    assert recorded_cases(run_dir) == ["price-1", "price-2"]
+    # The two cases before the third failure ended in a failure that an outage causes: they are
+    # held back and dropped with the stop, as is the case the stop cut, so the resume runs all.
+    assert recorded_cases(run_dir) == []
     assert not _holds(budget)
 
 
