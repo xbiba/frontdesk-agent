@@ -30,7 +30,15 @@ from frontdesk.knowledge.embedders import Embedder
 from frontdesk.safety.normalize import normalize
 from frontdesk.tenancy.pack import BusinessPack
 
-_KNOWLEDGE_FIELDS = {"location", "services", "doctors", "prices", "orientation", "documents"}
+_KNOWLEDGE_FIELDS = {
+    "location",
+    "services",
+    "doctors",
+    "prices",
+    "orientation",
+    "orientation_map",
+    "documents",
+}
 _TEXT_INDENT = " " * 6  # deeper than any report line, so a line of text cannot pass for one
 
 
@@ -295,6 +303,8 @@ def _add_records(session: Session, pack: BusinessPack, version_id: uuid.UUID) ->
     rows += [("doctor", d.id, d.model_dump(mode="json")) for d in pack.doctors]
     rows += [("price", p.service_id, p.model_dump(mode="json")) for p in pack.prices]
     rows += [("orientation", o.id, o.model_dump(mode="json")) for o in pack.orientation]
+    if pack.orientation_map is not None:
+        rows.append(("orientation_map", "approval", pack.orientation_map.model_dump(mode="json")))
     for kind, key, payload in rows:
         session.add(
             Record(

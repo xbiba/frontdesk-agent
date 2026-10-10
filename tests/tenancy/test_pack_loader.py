@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from frontdesk.safety.rules import promise_phrase
 from frontdesk.tenancy.loader import PackError, load_pack
 from frontdesk.tenancy.pack import BusinessPack, FixedTextKey, Profile
 from tests.tenancy.helpers import CLINIC, SHOP, copy_pack, edit_yaml
@@ -47,6 +48,16 @@ def test_demo_texts_promise_nothing_and_handoff_gives_a_contact(
         assert pack.location.phone in texts[FixedTextKey.HANDOFF], language
         for key, text in texts.items():
             assert not any(promise in text.lower() for promise in PROMISES), (language, key)
+            assert promise_phrase(text) is None, (language, key)
+
+
+@pytest.mark.parametrize("name", ["demo-clinic", "demo-shop"])
+def test_demo_documents_promise_nothing_the_channel_cannot_do(
+    businesses_dir: Path, name: str
+) -> None:
+    """A reply quotes its document: a promise in the document becomes the bot's (P96)."""
+    for document in load_pack(businesses_dir / name).documents:
+        assert promise_phrase(document.body) is None, document.key
 
 
 def test_opening_days_use_day_codes(businesses_dir: Path, tmp_path: Path) -> None:

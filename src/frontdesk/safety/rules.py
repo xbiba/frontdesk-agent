@@ -273,6 +273,40 @@ DIAGNOSTIC_LANGUAGE: Final = _any(
     r"ka shume mundesi te jete",
 )
 
+# Promises of an action that no one will take: the bot cannot call, write or forward anything, and
+# a handoff gives a contact instead (ADR-0006). A reply that says one fails the evaluation (final
+# review P85). Normalized text, so "contatterà" is "contattera" and "t'ju" is "t ju".
+_CONTACT_EN = (
+    r"(?:call|phone|ring|email|e mail|write|text|message|contact|get back|reply|send|confirm"
+    r"|let you know|be in touch|pass|forward|transfer)"
+)
+_SOMEONE_EN = (
+    r"(?:someone|somebody|a colleague|our staff|our team|the reception|reception|the doctor"
+    r"|a member of (?:our )?staff)"
+)
+PROMISE: Final = _any(
+    rf"(?:we|i) (?:ll|will|are going to|re going to) {_CONTACT_EN}",
+    rf"{_SOMEONE_EN} (?:ll|will) {_CONTACT_EN}",
+    r"you (?:ll|will) (?:receive|get) (?:a|an|the|our) (?:call|email|e mail|message|reply|answer"
+    r"|confirmation|text)",
+    r"(?:passing|forwarding|transferring) (?:this|your) (?:conversation|message|request)",
+    r"will see your message",
+    r"(?:ti|vi|la|le) (?:ri)?(?:chiamer|contatter|scriver|invier|mander|risponder)(?:o|emo|a|anno)\b",
+    r"(?:ti|vi) (?:ri)?(?:chiamiamo|contattiamo|scriviamo|inviamo|mandiamo|rispondiamo)\b",
+    r"(?:riceverai|riceverete|ricevera) (?:una|la|un|il) (?:chiamata|telefonata|email|e mail|mail"
+    r"|conferma|risposta|messaggio)",
+    r"(?:passo|passero|inoltro|inoltrero) (?:la|il|la tua|il tuo) (?:conversazione|messaggio"
+    r"|richiesta)",
+    r"qualcuno (?:ti|vi) (?:richiamera|contattera|rispondera|scrivera)",
+    r"vedra il tuo messaggio",
+    r"(?:ti|vi) faremo sapere",
+    r"do (?:t )?ju (?:telefonojme|marrim|kontaktojme|shkruajme|dergojme|pergjigjemi|njoftojme)\b",
+    r"(?:dikush|recepsioni|stafi) do t ju (?:telefonoje|kontaktoje|shkruaje|pergjigjet)\b",
+    r"do te merrni (?:nje )?(?:telefonate|email|mesazh|konfirmim|pergjigje)",
+    r"po ia kaloj",
+    r"do ta shohe",
+)
+
 _PHONE: Final = re.compile(r"(?<![\w-])(?:\+|00)?\d(?:[\s().-]?\d){7,}(?!\w)")
 # Dates (2026-10-10, 10.10.2026, 10-10-2026) and time ranges (09.00-17.00) are digits joined by
 # separators like a phone number; they are blanked out before the phone search. The parts are
@@ -407,3 +441,17 @@ def contains_clinical_terms(text: str) -> bool:
 
 def contains_diagnostic_language(text: str) -> bool:
     return _in_any_form(DIAGNOSTIC_LANGUAGE, _normal_forms(text))
+
+
+def promise_phrase(text: str) -> str | None:
+    """The first promise of an action in `text`, as normalized words, or None.
+
+    Like every word pattern, it reads the forms of `_normal_forms`, the one with the invisible
+    characters removed first: a promise that a zero-width space splits between two words is still
+    a promise. The first form to hold one gives the phrase.
+    """
+    for form in _normal_forms(text):
+        found = PROMISE.search(form)
+        if found is not None:
+            return found.group(0)
+    return None

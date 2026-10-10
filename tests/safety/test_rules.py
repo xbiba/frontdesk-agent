@@ -13,6 +13,7 @@ from frontdesk.safety.rules import (
     emergency_rule,
     evaluate,
     personal_fields,
+    promise_phrase,
     rule_text_length,
 )
 from tests.timing import LINEAR_TIME_LIMIT_SECONDS
@@ -403,3 +404,92 @@ def test_the_text_length_counts_the_fold_with_invisible_characters_read_as_space
     assert len(normalize(space_invisible(message))) == 0
     assert len(fold(space_invisible(message))) == 2_331
     assert rule_text_length(message) == 2_331
+
+
+# --- Promises of an action no one will take (final review P85) ----------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "phrase"),
+    [
+        ("Ti contatteremo noi al più presto.", "ti contatteremo"),
+        ("Passo la conversazione alla reception.", "passo la conversazione"),
+        ("Riceverai una conferma via SMS.", "riceverai una conferma"),
+        ("We will email you the instructions.", "we will email"),
+        ("Someone will call you back shortly.", "someone will call"),
+        ("I'm passing this conversation to a colleague.", "passing this conversation"),
+        ("Do t'ju telefonojmë nesër.", "do t ju telefonojme"),
+        ("Po ia kaloj recepsionit.", "po ia kaloj"),
+        ("Do të merrni një konfirmim.", "do te merrni nje konfirmim"),
+    ],
+)
+def test_a_promise_of_an_action_is_found_in_each_language(text: str, phrase: str) -> None:
+    assert promise_phrase(text) == phrase
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Per parlare con una persona, chiama la reception al +355 00 000 0000.",
+        "To talk to a person, write to ciao@bottega-demo.example.",
+        "Would you like prices or opening hours, or would you rather talk to reception?",
+        "We will be closed on Sunday.",
+        "La clinica invia un promemoria il giorno prima.",
+        "Mund t'ju ndihmoj me diçka tjetër?",
+    ],
+)
+def test_ordinary_replies_promise_nothing(text: str) -> None:
+    assert promise_phrase(text) is None
+
+
+# A wording for each pattern of the rule that the cases above leave out, and for each form of
+# "will" in the first pattern, so that none of them can be dropped or broken unseen.
+@pytest.mark.parametrize(
+    ("text", "phrase"),
+    [
+        ("I'll call you tomorrow.", "i ll call"),
+        ("We are going to call you tomorrow.", "we are going to call"),
+        ("We're going to send you a link.", "we re going to send"),
+        ("A colleague will get back to you.", "a colleague will get back"),
+        ("You will receive a confirmation.", "you will receive a confirmation"),
+        ("The doctor will see your message.", "will see your message"),
+        ("Ti richiamiamo domani.", "ti richiamiamo"),
+        ("Qualcuno ti richiamerà domani.", "qualcuno ti richiamera"),
+        ("La reception vedrà il tuo messaggio.", "vedra il tuo messaggio"),
+        ("Ti faremo sapere.", "ti faremo sapere"),
+        ("Dikush do t'ju telefonojë.", "dikush do t ju telefonoje"),
+        ("Mjeku do ta shohë mesazhin.", "do ta shohe"),
+    ],
+)
+def test_a_promise_is_found_in_every_pattern_of_the_rule(text: str, phrase: str) -> None:
+    assert promise_phrase(text) == phrase
+
+
+# The promise rule reads the text in the forms the other word patterns read (`_normal_forms`): with
+# the invisible characters removed, which keeps a word whole, and read as spaces, which keeps two
+# words apart.
+
+
+@pytest.mark.parametrize(
+    ("text", "phrase"),
+    [
+        ("We will\N{ZERO WIDTH SPACE}email you the instructions.", "we will email"),
+        ("Ti\N{ZERO WIDTH SPACE}contatteremo noi al più presto.", "ti contatteremo"),
+        ("Do t'ju\N{ZERO WIDTH SPACE}telefonojmë nesër.", "do t ju telefonojme"),
+    ],
+)
+def test_an_invisible_character_between_two_words_does_not_hide_a_promise(
+    text: str, phrase: str
+) -> None:
+    assert promise_phrase(text) == phrase
+
+
+def test_an_invisible_character_inside_a_word_does_not_hide_a_promise() -> None:
+    assert promise_phrase("We will em\N{SOFT HYPHEN}ail you the instructions.") == "we will email"
+
+
+def test_the_promise_of_the_form_without_the_invisible_characters_is_reported_first() -> None:
+    # Removed, only the second promise is whole; read as spaces, only the first is. Each form finds
+    # one, and the one found in the form with the characters removed is the one reported.
+    text = "We will\N{ZERO WIDTH SPACE}email you. Ti contat\N{SOFT HYPHEN}teremo."
+    assert promise_phrase(text) == "ti contatteremo"

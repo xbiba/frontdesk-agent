@@ -8,6 +8,11 @@ timezone: Europe/Tirane
 features:
   orientation: true
   order_status: false
+# Synthetic: no doctor approved this demo map. A real clinic names the doctor who did (spec §7).
+orientation_map:
+  version: demo-2026-10
+  approved_by: "Dr. Arben Demo (synthetic)"
+  approved_on: 2026-10-01
 fixed_texts:
   sq:
     disclosure: "Përshëndetje! Ju shkruan asistenti automatik i Klinikës Demo. Nëse doni të flisni me një person, shkruani \"operator\"."
