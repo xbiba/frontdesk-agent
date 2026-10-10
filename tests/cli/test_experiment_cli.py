@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import uuid
-from collections.abc import Iterator
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,73 +11,27 @@ from typing import Any
 import pytest
 import typer
 from sqlalchemy import create_engine, make_url, text
-from testcontainers.community.postgres import PostgresContainer
+from sqlalchemy.exc import OperationalError
 from typer.testing import CliRunner
 
 from frontdesk.cli import experiment
 from frontdesk.cli.main import app
 from frontdesk.knowledge.embedder_experiment import Candidate, CandidateResult
-from frontdesk.knowledge.embedders import HashEmbedder
 from frontdesk.knowledge.evaluation import load_cases
 from frontdesk.model_gateway.costs import BudgetExhaustedError
 from frontdesk.model_gateway.embeddings import EmbeddingRateLimitedError, VertexEmbedder
 from frontdesk.model_gateway.routes import ROUTES
 from frontdesk.settings import Settings
-from tests.knowledge.test_embedder_experiment import SmallHashEmbedder
+from tests.cli.experiment_helpers import (
+    CANDIDATE,
+    ELSEWHERE,
+    env_file,
+    experiment_args,
+    offline_models,
+)
 from tests.model_gateway.budget_helpers import write_budget
 
 runner = CliRunner()
-CANDIDATE = "vertex-ew1-gemini-embedding-001"
-ELSEWHERE = "postgresql+psycopg://u:p@h/frontdesk_mcu_experiment"  # a scratch name, never opened
-
-
-def _env(tmp_path: Path, pack_dir: Path, owner_url: str, backend: str = "fastembed") -> str:
-    env = tmp_path / "experiment.env"
-    env.write_text(
-        f"FRONTDESK_BUSINESS_PACK={pack_dir}\n"
-        f"FRONTDESK_DATABASE_URL={owner_url}\n"
-        f"FRONTDESK_MIGRATION_DATABASE_URL={owner_url}\n"
-        f"FRONTDESK_EMBEDDING_BACKEND={backend}\n"
-        "FRONTDESK_GCP_PROJECT=demo-project\n",
-        encoding="utf-8",
-    )
-    return str(env)
-
-
-@pytest.fixture
-def scratch_url(postgres: PostgresContainer) -> Iterator[str]:
-    name = f"t_{uuid.uuid4().hex[:8]}_experiment"
-    admin = create_engine(postgres.get_connection_url(), isolation_level="AUTOCOMMIT")
-    with admin.connect() as connection:
-        connection.execute(text(f'CREATE DATABASE "{name}"'))
-    yield (
-        make_url(postgres.get_connection_url())
-        .set(database=name)
-        .render_as_string(hide_password=False)
-    )
-    with admin.connect() as connection:
-        connection.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
-    admin.dispose()
-
-
-def _args(env: str, tmp_path: Path, businesses_dir: Path, budget: Path) -> list[str]:
-    cases = businesses_dir / "demo-clinic" / "evals" / "retrieval.yaml"
-    return [
-        "eval", "embedders", "--env-file", env, "--cases", str(cases),
-        "--run-dir", str(tmp_path / "embedders"), "--budget", str(budget),
-        "--candidate", CANDIDATE, "--yes",
-    ]  # fmt: skip
-
-
-def _offline_models(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The reference and the candidate stand in for the local model and for Vertex AI."""
-    small = SmallHashEmbedder(16)
-    monkeypatch.setattr(experiment, "build_embedder", lambda backend: HashEmbedder())
-    monkeypatch.setattr(
-        experiment,
-        "vertex_candidate",
-        lambda route, settings, budget, run_id: Candidate(route, 16, small, small),
-    )
 
 
 @pytest.mark.db
@@ -88,10 +41,10 @@ def test_the_experiment_compares_the_reference_and_the_candidates(
     scratch_url: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _offline_models(monkeypatch)
+    offline_models(monkeypatch)
     budget = write_budget(tmp_path).path
-    env = _env(tmp_path, businesses_dir / "demo-clinic", scratch_url)
-    result = runner.invoke(app, _args(env, tmp_path, businesses_dir, budget))
+    env = env_file(tmp_path, businesses_dir / "demo-clinic", scratch_url)
+    result = runner.invoke(app, experiment_args(env, tmp_path, businesses_dir, budget))
     assert result.exit_code == 0, result.output
     assert "**Decision: " in result.output
     run_dir = tmp_path / "embedders"
@@ -106,8 +59,10 @@ def test_the_experiment_never_writes_into_a_database_that_is_not_a_scratch_one(
     tmp_path: Path, businesses_dir: Path
 ) -> None:
     budget = write_budget(tmp_path).path
-    env = _env(tmp_path, businesses_dir / "demo-clinic", "postgresql+psycopg://u:p@h/frontdesk_mcu")
-    result = runner.invoke(app, _args(env, tmp_path, businesses_dir, budget))
+    env = env_file(
+        tmp_path, businesses_dir / "demo-clinic", "postgresql+psycopg://u:p@h/frontdesk_mcu"
+    )
+    result = runner.invoke(app, experiment_args(env, tmp_path, businesses_dir, budget))
     assert result.exit_code == 1
     assert "ends in '_experiment', not 'frontdesk_mcu'" in result.stderr
 
@@ -115,10 +70,78 @@ def test_the_experiment_never_writes_into_a_database_that_is_not_a_scratch_one(
 def test_the_reference_is_the_demo_s_local_model(tmp_path: Path, businesses_dir: Path) -> None:
     budget = write_budget(tmp_path).path
     url = "postgresql+psycopg://u:p@h/frontdesk_mcu_experiment"
-    env = _env(tmp_path, businesses_dir / "demo-clinic", url, backend="hash")
-    result = runner.invoke(app, _args(env, tmp_path, businesses_dir, budget))
+    env = env_file(tmp_path, businesses_dir / "demo-clinic", url, backend="hash")
+    result = runner.invoke(app, experiment_args(env, tmp_path, businesses_dir, budget))
     assert result.exit_code == 1
     assert "FRONTDESK_EMBEDDING_BACKEND=fastembed" in result.stderr
+
+
+# --- The server has the last word on which database this is -------------------------------------
+
+
+def _scalar(url: str, statement: str) -> object:
+    engine = create_engine(url)
+    try:
+        with engine.connect() as connection:
+            return connection.scalar(text(statement))
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.db
+def test_a_url_whose_query_names_another_database_is_refused_before_anything_is_written(
+    tmp_path: Path,
+    businesses_dir: Path,
+    new_server_database: Callable[[str], str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The path of the URL names a scratch database, which is all that the name check reads; the
+    # driver connects to the database that `dbname=` names.
+    offline_models(monkeypatch)
+    scratch, plain = new_server_database("_experiment"), new_server_database("")
+    plain_name = make_url(plain).database
+    crafted = (
+        make_url(scratch)
+        .update_query_dict({"dbname": plain_name or ""})
+        .render_as_string(hide_password=False)
+    )
+    assert _scalar(crafted, "SELECT current_database()") == plain_name  # the gap, as it was
+    budget = write_budget(tmp_path)
+    env = env_file(tmp_path, businesses_dir / "demo-clinic", crafted)
+    result = runner.invoke(app, experiment_args(env, tmp_path, businesses_dir, budget.path))
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "error: the experiment writes tables: the server says this URL reaches "
+        f"'{plain_name}', whose name does not end in '_experiment' "
+        "(FRONTDESK_MIGRATION_DATABASE_URL)\n"
+    )
+    tables = "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
+    assert _scalar(plain, tables) == 0  # not migrated, not written to
+    assert not (tmp_path / "embedders").exists()
+    assert not budget.ledger_path.exists()
+
+
+def test_a_database_that_does_not_answer_is_one_error_line(
+    tmp_path: Path, businesses_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    offline_models(monkeypatch)
+
+    class Down:
+        def connect(self) -> None:
+            raise OperationalError("SELECT current_database()", {}, Exception("refused"))
+
+        def dispose(self) -> None:
+            pass
+
+    monkeypatch.setattr(experiment, "make_engine", lambda url: Down())
+    budget = write_budget(tmp_path).path
+    env = env_file(tmp_path, businesses_dir / "demo-clinic", ELSEWHERE)
+    result = runner.invoke(app, experiment_args(env, tmp_path, businesses_dir, budget))
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "error: cannot reach the database (h); start it with: docker compose up -d --wait postgres\n"
+    )
+    assert not (tmp_path / "embedders").exists()
 
 
 # --- Before it asks or spends: the same refusals as the other live commands --------------------
@@ -131,8 +154,8 @@ def test_the_experiment_refuses_proxy_and_certificate_variables(
     monkeypatch.setenv("https_proxy", "http://proxy.stray.example:3128")
     monkeypatch.setenv("SSL_CERT_FILE", "/nonexistent/stray-ca.pem")
     budget = write_budget(tmp_path).path
-    env = _env(tmp_path, businesses_dir / "demo-clinic", ELSEWHERE)
-    result = runner.invoke(app, _args(env, tmp_path, businesses_dir, budget))
+    env = env_file(tmp_path, businesses_dir / "demo-clinic", ELSEWHERE)
+    result = runner.invoke(app, experiment_args(env, tmp_path, businesses_dir, budget))
     assert result.exit_code == 1
     assert result.stderr == (
         "error: a live run does not go through proxies, other certificates or another billing "
@@ -144,10 +167,10 @@ def test_the_experiment_refuses_proxy_and_certificate_variables(
 def test_a_pack_that_cannot_be_loaded_is_one_error_line(
     tmp_path: Path, businesses_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _offline_models(monkeypatch)
+    offline_models(monkeypatch)
     budget = write_budget(tmp_path).path
-    env = _env(tmp_path, tmp_path / "no-such-pack", ELSEWHERE)
-    result = runner.invoke(app, _args(env, tmp_path, businesses_dir, budget))
+    env = env_file(tmp_path, tmp_path / "no-such-pack", ELSEWHERE)
+    result = runner.invoke(app, experiment_args(env, tmp_path, businesses_dir, budget))
     assert result.exit_code == 1
     assert result.stderr.startswith("error: business pack directory not found")
     assert "Traceback" not in result.output
@@ -156,10 +179,10 @@ def test_a_pack_that_cannot_be_loaded_is_one_error_line(
 def test_the_experiment_asks_before_it_starts(
     tmp_path: Path, businesses_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _offline_models(monkeypatch)
+    offline_models(monkeypatch)
     budget = write_budget(tmp_path).path
-    env = _env(tmp_path, businesses_dir / "demo-clinic", ELSEWHERE)
-    args = [arg for arg in _args(env, tmp_path, businesses_dir, budget) if arg != "--yes"]
+    env = env_file(tmp_path, businesses_dir / "demo-clinic", ELSEWHERE)
+    args = [arg for arg in experiment_args(env, tmp_path, businesses_dir, budget) if arg != "--yes"]
     cases = len(load_cases(businesses_dir / "demo-clinic" / "evals" / "retrieval.yaml"))
     result = runner.invoke(app, args, input="n\n")
     assert result.exit_code == 1
@@ -266,7 +289,7 @@ def test_a_stop_keeps_the_results_so_far_and_the_same_command_resumes_with_the_n
     monkeypatch: pytest.MonkeyPatch,
     stop: Exception,
 ) -> None:
-    _offline_models(monkeypatch)
+    offline_models(monkeypatch)
     measured: list[str] = []
     failing = {CANDIDATE}  # fails once, the first time it is measured
     real = experiment.run_candidate
@@ -281,8 +304,8 @@ def test_a_stop_keeps_the_results_so_far_and_the_same_command_resumes_with_the_n
 
     monkeypatch.setattr(experiment, "run_candidate", run)
     budget = write_budget(tmp_path).path
-    env = _env(tmp_path, businesses_dir / "demo-clinic", scratch_url)
-    args = _args(env, tmp_path, businesses_dir, budget)
+    env = env_file(tmp_path, businesses_dir / "demo-clinic", scratch_url)
+    args = experiment_args(env, tmp_path, businesses_dir, budget)
     run_dir = tmp_path / "embedders"
 
     first = runner.invoke(app, args)
@@ -307,11 +330,11 @@ def test_a_stop_keeps_the_results_so_far_and_the_same_command_resumes_with_the_n
 def test_the_experiment_is_refused_while_another_run_holds_the_budget(
     tmp_path: Path, businesses_dir: Path, scratch_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _offline_models(monkeypatch)
+    offline_models(monkeypatch)
     budget = write_budget(tmp_path)
-    env = _env(tmp_path, businesses_dir / "demo-clinic", scratch_url)
+    env = env_file(tmp_path, businesses_dir / "demo-clinic", scratch_url)
     with budget.exclusive():  # a live run, or a chat, is using the ledger
-        result = runner.invoke(app, _args(env, tmp_path, businesses_dir, budget.path))
+        result = runner.invoke(app, experiment_args(env, tmp_path, businesses_dir, budget.path))
     assert result.exit_code == 1
     assert "another live run is using this budget" in result.stderr
     assert not (tmp_path / "embedders" / "reference.json").exists()  # nothing was measured

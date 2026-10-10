@@ -4,10 +4,13 @@ environment, and a stand-in for the access check that never reaches the network.
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Mapping
+import uuid
+from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
 import pytest
+from sqlalchemy import create_engine, make_url, text
+from testcontainers.community.postgres import PostgresContainer
 
 from frontdesk.model_gateway.access import ENVIRONMENT_OVERRIDES
 from frontdesk.model_gateway.routes import ModelRoute
@@ -65,3 +68,31 @@ def gemini(monkeypatch: pytest.MonkeyPatch) -> Install:
         return sent
 
     return install
+
+
+@pytest.fixture
+def new_server_database(postgres: PostgresContainer) -> Iterator[Callable[[str], str]]:
+    """Creates empty databases on the test server, named with the suffix asked for, and drops them
+    after the test. Returns the URL of each, as its owner."""
+    admin = create_engine(postgres.get_connection_url(), isolation_level="AUTOCOMMIT")
+    created: list[str] = []
+
+    def create(suffix: str) -> str:
+        name = f"t_{uuid.uuid4().hex[:8]}{suffix}"
+        with admin.connect() as connection:
+            connection.execute(text(f'CREATE DATABASE "{name}"'))
+        created.append(name)
+        url = make_url(postgres.get_connection_url()).set(database=name)
+        return url.render_as_string(hide_password=False)
+
+    yield create
+    with admin.connect() as connection:
+        for name in created:
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+    admin.dispose()
+
+
+@pytest.fixture
+def scratch_url(new_server_database: Callable[[str], str]) -> str:
+    """A scratch database for the embedder experiment: its name ends in `_experiment`."""
+    return new_server_database("_experiment")

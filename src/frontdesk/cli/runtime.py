@@ -45,6 +45,14 @@ def database_location(url: str) -> str:
     return f"{host}:{parsed.port}" if parsed.port else host
 
 
+def unreachable(database_url: str) -> typer.Exit:
+    """The one line for a database that does not answer, and the exit to raise."""
+    return fail(
+        f"cannot reach the database ({database_location(database_url)}); "
+        "start it with: docker compose up -d --wait postgres"
+    )
+
+
 def build_runtime(
     deployment: Deployment,
     env_file: Path,
@@ -68,11 +76,7 @@ def build_runtime(
         raise fail(f"{error} (--env-file {env_file})") from error
     except OperationalError as error:
         # The driver's own message (its host, its port, SQLAlchemy's help link) is left out.
-        location = database_location(deployment.settings.database_url)
-        raise fail(
-            f"cannot reach the database ({location}); "
-            "start it with: docker compose up -d --wait postgres"
-        ) from error
+        raise unreachable(deployment.settings.database_url) from error
     except ValueError as error:
         # What is left is a setting the route needs, such as the Google Cloud project, or a prompt
         # file that is missing or blank.

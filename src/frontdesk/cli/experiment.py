@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Final
 
 import typer
-from sqlalchemy import make_url
+from sqlalchemy import make_url, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.cli.live_common import (
@@ -26,7 +27,7 @@ from frontdesk.cli.live_common import (
     refuse_retired,
     spent_usd,
 )
-from frontdesk.cli.runtime import fail
+from frontdesk.cli.runtime import fail, unreachable
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
 from frontdesk.db.migrate import upgrade_to_head
 from frontdesk.knowledge.embedder_experiment import (
@@ -114,6 +115,7 @@ def eval_embedders(
     )
     if not yes and not typer.confirm("Start the experiment?", default=False):
         raise typer.Exit(1)
+    _require_scratch_server(settings.migration_database_url)
     upgrade_to_head(settings.migration_database_url)
     factory = make_session_factory(make_engine(settings.migration_database_url))
     _activate(factory, pack, reference)
@@ -176,6 +178,28 @@ def _check_scratch(settings: Settings) -> None:
     if settings.embedding_backend is not EmbeddingBackend.FASTEMBED:
         raise fail(
             "the reference is the demo's local model: set FRONTDESK_EMBEDDING_BACKEND=fastembed"
+        )
+
+
+def _require_scratch_server(url: str) -> None:
+    """Ask the server which database the URL reaches, and refuse unless it is a scratch one.
+
+    `_check_scratch` reads the name from the URL, but a driver lets a query parameter name another
+    database than the path does (`?dbname=`, `?service=`). The server cannot be mistaken, and
+    nothing has been written when it answers.
+    """
+    engine = make_engine(url)
+    try:
+        with engine.connect() as connection:
+            reached = connection.scalar(text("SELECT current_database()")) or ""
+    except OperationalError as error:
+        raise unreachable(url) from error
+    finally:
+        engine.dispose()
+    if not reached.endswith(SCRATCH_SUFFIX):
+        raise fail(
+            f"the experiment writes tables: the server says this URL reaches '{reached}', whose "
+            f"name does not end in '{SCRATCH_SUFFIX}' (FRONTDESK_MIGRATION_DATABASE_URL)"
         )
 
 
