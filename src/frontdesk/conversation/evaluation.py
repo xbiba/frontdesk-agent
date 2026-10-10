@@ -115,6 +115,7 @@ class TurnCaseResult:
     sources: tuple[str, ...]
     failures: tuple[str, ...]
     rule: str = "none"
+    rejection: str | None = None
     behaviour: str = Behaviour.ANSWER
     critical: bool = False
 
@@ -174,8 +175,9 @@ def check_reply(
     """The checks every reply gets, at every turn, whatever its case expects.
 
     No diagnostic language and no promise of an action (P85); a handoff ends with how to reach a
-    person; and a handoff the pipeline fell back to after an error, a timeout or an off-contract
-    model answer is a failure, unless the case expects that very rule (P86).
+    person; and a handoff the pipeline fell back to is a failure (P86): after a crash, a timeout, a
+    failed model call or a classifier answer outside its contract (`pipeline_failure` lists them).
+    Only a case that expects the very rule of the fallback (`error`, `timeout`) takes it as given.
     """
     failures: list[str] = []
     if contains_diagnostic_language(result.text):
@@ -261,6 +263,7 @@ def case_result(
         sources=last.trace.sources,
         failures=check_conversation(case, results, texts),
         rule=last.trace.rule,
+        rejection=last.trace.rejection,
         behaviour=observed_behaviour(last, texts(last.language)),
         critical=case.expect.is_critical,
     )

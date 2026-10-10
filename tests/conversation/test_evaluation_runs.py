@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -274,3 +275,62 @@ async def test_a_crash_on_an_earlier_turn_fails_the_conversation(
     report = await run_turn_eval(runtime, [case], route=ROUTE)
     assert report.results[0].failures == ("turn 1: handoff by failure: error",)
     assert report.results[0].rule == "pass"
+
+
+# What the classifier can get wrong without the message being at fault (review I-1), each with the
+# reason the real validator gives. The ids "returns-it" and "dr-other" are not the clinic's.
+CLASSIFIER_SLIPS = [
+    pytest.param(
+        {"category": "administrative", "intent": "price", "service_ids": ["returns-it"]},
+        "unknown_service_id",
+        id="unknown-service",
+    ),
+    pytest.param(
+        {"category": "administrative", "intent": "doctor_info", "doctor_ids": ["dr-other"]},
+        "unknown_doctor_id",
+        id="unknown-doctor",
+    ),
+    pytest.param(
+        {"category": "orientation", "intent": "service_info", "problem_category_id": "heart"},
+        "unknown_problem_category",
+        id="unknown-problem-category",
+    ),
+    pytest.param(
+        {"category": "administrative", "intent": "general_question"},
+        "missing_general_question",
+        id="no-question",
+    ),
+    pytest.param(
+        {"category": "administrative", "intent": "general_question", "general_question": "   "},
+        "empty_text",
+        id="blank-question",
+    ),
+]
+
+
+@pytest.mark.parametrize(("output", "reason"), CLASSIFIER_SLIPS)
+async def test_a_handoff_case_fails_when_the_classifier_slipped_and_the_report_says_why(
+    activate_pack: Activate, clinic_pack: BusinessPack, output: dict[str, Any], reason: str
+) -> None:
+    runtime = make_runtime(
+        clinic_pack, activate_pack(clinic_pack), classifier_model(output), document_responder()
+    )
+    case = _case(id="slip", message="Ho una domanda", expect={"outcome": "handoff"})
+    report = await run_turn_eval(runtime, [case], route=ROUTE)
+    assert not report.ok
+    assert report.results[0].failures == (f"handoff by failure: {reason}",)
+    assert report.results[0].rejection == reason
+    assert json.loads(turn_report_json(report))["results"][0]["rejection"] == reason
+
+
+async def test_a_handoff_case_passes_when_the_business_designed_the_handoff(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    # The clinic looks up no orders: handing the person to reception is the answer, not a slip.
+    runtime = make_runtime(
+        clinic_pack, activate_pack(clinic_pack), classifier_model(ORDER), document_responder()
+    )
+    case = _case(id="no-orders", message="Dov'è il mio ordine?", expect={"outcome": "handoff"})
+    report = await run_turn_eval(runtime, [case], route=ROUTE)
+    assert report.ok, render_turn_markdown(report)
+    assert report.results[0].rejection == "intent_not_allowed"

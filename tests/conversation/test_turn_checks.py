@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -13,12 +14,15 @@ from frontdesk.conversation.evaluation import (
     Suite,
     TurnCase,
     TurnDatasetError,
+    TurnEvalReport,
     case_result,
     check_case,
     check_conversation,
     check_reply,
     initial_state,
     load_turn_cases,
+    render_turn_markdown,
+    turn_report_json,
 )
 from frontdesk.conversation.turn import TurnOutcome, TurnResult, TurnTrace
 from frontdesk.tenancy.pack import FixedTextKey, Language
@@ -303,3 +307,68 @@ def test_every_price_and_contact_case_of_the_demo_datasets_blocks_the_phase(
     ]
     assert cases  # the clinic asks about prices and its phone number
     assert [case.id for case in cases if not case.expect.is_critical] == []
+
+
+# --- Fix round 1 (review I-1): a handoff after a classifier slip is a fallback too ----------------------
+
+# The classifier named an id the catalogue lacks, or left out or emptied the question it must write.
+# Nothing is wrong with the message, so a case that expects a handoff must not pass on it.
+CLASSIFIER_SLIPS = (
+    "unknown_service_id",
+    "unknown_doctor_id",
+    "unknown_problem_category",
+    "missing_general_question",
+    "empty_text",
+)
+# The handoff is the answer to the message: the business does not offer the thing asked, has
+# switched the feature off, limits order lookups, or filters the question text for the person's
+# privacy. Offline cases (the orders asked of a clinic, a price asked of a shop) expect these.
+DESIGNED_REJECTIONS = (
+    "intent_not_allowed",
+    "order_lookups_exhausted",
+    "orientation_disabled",
+    "order_status_disabled",
+    "text_too_long",
+    "text_has_markup",
+    "text_has_identifiers",
+    "text_failed_rules",
+    "text_has_clinical_terms",
+)
+
+
+@pytest.mark.parametrize("rejection", CLASSIFIER_SLIPS)
+def test_a_handoff_after_a_classifier_slip_never_passes_a_handoff_case(rejection: str) -> None:
+    handoff = _result(
+        f"Non ho questa informazione.\n\n{CONTACT}", TurnOutcome.HANDOFF, rejection=rejection
+    )
+    assert check_case(_case("x", outcome="handoff"), handoff, texts=TEXTS) == (
+        f"handoff by failure: {rejection}",
+    )
+    assert pipeline_failure(handoff.trace) == rejection
+
+
+@pytest.mark.parametrize("rejection", DESIGNED_REJECTIONS)
+def test_a_handoff_the_business_designed_is_no_failure(rejection: str) -> None:
+    designed = _result(CONTACT, TurnOutcome.HANDOFF, rejection=rejection)
+    assert check_case(_case("x", outcome="handoff"), designed, texts=TEXTS) == ()
+    assert pipeline_failure(designed.trace) is None
+
+
+def test_the_case_result_records_the_rejection_of_the_last_reply() -> None:
+    case = _case("primo", "secondo", outcome="handoff")
+    earlier = _result(CONTACT, TurnOutcome.HANDOFF, rejection="intent_not_allowed")
+    last = _result(CONTACT, TurnOutcome.HANDOFF, rejection="unknown_service_id")
+    result = case_result(case, [earlier, last], _texts)
+    assert result.rejection == "unknown_service_id"
+    assert result.failures == ("handoff by failure: unknown_service_id",)
+    assert case_result(_case("x"), [_result("Fisioterapia: 30 EUR")], _texts).rejection is None
+
+
+def test_the_json_report_names_the_rejection_and_the_markdown_columns_stay() -> None:
+    case = _case("x", outcome="handoff")
+    slip = _result(CONTACT, TurnOutcome.HANDOFF, rejection="empty_text")
+    report = TurnEvalReport("demo-clinic", "offline-demo", (case_result(case, [slip], _texts),))
+    [entry] = json.loads(turn_report_json(report))["results"]
+    assert (entry["rule"], entry["rejection"], entry["passed"]) == ("pass", "empty_text", False)
+    header = "| case | language | outcome | rule | result |"
+    assert header in render_turn_markdown(report).splitlines()

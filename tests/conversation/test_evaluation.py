@@ -416,6 +416,7 @@ def test_the_json_report_carries_ids_outcomes_and_failures() -> None:
         "sources": ["price:physiotherapy"],
         "failures": ["outcome: handoff"],
         "rule": "none",
+        "rejection": None,
         "behaviour": "answer",
         "critical": False,
         "passed": False,
