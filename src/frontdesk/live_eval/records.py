@@ -158,38 +158,41 @@ def append_case(files: RunFiles, records: Sequence[TurnRecord]) -> None:
 
 
 def _cut_unfinished_line(path: Path) -> None:
-    """Drop a last line that has no newline, even one that reads as a whole record: a write that
-    was cut leaves nothing to trust, and the case it belonged to then runs again."""
+    """Drop what follows the last newline, even when it reads as a whole record: `read_turns` does
+    not count it either, so the case it belonged to runs again.
+
+    The file is only shortened, in one step: there is no instant at which its finished cases are
+    missing, whatever ends the process in the middle of it.
+    """
     if not path.exists():
         return
     data = path.read_bytes()
     if data and not data.endswith(b"\n"):
-        path.write_bytes(data[: data.rfind(b"\n") + 1])
+        os.truncate(path, data.rfind(b"\n") + 1)
 
 
 def _lines(data: bytes) -> list[bytes]:
-    """The lines of a JSON Lines file, cut at newlines only. JSON lets U+2028, U+2029 and U+0085
-    stand raw inside a string, where `splitlines` would cut a valid line in two."""
-    lines = data.split(b"\n")
-    # The piece after the final newline is the end of the last line, not a line of its own.
-    return lines[:-1] if lines[-1] == b"" else lines
+    """The finished lines of a JSON Lines file: the pieces that end in a newline.
+
+    They are cut at newlines only: JSON lets U+2028, U+2029 and U+0085 stand raw inside a string,
+    where `splitlines` would cut a valid line in two. What follows the last newline (nothing, when
+    the file ends well) is a write that a stop cut short, not a line yet.
+    """
+    return data.split(b"\n")[:-1]
 
 
 def read_turns(files: RunFiles) -> tuple[TurnRecord, ...]:
-    """Every turn on disk. A damaged last line (a stop in the middle of a write) is left out;
-    a damaged line anywhere else is an error."""
+    """Every turn on disk. What follows the last newline, the write a stop cut short, is left out;
+    a damaged line before it is an error."""
     if not files.turns.exists():
         return ()
-    lines = _lines(files.turns.read_bytes())
     records: list[TurnRecord] = []
-    for number, line in enumerate(lines, start=1):
+    for number, line in enumerate(_lines(files.turns.read_bytes()), start=1):
         if not line.strip():
             continue
         try:
             records.append(TurnRecord.model_validate_json(line))
         except ValidationError as error:
-            if number == len(lines):
-                break
             raise RunFileError(f"{files.turns}: line {number} is not a turn record") from error
     return tuple(records)
 

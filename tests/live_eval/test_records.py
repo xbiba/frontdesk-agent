@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import os
 from pathlib import Path
 
 import pytest
@@ -132,3 +134,87 @@ def test_a_manifest_that_is_missing_or_not_a_manifest_is_reported_by_name(tmp_pa
     files.manifest.write_text('{"run_id": "run-1"}', encoding="utf-8")
     with pytest.raises(RunFileError, match=r"run\.json: not a run manifest"):
         read_manifest(files)
+
+
+class Killed(BaseException):
+    """The process dies at this instant: nothing after it runs."""
+
+
+def test_a_kill_right_after_the_first_change_to_the_file_loses_no_finished_case(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Cutting the unfinished line must never leave the file without its finished cases, however
+    # the process ends in the middle of it: the file is the run's only record of results.
+    files = RunFiles(tmp_path)
+    for name in ("a", "b"):
+        append_case(files, [record(name, name)])
+    with files.turns.open("a", encoding="utf-8") as turns:
+        turns.write('{"run_id": "run-1", "case_id": "c", "tu')
+    finished = files.turns.read_bytes().rsplit(b"\n", 1)[0] + b"\n"
+    real_open, real_truncate = io.open, os.truncate
+
+    def dying_open(file: object, mode: str = "r", *args: object, **kwargs: object) -> object:
+        handle = real_open(file, mode, *args, **kwargs)  # type: ignore[call-overload]
+        if os.fspath(file) == os.fspath(files.turns) and "w" in mode:  # type: ignore[call-overload]
+            handle.close()  # opening to write has just emptied the file
+            raise Killed
+        return handle
+
+    def dying_truncate(path: object, length: int) -> None:
+        real_truncate(path, length)  # type: ignore[arg-type]
+        if os.fspath(path) == os.fspath(files.turns):  # type: ignore[call-overload]
+            raise Killed
+
+    with monkeypatch.context() as patched:
+        patched.setattr(io, "open", dying_open)
+        patched.setattr(os, "truncate", dying_truncate)
+        with pytest.raises(Killed):
+            append_case(files, [record("d", "quattro")])
+    assert files.turns.read_bytes().startswith(finished)
+    assert [r.case_id for r in read_turns(files)] == ["a", "b"]
+
+
+MIXED = (
+    "caff\N{LATIN SMALL LETTER E WITH GRAVE} \N{EURO SIGN} \N{GRINNING FACE} "
+    "\N{LINE SEPARATOR} \N{PARAGRAPH SEPARATOR} \N{NEXT LINE}"
+)
+
+
+def test_a_write_cut_at_any_byte_keeps_the_finished_cases_and_the_next_case_is_not_lost(
+    tmp_path: Path,
+) -> None:
+    # Every cut of a record that holds two- and four-byte characters and the three line breaks
+    # that `splitlines` would take for ends of line, the whole record without its newline included.
+    finished = [record("a", "uno"), record("b", "due")]
+    line = record("c", MIXED, message=MIXED).model_dump_json().encode("utf-8")
+    prefix = b"".join(r.model_dump_json().encode("utf-8") + b"\n" for r in finished)
+    files = RunFiles(tmp_path)
+    assert len(line) > 400  # many cuts, several of them inside a character
+    for cut in range(len(line) + 1):
+        files.turns.write_bytes(prefix + line[:cut])
+        assert [r.case_id for r in read_turns(files)] == ["a", "b"], cut
+        append_case(files, [record("d", "quattro")])
+        assert files.turns.read_bytes().startswith(prefix), cut
+        assert [r.case_id for r in read_turns(files)] == ["a", "b", "d"], cut
+
+
+def test_a_whole_record_without_its_newline_is_not_yet_a_line(tmp_path: Path) -> None:
+    # The reader and the appender must agree: what the next append cuts was never counted.
+    files = RunFiles(tmp_path)
+    append_case(files, [record("a", "uno")])
+    with files.turns.open("a", encoding="utf-8") as turns:
+        turns.write(record("b", "due").model_dump_json())  # a write cut before its last byte
+    assert [r.case_id for r in read_turns(files)] == ["a"]
+    assert set(completed_cases(read_turns(files))) == {"a"}
+    append_case(files, [record("c", "tre")])
+    assert [r.case_id for r in read_turns(files)] == ["a", "c"]
+    assert set(completed_cases(read_turns(files))) == {"a", "c"}  # "b" runs again
+
+
+def test_a_damaged_line_is_an_error_even_as_the_last_one_with_its_newline(tmp_path: Path) -> None:
+    # A stop can only leave a line without its newline; a damaged line that has one is damage of
+    # another kind, and the next append would bury it in the middle of the file.
+    files = RunFiles(tmp_path)
+    files.turns.write_text(record("a", "uno").model_dump_json() + "\nnot json\n", encoding="utf-8")
+    with pytest.raises(RunFileError, match="line 2"):
+        read_turns(files)

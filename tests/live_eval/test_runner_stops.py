@@ -69,7 +69,9 @@ class Rig:
             action()
         return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, PRICE)])
 
-    async def start(self) -> RunProgress:
+    async def start(
+        self, cases: list[TurnCase] = CASES, *, limit: int | None = None
+    ) -> RunProgress:
         meter = Meter(self.budget, route_id=ROUTE, run_id="run-1")
         runtime = make_runtime(
             self.pack,
@@ -78,7 +80,9 @@ class Rig:
             meter.wrap(document_responder(), "responder"),
             model_settings=CAP,
         )
-        return await run_live_eval(runtime, CASES, files=self.files, run_id="run-1", meter=meter)
+        return await run_live_eval(
+            runtime, cases, files=self.files, run_id="run-1", meter=meter, limit=limit
+        )
 
     def ledger_lines(self) -> list[str]:
         return self.budget.ledger_path.read_text(encoding="utf-8").splitlines()
@@ -135,3 +139,27 @@ async def test_a_ledger_made_read_only_during_the_run_stops_it_with_one_request_
     assert (second.done, second.stopped) == (3, None)
     assert len(rig.requests) == 2 + 3
     assert len(rig.ledger_lines()) == 1 + 3  # one request in all stays uncounted
+
+
+async def test_a_case_whose_last_line_lost_its_newline_is_not_counted_and_runs_again(
+    activate_pack: Activate, clinic_pack: BusinessPack, tmp_path: Path
+) -> None:
+    # The review's probe: the reader counted that case, the next append cut it, and the run
+    # reported every case done while the file held one fewer.
+    one, two, three = CASES
+    rig = Rig(clinic_pack, activate_pack(clinic_pack), tmp_path)
+    order = [one, three, two]
+    first = await rig.start(order, limit=2)  # "one" and "three" are recorded
+    assert (first.done, first.stopped, len(rig.requests)) == (2, None, 2)
+    raw = rig.files.turns.read_bytes()
+    rig.files.turns.write_bytes(raw.removesuffix(b"\n"))  # the write of "three" was cut at its end
+
+    second = await rig.start(order)
+    assert (second.done, second.total, second.stopped) == (3, 3, None)
+    assert len(rig.requests) == 2 + 1 + 2  # "three" ran again, then "two" (2 turns)
+    assert [(r.case_id, r.turn) for r in read_turns(rig.files)] == [
+        ("one", 1),
+        ("three", 1),
+        ("two", 1),
+        ("two", 2),
+    ]  # every case the run reports is on disk
