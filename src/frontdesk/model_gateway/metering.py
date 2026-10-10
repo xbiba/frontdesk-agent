@@ -73,6 +73,7 @@ class Meter:
         self.clock = clock
         self._calls: list[CallRecord] = []
         self._stop_reason: str | None = None
+        self._held = 0.0
 
     @property
     def stop_reason(self) -> str | None:
@@ -88,6 +89,11 @@ class Meter:
         if self._stop_reason is None:
             self._stop_reason = reason
 
+    @property
+    def held_usd(self) -> float:
+        """What the requests in flight hold against the cap until they are settled."""
+        return self._held
+
     def wrap(self, model: Model, role: str) -> Model:
         return MeteredModel(model, meter=self, role=role)
 
@@ -97,22 +103,30 @@ class Meter:
         return calls
 
     def reserve(self, max_tokens: int) -> float:
-        """Refuse a request when the run has stopped or the budget has no room for it; otherwise
-        return the most it could cost."""
+        """Refuse a request when the run has stopped or the budget has no room for it and for the
+        requests in flight; otherwise hold the most it could cost, and return that.
+
+        The hold lasts until the request is settled by `record`, `unconfirmed` or `release`."""
         if self._stop_reason is not None:
             raise RunStoppedError(
                 f"the run has stopped ({self._stop_reason}): no further request is sent"
             )
         most = self._price.cost(input_units=MAX_INPUT_TOKENS_PER_REQUEST, output_units=max_tokens)
         try:
-            self._budget.ensure_room(most)
+            self._budget.ensure_room(self._held + most)
         except BudgetExhaustedError:
             self._stop("budget")
             raise
         except (BudgetError, OSError):  # a ledger that cannot be read: nothing can be counted
             self._stop("ledger")
             raise
+        self._held += most
         return most
+
+    def release(self, reserved: float) -> None:
+        """A request that cost nothing (the provider answered with an error status, or it never
+        left) gives its hold back."""
+        self._held = max(0.0, self._held - reserved)
 
     def _append(self, kind: str, usd: float) -> None:
         try:
@@ -121,10 +135,16 @@ class Meter:
             self._stop("ledger")
             raise
 
-    def record(self, role: str, response: ModelResponse, seconds: float) -> None:
+    def record(
+        self, role: str, response: ModelResponse, seconds: float, *, reserved: float = 0.0
+    ) -> None:
+        """What the provider says the request used; `reserved` is the hold it gives back."""
         usage = response.usage
         usd = self._price.cost(input_units=usage.input_tokens, output_units=usage.output_tokens)
-        self._append("chat", usd)
+        try:
+            self._append("chat", usd)
+        finally:
+            self.release(reserved)
         self._calls.append(
             CallRecord(
                 agent=role,
@@ -139,8 +159,12 @@ class Meter:
         )
 
     def unconfirmed(self, role: str, usd: float, seconds: float) -> None:
-        """A request that was sent but brought back no usage, recorded at its reserve `usd`."""
-        self._append("chat-unconfirmed", usd)
+        """A request that was sent but brought back no usage, recorded at its reserve `usd`, which
+        is also the hold it gives back."""
+        try:
+            self._append("chat-unconfirmed", usd)
+        finally:
+            self.release(usd)
         self._calls.append(
             CallRecord(
                 agent=role,
@@ -177,11 +201,14 @@ class MeteredModel(WrapperModel):
             response = await super().request(messages, model_settings, model_request_parameters)
         except ModelHTTPError as error:
             # The provider answered with an error status, which it does not bill.
+            self._meter.release(reserved)
             if error.status_code == 429:
                 self._meter.rate_limited()
             raise
         except NOT_SENT:
-            raise  # no credentials or no connection: the request never reached the provider
+            # No credentials or no connection: the request never reached the provider.
+            self._meter.release(reserved)
+            raise
         except BaseException:
             # Sent, but no usage came back: the provider may have billed it. If the ledger cannot
             # take the line, the meter has stopped the run; what ended the request still goes on
@@ -189,7 +216,7 @@ class MeteredModel(WrapperModel):
             with suppress(BudgetError, OSError):
                 self._meter.unconfirmed(self._role, reserved, self._meter.clock() - started)
             raise
-        self._meter.record(self._role, response, self._meter.clock() - started)
+        self._meter.record(self._role, response, self._meter.clock() - started, reserved=reserved)
         return response
 
     @asynccontextmanager
