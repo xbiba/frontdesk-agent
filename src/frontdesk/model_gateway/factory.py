@@ -51,6 +51,14 @@ def pinned_location(route: ModelRoute) -> str:
     return route.region
 
 
+def _require_project(route: ModelRoute, gcp_project: str | None) -> str:
+    """The Google Cloud project to call. An empty one would make the SDK leave the project and the
+    location out of the request path."""
+    if gcp_project is None or not gcp_project.strip():
+        raise ValueError(f"FRONTDESK_GCP_PROJECT is required for the {route.route_id} route")
+    return gcp_project
+
+
 def model_http_client() -> httpx2.AsyncClient:
     """The HTTP client of every live model: nothing is taken from the environment.
 
@@ -81,9 +89,10 @@ def google_client(route: ModelRoute, *, gcp_project: str) -> Client:
     GOOGLE_GENAI_CLIENT_MODE cannot make the client record requests on disk.
     """
     location = pinned_location(route)
+    project = _require_project(route, gcp_project)
     return Client(
         vertexai=True,
-        project=gcp_project,
+        project=project,
         location=location,
         http_options=google_http_options(location),
         debug_config=DebugConfig(client_mode=None, replays_directory=None, replay_id=None),
@@ -94,20 +103,22 @@ def build_live_model(route: ModelRoute, *, gcp_project: str | None) -> Model:
     if route.provider not in CHAT_PROVIDERS:
         raise ValueError(f"route '{route.route_id}' has no live model")
     location = pinned_location(route)
-    if not gcp_project:
-        raise ValueError(f"FRONTDESK_GCP_PROJECT is required for the {route.route_id} route")
+    project = _require_project(route, gcp_project)
     if route.provider == "google-vertex":
-        client = google_client(route, gcp_project=gcp_project)
+        client = google_client(route, gcp_project=project)
         return GoogleModel(route.model_name, provider=GoogleCloudProvider(client=client))
-    from anthropic import AsyncAnthropicVertex
+    if route.provider == "anthropic-vertex":
+        from anthropic import AsyncAnthropicVertex
 
-    vertex = AsyncAnthropicVertex(
-        region=location,
-        project_id=gcp_project,
-        base_url=f"{VERTEX_HOSTS[location]}/{VERTEX_API_VERSION}",
-        http_client=model_http_client(),
-    )
-    return AnthropicModel(route.model_name, provider=AnthropicProvider(anthropic_client=vertex))
+        vertex = AsyncAnthropicVertex(
+            region=location,
+            project_id=project,
+            base_url=f"{VERTEX_HOSTS[location]}/{VERTEX_API_VERSION}",
+            http_client=model_http_client(),
+        )
+        return AnthropicModel(route.model_name, provider=AnthropicProvider(anthropic_client=vertex))
+    # A provider added to CHAT_PROVIDERS needs its builder above; none falls through to Claude's.
+    raise ValueError(f"route '{route.route_id}' has no live model: no builder for {route.provider}")
 
 
 def live_model_settings(route: ModelRoute, *, max_tokens: int) -> ModelSettings:

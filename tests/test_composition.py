@@ -364,6 +364,15 @@ def test_a_route_approved_only_for_evaluation_never_receives_a_conversation(
         build_turn_runtime(deployment)  # the database URL leads nowhere: refused before it
 
 
+def test_an_embedding_route_never_answers_a_message(clinic_pack: BusinessPack) -> None:
+    deployment = _deployment(
+        clinic_pack, model_route="vertex-ew1-gemini-embedding-001", gcp_project="demo-project"
+    )
+    with pytest.raises(UnapprovedRouteError, match="cannot answer messages"):
+        # Approved for evaluation data, yet no chat model: refused before the database is opened.
+        build_turn_runtime(deployment, data_class=DataClass.EVALUATION)
+
+
 @pytest.mark.db
 def test_evaluation_data_reaches_the_gemini_route_through_the_given_wrapper(
     activate_pack: Activate, app_url: str, clinic_pack: BusinessPack

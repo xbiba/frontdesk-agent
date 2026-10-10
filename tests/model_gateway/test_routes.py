@@ -5,6 +5,7 @@ from pydantic_ai.models.anthropic import AnthropicModel
 
 from frontdesk.model_gateway.factory import build_live_model, live_model_settings
 from frontdesk.model_gateway.routes import (
+    CHAT_PROVIDERS,
     ROUTES,
     DataClass,
     ModelRoute,
@@ -53,6 +54,37 @@ def test_the_offline_route_has_no_live_model() -> None:
     route = require_route("offline-demo", DataClass.PATIENT_DERIVED)
     with pytest.raises(ValueError, match="no live model"):
         build_live_model(route, gcp_project="p")
+
+
+@pytest.mark.parametrize("route_id", ["vertex-eu-opus", "vertex-eu-gemini-flash-lite"])
+@pytest.mark.parametrize("project", [None, "", "  "])
+def test_a_blank_project_is_refused_for_every_chat_provider(
+    route_id: str, project: str | None
+) -> None:
+    with pytest.raises(ValueError, match="FRONTDESK_GCP_PROJECT"):
+        build_live_model(ROUTES[route_id], gcp_project=project)
+
+
+def test_a_chat_provider_without_a_builder_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A provider added to CHAT_PROVIDERS must not become the Claude client by falling through.
+    monkeypatch.setattr(
+        "frontdesk.model_gateway.factory.CHAT_PROVIDERS", CHAT_PROVIDERS | {"mistral-vertex"}
+    )
+    route = ModelRoute(
+        route_id="vertex-eu-mistral",
+        provider="mistral-vertex",
+        model_name="mistral-large",
+        region="eu",
+        approved_for=frozenset({DataClass.EVALUATION}),
+    )
+    with pytest.raises(ValueError, match="mistral-vertex"):
+        build_live_model(route, gcp_project="demo-project")
+
+
+def test_a_route_without_a_live_model_has_no_live_settings() -> None:
+    route = require_route("offline-demo", DataClass.PATIENT_DERIVED)
+    with pytest.raises(ValueError, match="no live model"):
+        live_model_settings(route, max_tokens=800)
 
 
 def test_live_settings_use_medium_effort_without_sampling() -> None:

@@ -120,3 +120,11 @@ def test_an_embedding_route_has_no_chat_model() -> None:
     route = require_route("vertex-ew1-gemini-embedding-001", DataClass.EVALUATION)
     with pytest.raises(ValueError, match="no live model"):
         build_live_model(route, gcp_project="p")
+
+
+@pytest.mark.parametrize("project", ["", " ", "\t\n"])
+def test_the_gemini_client_needs_a_project(project: str) -> None:
+    # Given an empty project, the SDK drops the project and the location from the request path.
+    route = require_route(GEMINI, DataClass.EVALUATION)
+    with pytest.raises(ValueError, match="FRONTDESK_GCP_PROJECT"):
+        google_client(route, gcp_project=project)

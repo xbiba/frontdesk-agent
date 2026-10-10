@@ -95,7 +95,8 @@ ROUTES: Final[dict[str, ModelRoute]] = {
 
 
 class UnapprovedRouteError(ValueError):
-    """A model route is unknown or not approved for the data it would receive."""
+    """A model route is unknown, not approved for the data it would receive, or not one that can
+    answer messages."""
 
 
 def require_route(route_id: str, data_class: DataClass) -> ModelRoute:

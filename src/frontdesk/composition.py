@@ -27,7 +27,12 @@ from frontdesk.knowledge.embedders import Embedder, build_embedder
 from frontdesk.knowledge.facts import load_catalog
 from frontdesk.knowledge.versions import check_embedder
 from frontdesk.model_gateway.factory import build_live_model, live_model_settings
-from frontdesk.model_gateway.routes import DataClass, require_route
+from frontdesk.model_gateway.routes import (
+    CHAT_PROVIDERS,
+    DataClass,
+    UnapprovedRouteError,
+    require_route,
+)
 from frontdesk.settings import Settings
 from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.loader import load_pack
@@ -98,9 +103,15 @@ def build_turn_runtime(
     live evaluation meter each agent's requests; it receives the model and the agent's role.
     """
     pack = deployment.pack
-    # The route is checked first: a route the data may not reach stops the build before anything
-    # else is opened.
+    # The route is checked first: a route the data may not reach, or one that answers no message,
+    # stops the build before anything else is opened.
     route = require_route(deployment.settings.model_route, data_class)
+    if route.provider != "offline" and route.provider not in CHAT_PROVIDERS:
+        # An embedding route is approved for evaluation data too, yet it has no chat model.
+        raise UnapprovedRouteError(
+            f"model route '{route.route_id}' cannot answer messages: its provider is "
+            f"{route.provider}"
+        )
     business_today = today or deployment.today
     classifier_prompt = read_prompt(pack.profile, "classifier")
     responder_prompt = read_prompt(pack.profile, "responder")
