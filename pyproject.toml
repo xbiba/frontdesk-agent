@@ -9,12 +9,13 @@ dependencies = [
     "alembic>=1.20.0",
     "anthropic[vertex]>=1.12.1",
     "fastapi>=0.143.0",
+    "httpx2>=2.13.1",
     "opentelemetry-api>=1.45.1",
     "opentelemetry-sdk>=1.45.1",
     "pgvector>=0.5.0",
     "psycopg[binary]>=3.3.6",
     "pydantic>=2.14.0",
-    "pydantic-ai-slim[anthropic]>=2.54.0",
+    "pydantic-ai-slim[anthropic,google]>=2.54.0",
     "pydantic-settings>=2.15.0",
     "pyyaml>=6.0.3",
     "sqlalchemy>=2.1.4",
@@ -72,6 +73,9 @@ ignore = ["E501"]  # the formatter owns line length; long string literals stay w
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "pydantic_ai.providers".msg = "Build model providers in frontdesk.model_gateway only."
 "pydantic_ai.models.anthropic".msg = "Build provider models in frontdesk.model_gateway only."
+"pydantic_ai.models.google".msg = "Build provider models in frontdesk.model_gateway only."
+"google.genai".msg = "Only frontdesk.model_gateway talks to Google's model SDK."
+"google.auth".msg = "Only frontdesk.model_gateway reads Google credentials."
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106", "S311", "S608"]
@@ -114,9 +118,9 @@ forbidden_modules = ["frontdesk.api", "frontdesk.cli", "frontdesk.worker", "fron
 name = "Only the model gateway imports provider SDKs"
 type = "forbidden"
 source_modules = ["frontdesk"]
-forbidden_modules = ["anthropic"]
+forbidden_modules = ["anthropic", "google"]
 allow_indirect_imports = true
-ignore_imports = ["frontdesk.model_gateway.** -> anthropic"]
+ignore_imports = ["frontdesk.model_gateway.** -> anthropic", "frontdesk.model_gateway.** -> google"]
 
 [[tool.importlinter.contracts]]
 name = "Safety rules and business packs stay framework-free"
