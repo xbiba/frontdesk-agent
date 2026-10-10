@@ -1,7 +1,7 @@
 import shutil
 import uuid
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -643,10 +643,15 @@ def test_the_approval_report_names_the_orientation_map_version_and_its_doctor(
     [
         ("version", "demo-2026-10", "demo-2026-11"),
         ("approved_by", "Dr. Arben Demo (synthetic)", "Dr. Elira Demo (synthetic)"),
+        ("approved_on", date(2026, 10, 1), date(2026, 10, 2)),
     ],
 )
-def test_a_new_map_version_or_approving_doctor_is_a_new_draft_and_shows_in_the_report(
-    factory: sessionmaker[Session], clinic_pack: BusinessPack, field: str, before: str, after: str
+def test_a_new_map_version_approver_or_date_is_a_new_draft_and_shows_in_the_report(
+    factory: sessionmaker[Session],
+    clinic_pack: BusinessPack,
+    field: str,
+    before: str | date,
+    after: str | date,
 ) -> None:
     """The map's approval is part of the knowledge version: changing it needs a new approval."""
     approval = clinic_pack.orientation_map

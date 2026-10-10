@@ -642,3 +642,146 @@ def test_a_promise_in_other_words_is_found_in_each_language(text: str, phrase: s
 )
 def test_a_reply_about_contact_that_promises_nothing_stays_clear(text: str) -> None:
     assert promise_phrase(text) is None
+
+
+# --- The first patterns, word by word (review of task 4) ------------------------------------------
+# One wording for each verb, subject, article and ending that the first 17 patterns list, so that
+# dropping any one of them fails a test: the phrase is the one those patterns give, and an appended
+# pattern, which comes later, would give a longer phrase for the same words, or none. Three things
+# cannot be pinned, because an appended pattern finds the very same text and no test can tell the
+# two apart: "ti faremo sapere" and "vi faremo sapere", the verbs of "do t'ju" other than "marrim",
+# and "e mail" after "riceverai una". They appear below as plain cases.
+
+
+@pytest.mark.parametrize(
+    ("text", "phrase"),
+    [
+        # English: we or I, will, 'll, are going to, 're going to, and each contact verb
+        ("I'll call tomorrow.", "i ll call"),
+        ("We will phone you.", "we will phone"),
+        ("We are going to ring you later.", "we are going to ring"),
+        ("We're going to email the details.", "we re going to email"),
+        ("I will e-mail you the form.", "i will e mail"),
+        ("We'll write to you.", "we ll write"),
+        ("I'll text you.", "i ll text"),
+        ("We will message you.", "we will message"),
+        ("I will contact you.", "i will contact"),
+        ("We'll get back to you.", "we ll get back"),
+        ("I will reply tomorrow.", "i will reply"),
+        ("We are going to send you a link.", "we are going to send"),
+        ("We're going to confirm the time.", "we re going to confirm"),
+        ("I'll let you know.", "i ll let you know"),
+        ("We will be in touch.", "we will be in touch"),
+        ("I will pass your request on.", "i will pass"),
+        ("We'll forward your message.", "we ll forward"),
+        ("We will transfer you to a colleague.", "we will transfer"),
+        # English: each subject, will, 'll, and each contact verb again
+        ("Someone will call you.", "someone will call"),
+        ("Somebody will phone you.", "somebody will phone"),
+        ("A colleague will ring you.", "a colleague will ring"),
+        ("Our staff will email you.", "our staff will email"),
+        ("Our team will e-mail you.", "our team will e mail"),
+        ("The reception will write to you.", "the reception will write"),
+        ("Reception will text you.", "reception will text"),
+        ("The doctor will message you.", "the doctor will message"),
+        ("A member of staff will contact you.", "a member of staff will contact"),
+        ("A member of our staff will reply.", "a member of our staff will reply"),
+        ("Someone'll let you know.", "someone ll let you know"),
+        ("Somebody will send you the details.", "somebody will send"),
+        ("A colleague will confirm the time.", "a colleague will confirm"),
+        ("Our staff will be in touch.", "our staff will be in touch"),
+        ("Our team will pass your request on.", "our team will pass"),
+        ("The reception will forward your message.", "the reception will forward"),
+        ("Reception will transfer you.", "reception will transfer"),
+        ("The doctor will get back to you.", "the doctor will get back"),
+        # English: you will or 'll receive or get, each article and each thing received (the
+        # last word of each case is what makes an appended pattern give a longer phrase)
+        ("You will receive a call reminder.", "you will receive a call"),
+        ("You'll get an email confirmation.", "you ll get an email"),
+        ("You will receive the e-mail reminder.", "you will receive the e mail"),
+        ("You will get our message notification.", "you will get our message"),
+        ("You'll receive a reply message.", "you ll receive a reply"),
+        ("You will get an answer email.", "you will get an answer"),
+        ("You will receive a confirmation email.", "you will receive a confirmation"),
+        ("You'll get a text message.", "you ll get a text"),
+        # English: passing, forwarding or transferring this or your conversation, message, request
+        ("I am forwarding your message to the reception.", "forwarding your message"),
+        ("We are transferring this request to the doctor.", "transferring this request"),
+        # Italian: ti, vi, la or le, each verb, each ending, with and without "ri"
+        ("Ti richiamerò domani.", "ti richiamero"),
+        ("Vi contatteremo presto.", "vi contatteremo"),
+        ("La scriverà appena possibile.", "la scrivera"),
+        ("Le invieranno i dettagli.", "le invieranno"),
+        ("Ti manderemo una mail.", "ti manderemo"),
+        ("Ti risponderà domani.", "ti rispondera"),
+        # Italian: ti or vi and each verb in the first person plural
+        ("Vi contattiamo presto.", "vi contattiamo"),
+        ("Ti scriviamo domani.", "ti scriviamo"),
+        ("Vi inviamo i dettagli.", "vi inviamo"),
+        ("Ti mandiamo le istruzioni.", "ti mandiamo"),
+        ("Vi rispondiamo domani.", "vi rispondiamo"),
+        # Italian: each form of "riceverai", each article and each thing received
+        ("Riceverai una chiamata promemoria.", "riceverai una chiamata"),
+        ("Riceverete una telefonata promemoria.", "riceverete una telefonata"),
+        ("Riceverà una email promemoria.", "ricevera una email"),
+        ("Riceverai un messaggio sms.", "riceverai un messaggio"),
+        ("Riceverai la risposta sms.", "riceverai la risposta"),
+        ("Riceverai il messaggio sms.", "riceverai il messaggio"),
+        ("Riceverai una conferma sms.", "riceverai una conferma"),
+        ("Riceverai una mail promemoria.", "riceverai una mail"),
+        ("Riceverai una e-mail promemoria.", "riceverai una e mail"),
+        # Italian: each form of "passo", each article and each thing passed
+        ("Inoltro la tua richiesta alla segreteria.", "inoltro la tua richiesta"),
+        ("Passerò il tuo messaggio al medico.", "passero il tuo messaggio"),
+        ("Inoltrerò la richiesta.", "inoltrero la richiesta"),
+        ("Passo il messaggio alla reception.", "passo il messaggio"),
+        # Italian: "qualcuno", ti or vi, and each verb
+        ("Qualcuno ti richiamerà.", "qualcuno ti richiamera"),
+        ("Qualcuno vi contatterà domani.", "qualcuno vi contattera"),
+        ("Qualcuno ti risponderà.", "qualcuno ti rispondera"),
+        ("Qualcuno vi scriverà.", "qualcuno vi scrivera"),
+        # Italian: "vi" and "faremo sapere" ("ti faremo sapere" is in the cases above)
+        ("Vi faremo sapere.", "vi faremo sapere"),
+        # Albanian: "do t'ju" with each verb in the first person plural
+        ("Do t'ju marrim në telefon nesër.", "do t ju marrim"),
+        ("Do t'ju kontaktojmë sot.", "do t ju kontaktojme"),
+        ("Do t'ju shkruajmë nesër.", "do t ju shkruajme"),
+        ("Do t'ju dërgojmë një email.", "do t ju dergojme"),
+        ("Do t'ju përgjigjemi shpejt.", "do t ju pergjigjemi"),
+        ("Do ju njoftojmë me SMS.", "do ju njoftojme"),
+        # Albanian: each subject and each verb of the third person
+        ("Recepsioni do t'ju kontaktojë.", "recepsioni do t ju kontaktoje"),
+        ("Stafi do t'ju shkruajë sot.", "stafi do t ju shkruaje"),
+        ("Dikush do t'ju përgjigjet.", "dikush do t ju pergjigjet"),
+        # Albanian: "do të merrni" with and without "një", and each thing received
+        ("Do të merrni një telefonatë nga recepsioni.", "do te merrni nje telefonate"),
+        ("Do të merrni një email me detajet.", "do te merrni nje email"),
+        ("Do të merrni një mesazh nesër.", "do te merrni nje mesazh"),
+        ("Do të merrni përgjigje brenda ditës.", "do te merrni pergjigje"),
+    ],
+)
+def test_each_verb_subject_and_form_of_the_first_patterns_is_found(text: str, phrase: str) -> None:
+    assert promise_phrase(text) == phrase
+
+
+# A long text without a promise: a pattern that reads up to two words before its verb starts at
+# every word, so short words give it the most starts. The rule must take time linear in the length.
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("a" * 100_000, id="one-long-word"),
+        pytest.param("a " * 50_000, id="short-words"),
+        pytest.param("you will receive a " * 5_300, id="repeated-start-of-a-promise"),
+        pytest.param("do t ju " * 12_500, id="repeated-start-of-an-albanian-promise"),
+        pytest.param("a\N{ZERO WIDTH SPACE}" * 50_000, id="invisible-separators"),
+        # Each of these characters becomes 18 once normalized (NFKD).
+        pytest.param(chr(0xFDFA) * 100_000, id="characters-that-expand"),
+        pytest.param("ciao come stai " * 7_000, id="prose"),
+    ],
+)
+def test_the_promise_rule_takes_time_linear_in_the_length(text: str) -> None:
+    started = time.perf_counter()
+    assert promise_phrase(text) is None
+    assert time.perf_counter() - started < LINEAR_TIME_LIMIT_SECONDS
