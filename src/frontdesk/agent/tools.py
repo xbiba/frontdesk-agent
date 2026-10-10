@@ -19,6 +19,7 @@ from frontdesk.agent.classification import check_free_text
 from frontdesk.agent.deps import ResponderDeps, ToolResult
 from frontdesk.db.engine import business_session
 from frontdesk.knowledge.embedders import Embedder
+from frontdesk.knowledge.evidence import neutralized
 from frontdesk.knowledge.retrieval import chunk_evidence, hybrid_search
 from frontdesk.tenancy.pack import Profile
 
@@ -28,6 +29,7 @@ class ToolServices:
     session_factory: sessionmaker[Session]
     embedder: Embedder
     today: Callable[[], date]
+    min_similarity: float = 0.0  # the vector side's relevance floor (Settings)
 
 
 def build_toolset(profile: Profile, services: ToolServices) -> FunctionToolset[ResponderDeps]:
@@ -53,7 +55,8 @@ def build_toolset(profile: Profile, services: ToolServices) -> FunctionToolset[R
                 query=question,
                 query_vector=vector,
                 today=services.today(),
+                min_similarity=services.min_similarity,
             )
-        return ToolResult(evidence=[chunk_evidence(chunk) for chunk in chunks])
+        return ToolResult(evidence=[neutralized(chunk_evidence(chunk)) for chunk in chunks])
 
     return toolset

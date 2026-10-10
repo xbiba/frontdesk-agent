@@ -248,9 +248,11 @@ def test_the_settings_reach_the_runtime(
             app_url=app_url,
             min_support_similarity=0.7,
             telemetry_capture_content=True,
+            min_retrieval_similarity=0.35,
         )
     )
     assert (strict.min_support_similarity, strict.capture_content) == (0.7, True)
+    assert strict.min_retrieval_similarity == 0.35
     loose = build_turn_runtime(
         _deployment(
             clinic_pack,

@@ -505,3 +505,22 @@ def test_every_problem_of_a_turn_dataset_reaches_stderr_at_once(
     assert "case 'first'" in result.stderr
     assert "case 'second'" in result.stderr
     assert "case 'third'" not in result.stderr  # the valid case is not a problem
+
+
+def test_retrieval_evaluation_reads_the_given_cases_with_the_given_floor(
+    tmp_path: Path, businesses_dir: Path, database: tuple[str, str]
+) -> None:
+    env = str(_env(tmp_path, "clinic", businesses_dir / "demo-clinic", database))
+    _run("knowledge", "bootstrap-demo", "--env-file", env)
+    cases = tmp_path / "retrieval.yaml"
+    cases.write_text(
+        "- {id: only-this, question: zebra quantum harmonica, language: en, "
+        "relevant: [parking-en]}\n",
+        encoding="utf-8",
+    )
+    args = ["eval", "retrieval", "--env-file", env, "--cases", str(cases), "--k", "3"]
+    without_floor = _run(*args)
+    assert "| only-this | en |" in without_floor
+    with_floor = _run(*args, "--min-similarity", "0.9")
+    # Nothing in the clinic's documents is that close to the question: no candidate is left.
+    assert "| only-this | en | 0.00 | 0.00 |" in with_floor

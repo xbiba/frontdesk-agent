@@ -162,6 +162,7 @@ def run_retrieval_eval(
     embedder: Embedder,
     k: int,
     today: date,
+    min_similarity: float = 0.0,
 ) -> RetrievalReport:
     results: list[CaseResult] = []
     for case in cases:
@@ -174,6 +175,7 @@ def run_retrieval_eval(
             today=today,
             limit=k * 3,
             max_chars=1_000_000,
+            min_similarity=min_similarity,
         )
         keys = tuple(dict.fromkeys(hit.document_key for hit in hits))[:k]
         results.append(

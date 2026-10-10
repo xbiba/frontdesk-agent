@@ -25,7 +25,7 @@ from frontdesk.agent.tools import ToolServices, build_toolset
 from frontdesk.agent.vocab import Category, Intent
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
 from frontdesk.knowledge.embedders import HashEmbedder
-from frontdesk.knowledge.evidence import DOCUMENT_ID_PATTERN, Evidence, EvidenceKind
+from frontdesk.knowledge.evidence import DOCUMENT_ID_PATTERN, Evidence, EvidenceKind, neutralized
 from frontdesk.knowledge.retrieval import chunk_evidence, hybrid_search
 from frontdesk.tenancy.pack import BusinessPack, Profile
 
@@ -343,7 +343,7 @@ async def test_search_returns_what_hybrid_search_ranks_for_the_question(
         )
     found = await _search(build_toolset(Profile.RECEPTIONIST, _services(factory)), question)
     assert len(ranked) > 1
-    assert found.evidence == [chunk_evidence(chunk) for chunk in ranked]
+    assert found.evidence == [neutralized(chunk_evidence(chunk)) for chunk in ranked]
 
 
 @pytest.mark.db
