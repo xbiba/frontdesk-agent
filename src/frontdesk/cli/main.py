@@ -82,6 +82,12 @@ VersionId = Annotated[uuid.UUID, typer.Option("--version", help="Knowledge versi
 ReportPath = Annotated[
     Path | None, typer.Option("--output", dir_okay=False, help="Also write a JSON report here.")
 ]
+CasesPath = Annotated[
+    Path | None,
+    typer.Option(
+        "--cases", dir_okay=False, help="The cases file (default: evals/ inside the business pack)."
+    ),
+]
 
 
 @app.callback()
@@ -244,6 +250,16 @@ def eval_retrieval(
     env_file: EnvFile,
     k: Annotated[int, typer.Option("--k", min=1, max=20)] = 5,
     output: ReportPath = None,
+    cases: CasesPath = None,
+    min_similarity: Annotated[
+        float | None,
+        typer.Option(
+            "--min-similarity",
+            min=0.0,
+            max=1.0,
+            help="The vector side's relevance floor (default: FRONTDESK_MIN_RETRIEVAL_SIMILARITY).",
+        ),
+    ] = None,
 ) -> None:
     """Run the business's labelled retrieval questions and print recall@k and MRR.
 
@@ -251,9 +267,14 @@ def eval_retrieval(
     document that the active version lacks: both would score zeros that mean nothing.
     """
     deployment = _deployment(env_file)
-    dataset = deployment.settings.require_business_pack() / "evals" / "retrieval.yaml"
+    dataset = cases or deployment.settings.require_business_pack() / "evals" / "retrieval.yaml"
+    floor = (
+        min_similarity
+        if min_similarity is not None
+        else deployment.settings.min_retrieval_similarity
+    )
     try:
-        cases = load_cases(dataset)
+        retrieval_cases = load_cases(dataset)
     except DatasetError as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(1) from error
@@ -261,7 +282,9 @@ def eval_retrieval(
         check_embedder(session, deployment.pack.id, deployment.embedder)
         if active_version_id(session, deployment.pack.id) is None:
             raise _without_knowledge(NoActiveKnowledgeError(deployment.pack.id), env_file)
-        unknown = unknown_relevant_documents(session, business_id=deployment.pack.id, cases=cases)
+        unknown = unknown_relevant_documents(
+            session, business_id=deployment.pack.id, cases=retrieval_cases
+        )
         if unknown:
             for case_id, key in unknown:
                 typer.echo(
@@ -273,10 +296,11 @@ def eval_retrieval(
         report = run_retrieval_eval(
             session,
             business_id=deployment.pack.id,
-            cases=cases,
+            cases=retrieval_cases,
             embedder=deployment.embedder,
             k=k,
             today=deployment.today(),
+            min_similarity=floor,
         )
     typer.echo(render_markdown(report))
     if output is not None:

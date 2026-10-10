@@ -1,14 +1,29 @@
 """Search queries are built from validated fields and catalog names, never from the message."""
 
 import uuid
+from collections.abc import Callable
+from dataclasses import replace
+from functools import partial
 
-from sqlalchemy.orm import Session
+import pytest
+from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.agent.classification import ValidatedFields
 from frontdesk.agent.vocab import Category, Intent
 from frontdesk.conversation.preload import build_query, document_evidence
+from frontdesk.conversation.state import ConversationState
+from frontdesk.conversation.turn import handle_message
+from frontdesk.db.engine import business_session
+from frontdesk.knowledge.embedders import HashEmbedder
 from frontdesk.knowledge.facts import Catalog
-from tests.conversation.helpers import TODAY, SpyEmbedder
+from frontdesk.tenancy.pack import BusinessPack
+from tests.conversation.helpers import (
+    TODAY,
+    SpyEmbedder,
+    classifier_model,
+    document_responder,
+    make_runtime,
+)
 
 CATALOG = Catalog(
     business_id="demo-clinic",
@@ -62,3 +77,53 @@ def test_nothing_to_search_for_gives_no_query_and_no_embedding() -> None:
     )
     assert found == []
     assert embedder.inputs == []
+
+
+# --- The relevance floor reaches the search behind the preload (final review I-1) ---------------------
+
+Activate = Callable[..., sessionmaker[Session]]
+UNRELATED = "zebra quantum harmonica"  # shares no word with the demo clinic's documents
+
+
+@pytest.mark.db
+def test_the_floor_reaches_the_search_behind_the_preload(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    factory = activate_pack(clinic_pack)
+    fields = _fields(Intent.GENERAL_QUESTION, general_question=UNRELATED)
+    with business_session(factory, clinic_pack.id) as session:
+        search = partial(
+            document_evidence,
+            session,
+            fields,
+            business_id=clinic_pack.id,
+            catalog=CATALOG,
+            embedder=HashEmbedder(),
+            today=TODAY,
+        )
+        assert search()  # no floor: the nearest passages, however far they are
+        assert search(min_similarity=0.9) == []
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(("floor", "shown"), [(0.0, True), (0.9, False)])
+async def test_the_floor_of_the_runtime_reaches_the_passages_the_responder_is_given(
+    activate_pack: Activate, clinic_pack: BusinessPack, floor: float, shown: bool
+) -> None:
+    question = {
+        "category": "administrative",
+        "intent": "general_question",
+        "general_question": UNRELATED,
+    }
+    prompts: list[str] = []
+    runtime = make_runtime(
+        clinic_pack,
+        activate_pack(clinic_pack),
+        classifier_model(question),
+        document_responder(prompts),
+    )
+    await handle_message(
+        UNRELATED, ConversationState(turns=1), replace(runtime, min_retrieval_similarity=floor)
+    )
+    [prompt] = prompts
+    assert ("<evidence" in prompt) is shown

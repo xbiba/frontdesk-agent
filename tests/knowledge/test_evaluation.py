@@ -1,5 +1,6 @@
 import json
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -144,7 +145,7 @@ def test_markdown_tabulates_the_cases_then_the_groups() -> None:
         [
             "# Retrieval evaluation — demo",
             "",
-            "Embedder: hash-v1 · k = 5 · cases: 3",
+            "Embedder: hash-v1 · k = 5 · min similarity = 0 · cases: 3",
             "Mean recall@5: 0.50 · MRR: 0.67",
             "",
             "| case | language | recall@5 | RR |",
@@ -183,6 +184,22 @@ def test_json_carries_the_summary_and_every_case() -> None:
         "reciprocal_rank": 1.0,
     }
     assert "può" in raw  # readable text, not \u escapes
+
+
+def test_markdown_and_json_both_carry_the_floor_the_report_was_run_with() -> None:
+    floored = replace(_report(), min_similarity=0.35)
+    assert "Embedder: hash-v1 · k = 5 · min similarity = 0.35 · cases: 3" in render_markdown(
+        floored
+    )
+    assert json.loads(to_json(floored))["min_similarity"] == 0.35
+
+
+def test_a_report_built_without_a_floor_records_none() -> None:
+    # The field has a default, so a report built as before the field existed still loads.
+    report = RetrievalReport(business_id="demo", k=5, embedder="hash-v1", results=())
+    assert report.min_similarity == 0.0
+    assert "min similarity = 0 · cases: 0" in render_markdown(report)
+    assert json.loads(to_json(report))["min_similarity"] == 0.0
 
 
 def test_cases_load_as_immutable_values(tmp_path: Path) -> None:
@@ -390,6 +407,7 @@ def _evaluate(
     k: int,
     embedder: Embedder | None = None,
     today: date = TODAY,
+    min_similarity: float = 0.0,
 ) -> RetrievalReport:
     with business_session(factory, pack.id) as session:
         return run_retrieval_eval(
@@ -399,6 +417,7 @@ def _evaluate(
             embedder=embedder or HashEmbedder(),
             k=k,
             today=today,
+            min_similarity=min_similarity,
         )
 
 
@@ -415,6 +434,16 @@ def test_a_report_keeps_each_top_document_once_and_no_more_than_k(
         # Six chunks (k * 3) of five documents repeat a document, which must still count once.
         assert len(result.retrieved) == 2
         assert len(set(result.retrieved)) == 2
+
+
+@pytest.mark.db
+def test_a_report_records_the_floor_the_search_ran_with(
+    activate_pack: Activate, clinic_pack: BusinessPack, businesses_dir: Path
+) -> None:
+    factory = activate_pack(clinic_pack)
+    cases = load_cases(businesses_dir / "demo-clinic" / "evals" / "retrieval.yaml")[:2]
+    assert _evaluate(factory, clinic_pack, cases, k=3).min_similarity == 0.0
+    assert _evaluate(factory, clinic_pack, cases, k=3, min_similarity=0.9).min_similarity == 0.9
 
 
 @pytest.mark.db

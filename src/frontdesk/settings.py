@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     gcp_project: str | None = None
     embedding_backend: EmbeddingBackend = EmbeddingBackend.HASH
     min_support_similarity: float = Field(default=0.5, ge=0.0, le=1.0)
+    # The vector side of retrieval keeps chunks at least this similar to the query (P47). 0 keeps
+    # the nearest ones whatever their similarity; each embedder is tuned with its own value.
+    min_retrieval_similarity: float = Field(default=0.0, ge=0.0, le=1.0)
     telemetry_capture_content: bool = False
     log_level: str = "INFO"
 

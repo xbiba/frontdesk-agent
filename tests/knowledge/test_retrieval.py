@@ -543,3 +543,39 @@ def test_equal_scores_rank_document_keys_by_code_point_in_any_database_collation
         hits = _search(factory, pack.id, "ramp", query_vector=None, limit=20)
         expected = sorted(keys)
     assert [hit.document_key for hit in hits] == expected
+
+
+# --- The vector side's relevance floor (final review P47) ---------------------------------------------
+
+
+@pytest.mark.db
+def test_a_relevance_floor_drops_the_vector_candidates_below_it(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    factory = activate_pack(clinic_pack)
+    unrelated = HashEmbedder().embed(["zebra quantum harmonica"])[0]
+    assert _search(factory, clinic_pack.id, "", query_vector=unrelated)  # nearest, not relevant
+    floored = _search(factory, clinic_pack.id, "", query_vector=unrelated, min_similarity=0.9)
+    assert floored == []
+
+
+@pytest.mark.db
+def test_a_relevance_floor_keeps_what_is_similar_enough(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    factory = activate_pack(clinic_pack)
+    vector = HashEmbedder().embed([PARKING_TEXT])[0]
+    hits = _search(factory, clinic_pack.id, "", query_vector=vector, min_similarity=0.5)
+    assert [hit.document_key for hit in hits][:1] == ["parking-en"]
+
+
+@pytest.mark.db
+def test_a_relevance_floor_leaves_the_full_text_side_alone(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    factory = activate_pack(clinic_pack)
+    unrelated = HashEmbedder().embed(["zebra quantum harmonica"])[0]
+    floored = _search(
+        factory, clinic_pack.id, "parking", query_vector=unrelated, min_similarity=0.9
+    )
+    assert floored == _search(factory, clinic_pack.id, "parking", query_vector=None)

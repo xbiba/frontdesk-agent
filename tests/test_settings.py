@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from frontdesk.settings import EmbeddingBackend, Settings, load_settings
 
@@ -17,6 +18,33 @@ def test_defaults_are_offline_and_metadata_only(monkeypatch: pytest.MonkeyPatch)
     assert settings.telemetry_capture_content is False
     assert settings.embedding_backend is EmbeddingBackend.HASH
     assert settings.min_support_similarity == 0.5
+
+
+def test_the_retrieval_floor_is_off_unless_it_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FRONTDESK_MIN_RETRIEVAL_SIMILARITY", raising=False)
+    assert Settings().min_retrieval_similarity == 0.0
+
+
+def test_the_retrieval_floor_is_read_from_its_environment_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FRONTDESK_MIN_RETRIEVAL_SIMILARITY", "0.35")
+    assert Settings().min_retrieval_similarity == 0.35
+
+
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        pytest.param("1.5", "less than or equal to 1", id="above-one"),
+        pytest.param("-0.1", "greater than or equal to 0", id="below-zero"),
+    ],
+)
+def test_a_retrieval_floor_outside_zero_to_one_is_refused(
+    monkeypatch: pytest.MonkeyPatch, value: str, reason: str
+) -> None:
+    monkeypatch.setenv("FRONTDESK_MIN_RETRIEVAL_SIMILARITY", value)
+    with pytest.raises(ValidationError, match=rf"min_retrieval_similarity[\s\S]*{reason}"):
+        Settings()
 
 
 def test_env_file_selects_one_business(tmp_path: Path) -> None:

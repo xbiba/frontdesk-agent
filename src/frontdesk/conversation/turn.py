@@ -134,6 +134,7 @@ class TurnRuntime:
     embedder: Embedder
     today: Callable[[], date]
     min_support_similarity: float = 0.5
+    min_retrieval_similarity: float = 0.0
     capture_content: bool = False
     timeout_seconds: float = TURN_TIMEOUT_SECONDS
     orders: OrderStore | None = None
@@ -486,6 +487,7 @@ def _documents(fields: ValidatedFields, catalog: Catalog, runtime: TurnRuntime) 
             catalog=catalog,
             embedder=runtime.embedder,
             today=runtime.today(),
+            min_similarity=runtime.min_retrieval_similarity,
         )
 
 

@@ -94,6 +94,7 @@ def build_turn_runtime(
         session_factory=deployment.session_factory,
         embedder=deployment.embedder,
         today=business_today,
+        min_similarity=deployment.settings.min_retrieval_similarity,
     )
     toolset = build_toolset(pack.profile, services)
     if route.provider == "offline":
@@ -128,6 +129,7 @@ def build_turn_runtime(
         embedder=deployment.embedder,
         today=business_today,
         min_support_similarity=deployment.settings.min_support_similarity,
+        min_retrieval_similarity=deployment.settings.min_retrieval_similarity,
         capture_content=deployment.settings.telemetry_capture_content,
         orders=OrderStore(tuple(pack.orders)) if pack.features.order_status else None,
         now=deployment.now,

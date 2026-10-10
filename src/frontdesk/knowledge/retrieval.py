@@ -34,7 +34,7 @@ MIN_TOKEN_LENGTH = 3
 Place = tuple[str, int]
 
 # What the queries that rank chunks select: the chunk id, then its place.
-type _PlacedSelect = Select[uuid.UUID, str, int]
+type PlacedSelect = Select[uuid.UUID, str, int]
 type _PlacedRow = Row[uuid.UUID, str, int]
 
 STOPWORDS = frozenset(
@@ -145,12 +145,15 @@ def hybrid_search(
     limit: int = 5,
     candidates: int = 20,
     max_chars: int = 4000,
+    min_similarity: float = 0.0,
 ) -> list[RetrievedChunk]:
     """Best chunks of the business's active knowledge for a query: full text and vector, fused.
 
     The first chunk is always returned; later ones only while they fit in `max_chars`. A query
     vector of all zeros (a message without tokens) counts as no vector: only the terms are searched.
     Chunks with equal scores, in either search or after fusion, come in the order of their places.
+    The vector side keeps only chunks whose cosine similarity to the query reaches
+    `min_similarity` (final review P47): the nearest chunk is not relevant just for being nearest.
     """
     version_id = active_version_id(session, business_id)
     if version_id is None:
@@ -169,7 +172,7 @@ def hybrid_search(
         )
         ranked.append(session.execute(by_terms).all())
     if query_vector is not None and _has_direction(query_vector):
-        nearest = _nearest(eligible, list(query_vector), candidates)
+        nearest = _nearest(eligible, list(query_vector), candidates, min_similarity=min_similarity)
         ranked.append(session.execute(nearest).all())
     places: dict[uuid.UUID, Place] = {
         row.id: (row.doc_key, row.ordinal) for ranking in ranked for row in ranking
@@ -200,12 +203,15 @@ def _has_direction(vector: Sequence[float]) -> bool:
     return any(value != 0.0 for value in vector)
 
 
-def _nearest(eligible: _PlacedSelect, vector: list[float], candidates: int) -> _PlacedSelect:
+def _nearest(
+    eligible: PlacedSelect, vector: list[float], candidates: int, *, min_similarity: float = 0.0
+) -> PlacedSelect:
     """The eligible chunks nearest to the vector by cosine distance, found exactly.
 
     The eligible chunks are materialized first, so the sort cannot run on the HNSW index, which
     filters after its scan and returns few or no rows once retired versions hold the same chunks.
-    Chunks at the same distance come in the order of their places.
+    Chunks at the same distance come in the order of their places. A chunk less similar than
+    `min_similarity` (cosine distance above 1 - min_similarity) is not a candidate.
     """
     pool = (
         eligible.add_columns(Chunk.embedding)
@@ -213,16 +219,16 @@ def _nearest(eligible: _PlacedSelect, vector: list[float], candidates: int) -> _
         .cte("eligible_vectors")
         .prefix_with("MATERIALIZED")
     )
-    return (
+    distance = pool.c.embedding.cosine_distance(vector)
+    query = (
         select(pool.c.id, pool.c.doc_key, pool.c.ordinal)
-        .order_by(
-            pool.c.embedding.cosine_distance(vector), pool.c.doc_key.collate("C"), pool.c.ordinal
-        )
+        .order_by(distance, pool.c.doc_key.collate("C"), pool.c.ordinal)
         .limit(candidates)
     )
+    return query.where(distance <= 1.0 - min_similarity) if min_similarity > 0 else query
 
 
-def _eligible(business_id: str, version_id: uuid.UUID, today: date) -> _PlacedSelect:
+def _eligible(business_id: str, version_id: uuid.UUID, today: date) -> PlacedSelect:
     """The chunks a query may use, each with its place (a chunk's document key and ordinal)."""
     return (
         select(Chunk.id, Document.doc_key, Chunk.ordinal)

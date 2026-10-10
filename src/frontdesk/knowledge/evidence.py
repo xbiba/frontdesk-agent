@@ -65,6 +65,14 @@ class Evidence(BaseModel):
         )
 
 
+def neutralized(item: Evidence) -> Evidence:
+    """The evidence as a tool returns it to the model: the same ID, with the angle brackets of its
+    title and content turned into angle quotes, as `render_evidence` does for the prompt. A passage
+    then reads the same in both paths and cannot open or close a tag in either (final review P67).
+    """
+    return item.model_copy(update={"title": _escape(item.title), "content": _escape(item.content)})
+
+
 def render_evidence(items: Sequence[Evidence]) -> str:
     """Evidence blocks for prompts. Content is data, never instructions."""
     return "\n".join(

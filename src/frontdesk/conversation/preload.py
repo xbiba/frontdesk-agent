@@ -79,13 +79,19 @@ def document_evidence(
     catalog: Catalog,
     embedder: Embedder,
     today: date,
+    min_similarity: float = 0.0,
 ) -> list[Evidence]:
     query = build_query(fields, catalog, fields.language)
     if query is None:
         return []
     vector = embedder.embed([query])[0]
     chunks = hybrid_search(
-        session, business_id=business_id, query=query, query_vector=vector, today=today
+        session,
+        business_id=business_id,
+        query=query,
+        query_vector=vector,
+        today=today,
+        min_similarity=min_similarity,
     )
     return [chunk_evidence(chunk) for chunk in chunks]
 
