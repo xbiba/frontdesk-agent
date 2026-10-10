@@ -21,7 +21,7 @@ from frontdesk.composition import Deployment, build_turn_runtime, open_deploymen
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, handle_message
 from frontdesk.knowledge.embedders import HashEmbedder
-from frontdesk.model_gateway.routes import DataClass, UnapprovedRouteError
+from frontdesk.model_gateway.routes import ROUTES, DataClass, OutputLimits, UnapprovedRouteError
 from frontdesk.settings import EmbeddingBackend, Settings
 from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.pack import BusinessPack, Profile
@@ -397,3 +397,34 @@ def test_evaluation_data_reaches_the_gemini_route_through_the_given_wrapper(
     responder_settings = runtime.responder.model_settings
     assert isinstance(responder_settings, dict)
     assert responder_settings["max_tokens"] == 1200
+
+
+@pytest.mark.db
+def test_each_agent_gets_the_output_cap_of_its_route(
+    activate_pack: Activate,
+    app_url: str,
+    clinic_pack: BusinessPack,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = activate_pack(clinic_pack)
+    # Caps no route uses, so that the constants of the default limits cannot pass for them.
+    capped = replace(
+        ROUTES["vertex-eu-gemini-flash-lite"],
+        route_id="vertex-eu-gemini-capped",
+        output_limits=OutputLimits(classifier=111, responder=222),
+    )
+    monkeypatch.setitem(ROUTES, capped.route_id, capped)
+    runtime = build_turn_runtime(
+        _deployment(
+            clinic_pack,
+            factory,
+            app_url=app_url,
+            model_route=capped.route_id,
+            gcp_project="demo-project",
+        ),
+        data_class=DataClass.EVALUATION,
+    )
+    for agent, cap in ((runtime.classifier, 111), (runtime.responder, 222)):
+        settings = agent.model_settings
+        assert isinstance(settings, dict)
+        assert settings["max_tokens"] == cap

@@ -1,3 +1,4 @@
+import httpx2
 import pytest
 from anthropic import AsyncAnthropicVertex
 from pydantic_ai.models.anthropic import AnthropicModel
@@ -84,6 +85,20 @@ def test_a_stray_vertex_base_url_in_the_environment_is_ignored(
     route = require_route("vertex-eu-opus", DataClass.PATIENT_DERIVED)
     model = build_live_model(route, gcp_project="demo-project")
     assert model.base_url == EU_ENDPOINT
+
+
+def test_the_claude_client_ignores_proxies_and_certificates_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.stray.example:3128")
+    monkeypatch.setenv("ALL_PROXY", "http://proxy.stray.example:3128")
+    route = require_route("vertex-eu-opus", DataClass.PATIENT_DERIVED)
+    http = build_live_model(route, gcp_project="p").client._client
+    assert isinstance(http, httpx2.AsyncClient)
+    assert http.trust_env is False
+    # no proxy transport is mounted
+    assert http._transport_for_url(httpx2.URL(EU_ENDPOINT)) is http._transport
+    assert http.timeout == httpx2.Timeout(30.0, connect=5.0)
 
 
 @pytest.mark.parametrize("region", ["us", None])

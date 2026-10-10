@@ -63,6 +63,8 @@ def test_the_gemini_model_talks_to_the_eu_host_with_api_v1() -> None:
     api = model.client._api_client
     assert (api.project, api.location, api.vertexai) == ("demo", "eu", True)
     assert api._http_options.api_version == "v1"
+    assert api._http_options.retry_options.attempts == 4
+    assert api._http_options.timeout == 30000  # milliseconds
 
 
 def test_the_environment_moves_neither_host_nor_project_nor_location(
