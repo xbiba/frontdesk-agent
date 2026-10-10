@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import fcntl
 import json
+import math
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Literal
+from typing import IO, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -33,6 +34,20 @@ class BudgetExhaustedError(RuntimeError):
     """The next call could cost more than the budget has left."""
 
 
+def _amount(value: object) -> float:
+    """A ledger amount: a finite number that is not negative. A NaN would make every comparison
+    with the cap false, and a negative one would give room back."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise TypeError("an amount is a number")
+    try:
+        amount = float(value)
+    except OverflowError as error:  # an integer too large for a float
+        raise ValueError("an amount fits a float") from error
+    if not math.isfinite(amount) or amount < 0:
+        raise ValueError("an amount is finite and not negative")
+    return amount
+
+
 class _Frozen(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -41,8 +56,8 @@ class Price(_Frozen):
     """A list price in US dollars: per million tokens, or per thousand characters."""
 
     unit: Literal["tokens_1m", "characters_1k"]
-    input_usd: float = Field(ge=0)
-    output_usd: float = Field(default=0.0, ge=0)
+    input_usd: float = Field(ge=0, allow_inf_nan=False)
+    output_usd: float = Field(default=0.0, ge=0, allow_inf_nan=False)
 
     def cost(self, *, input_units: int, output_units: int = 0) -> float:
         per = 1_000_000 if self.unit == "tokens_1m" else 1_000
@@ -50,7 +65,7 @@ class Price(_Frozen):
 
 
 class ExchangeRate(_Frozen):
-    usd_per_eur: float = Field(gt=0)
+    usd_per_eur: float = Field(gt=0, allow_inf_nan=False)
     source: NonBlankStr
     date: date
 
@@ -62,7 +77,7 @@ class PriceList(_Frozen):
 
 
 class BudgetFile(_Frozen):
-    cap_eur: float = Field(gt=0)
+    cap_eur: float = Field(gt=0, allow_inf_nan=False)
     ledger: NonBlankStr = "spend.jsonl"
     exchange_rate: ExchangeRate
     prices: PriceList
@@ -103,7 +118,7 @@ class Budget:
             if not line.strip():
                 continue
             try:
-                total += float(json.loads(line)["usd"])
+                total += _amount(json.loads(line)["usd"])
             except (ValueError, KeyError, TypeError) as error:
                 raise BudgetError(
                     f"{self.ledger_path}: line {number} is not a spend entry"
@@ -117,15 +132,22 @@ class Budget:
         """Refuse a call that could cost `usd` when that would go past the cap."""
         spent = self.spent_usd()
         if spent + usd > self.cap_usd:
+            left = self.eur(self.cap_usd - spent)
+            over = f" (over by {-left:.4f} EUR)" if left < 0 else ""
             raise BudgetExhaustedError(
-                f"the budget of {self.config.cap_eur:.2f} EUR has "
-                f"{self.eur(self.cap_usd - spent):.4f} EUR left, and the next call may cost "
-                f"{self.eur(usd):.4f} EUR"
+                f"the budget of {self.config.cap_eur:.2f} EUR has {max(left, 0.0):.4f} EUR "
+                f"left{over}, and the next call may cost {self.eur(usd):.4f} EUR"
             )
 
     def record(self, *, run_id: str, route_id: str, kind: str, usd: float) -> None:
         """Append one paid call to the ledger and make it durable before the next one. The cost is
         kept unrounded: rounded to the nearest, it could count less than was spent."""
+        try:
+            _amount(usd)
+        except (TypeError, ValueError) as error:
+            raise BudgetError(
+                f"{usd!r} is not an amount of money, so it is not recorded"
+            ) from error
         entry = {
             "at": datetime.now(UTC).isoformat(timespec="seconds"),
             "run": run_id,
@@ -143,18 +165,32 @@ class Budget:
         """Hold the ledger for one run. Two runs at once would each see the same room and could
         together pass the cap, so the second is refused while the first holds it."""
         lock_path = self.ledger_path.with_name(f"{self.ledger_path.name}.lock")
-        with lock_path.open("a", encoding="utf-8") as lock:
-            try:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as error:
-                raise BudgetError(
-                    f"{self.ledger_path}: another live run is using this budget; "
-                    "run this one when it has ended"
-                ) from error
+        try:
+            lock = lock_path.open("a", encoding="utf-8")
+        except OSError as error:
+            raise BudgetError(
+                f"{lock_path}: cannot be opened ({error.strerror or error}); "
+                "the ledger's directory must exist"
+            ) from error
+        with lock:
+            self._take(lock)
             try:
                 yield
             finally:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+    def _take(self, lock: IO[str]) -> None:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise BudgetError(
+                f"{self.ledger_path}: another live run is using this budget; "
+                "run this one when it has ended"
+            ) from error
+        except OSError as error:
+            raise BudgetError(
+                f"{self.ledger_path}: cannot be locked ({error.strerror or error})"
+            ) from error
 
 
 def load_budget(path: Path) -> Budget:
