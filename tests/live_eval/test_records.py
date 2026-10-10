@@ -37,6 +37,9 @@ from tests.live_eval.helpers import AT, TEXTS, manifest, record
         ({"classifier_prompt": "x" * 12}, "classifier_prompt"),
         ({"responder_prompt": "x" * 12}, "responder_prompt"),
         ({"fixed_texts": {"it": {**TEXTS, "handoff": "Chiama il 112."}}}, "fixed_texts"),
+        # The checks' thresholds: tuning them between two halves of a run mixes two runs.
+        ({"min_support_similarity": 0.6}, "min_support_similarity"),
+        ({"min_retrieval_similarity": 0.3}, "min_retrieval_similarity"),
     ],
 )
 def test_a_run_resumes_only_with_the_same_knowledge_prompts_texts_route_and_engine(
@@ -284,6 +287,8 @@ CHANGES: dict[str, object] = {
     "responder_prompt": "x" * 12,
     "fixed_texts": {"it": {**TEXTS, "handoff": "Chiama il 112."}},
     "budget_file": "runs/budget.yaml",
+    "min_support_similarity": 0.6,
+    "min_retrieval_similarity": 0.3,
     "started_at": AT + timedelta(days=1),
 }
 # What makes a run this run and no other. The rest (its name, where the cases file lies, which
@@ -298,6 +303,8 @@ IDENTIFYING = {
     "classifier_prompt",
     "responder_prompt",
     "fixed_texts",
+    "min_support_similarity",
+    "min_retrieval_similarity",
 }
 
 

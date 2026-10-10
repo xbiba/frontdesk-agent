@@ -63,7 +63,7 @@ def test_the_labels_of_the_run_directory_change_the_report_and_the_page(tmp_path
     files = recorded(tmp_path)
     write_run_reports(files, manifest(), CASES, budget=None)
     before = (files.directory / "report.md").read_text(encoding="utf-8")
-    assert "| it | 6 | 2 | 2 | 1 | 0/3 | 1/2 | 0 | 2 | 1 |" in before  # two cases to review
+    assert "| it | 6 | 2 | 2 | 1 | 0/3 | 1/2 | 0 | 3 | 1 |" in before  # three cases to review
 
     (files.directory / "labels.yaml").write_text(
         'refused:\n  refusal: wrong\nhours:\n  answer: wrong\n  invented_fact: true\n  note: "9"\n',
@@ -71,7 +71,7 @@ def test_the_labels_of_the_run_directory_change_the_report_and_the_page(tmp_path
     )
     judged = write_run_reports(files, manifest(), CASES, budget=None)
     after = (files.directory / "report.md").read_text(encoding="utf-8")
-    assert "| it | 6 | 2 | 2 | 1 | 1/3 | 1/2 | 1 | 0 | 1 |" in after  # reviewed, one invented
+    assert "| it | 6 | 2 | 2 | 1 | 1/3 | 1/2 | 1 | 1 | 1 |" in after  # one invented; parking waits
     assert next(v for v in judged if v.case.id == "hours").invented_fact
     document = json.loads((files.directory / "report.json").read_text(encoding="utf-8"))
     assert document["languages"]["it"]["invented_facts"] == 1

@@ -92,6 +92,10 @@ class RunManifest(_Row):
     responder_prompt: str
     fixed_texts: dict[Language, dict[FixedTextKey, str]]
     budget_file: str | None
+    # The checks' thresholds (settings): a run judged with other ones is another run. A run made
+    # before they were recorded reads None, so it cannot be resumed by a newer engine.
+    min_support_similarity: float | None = None
+    min_retrieval_similarity: float | None = None
     started_at: datetime
 
 
@@ -106,6 +110,8 @@ _IDENTITY = (
     "classifier_prompt",
     "responder_prompt",
     "fixed_texts",
+    "min_support_similarity",
+    "min_retrieval_similarity",
 )
 
 

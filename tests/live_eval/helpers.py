@@ -83,6 +83,8 @@ def manifest(**fields: Any) -> RunManifest:
         "responder_prompt": "r" * 12,
         "fixed_texts": FIXED_TEXTS,
         "budget_file": None,
+        "min_support_similarity": 0.5,
+        "min_retrieval_similarity": 0.0,
         "started_at": AT,
     }
     return RunManifest(**{**values, **fields})

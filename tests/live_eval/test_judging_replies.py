@@ -207,7 +207,7 @@ def test_an_invented_fact_before_a_handoff_is_counted_though_the_last_reply_is_n
     labels = {"conv": Label(answer="wrong", invented_fact=True)}
     [verdict] = judge([ENDING_IN_A_HANDOFF], records, FIXED_TEXTS, labels)
     assert verdict.observed is Behaviour.HANDOFF
-    assert verdict.passed
+    assert not verdict.passed  # the reviewer's wrong fails the case (external review, 2026-10-11)
     assert not verdict.answered_prefix
     assert verdict.answered  # the model wrote an answer in turn 1
     assert verdict.dubious
@@ -270,18 +270,18 @@ def test_fixed_texts_and_record_answers_alone_measure_nothing() -> None:
     assert invented(verdicts) == ("0", "pending")
 
 
-def test_one_answer_the_model_wrote_measures_the_criterion() -> None:
+def test_one_answer_the_model_wrote_measures_the_criterion_once_reviewed() -> None:
     wanted = case("parking", behaviour="answer", contains=["sei"], sources=["parking-it"])
-    [verdict] = judge(
-        [wanted], [record("parking", CLEAN, sources=("parking-it",))], FIXED_TEXTS, {}
-    )
+    records = [record("parking", CLEAN, sources=("parking-it",))]
+    [unreviewed] = judge([wanted], records, FIXED_TEXTS, {})
+    assert invented((unreviewed,)) == ("0", "pending")  # every answer is reviewed in M3
+    [verdict] = judge([wanted], records, FIXED_TEXTS, {"parking": Label(answer="right")})
     assert invented((verdict,)) == ("0", "pass")
 
 
 def test_an_answer_the_model_wrote_in_an_earlier_turn_measures_it_too() -> None:
-    [verdict] = judge(
-        [ENDING_IN_A_HANDOFF], conversation(CLEAN, CONTACT, outcome="handoff"), FIXED_TEXTS, {}
-    )
+    records = conversation(CLEAN, CONTACT, outcome="handoff")
+    [verdict] = judge([ENDING_IN_A_HANDOFF], records, FIXED_TEXTS, {"conv": Label(answer="right")})
     assert invented((verdict,)) == ("0", "pass")
 
 

@@ -272,7 +272,7 @@ def test_a_refused_answer_counts_whether_or_not_the_case_names_its_document() ->
     assert refused.refused
     assert refused.document_question
     assert refused.wrong_refusal
-    assert review_cases(verdicts) == (refused,)
+    assert refused in review_cases(verdicts)
 
 
 def test_a_refused_answer_the_reviewer_calls_right_is_in_the_denominator_only() -> None:

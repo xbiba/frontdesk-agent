@@ -71,6 +71,8 @@ class CaseVerdict:
     failures: tuple[str, ...]
     observed: Behaviour
     refused: bool
+    # Some answer holds a number, a link or a negation the expected answer lacks: where the reviewer
+    # looks first. Every answer the model wrote goes to the reviewer all the same (`answer_pending`).
     dubious: bool
     # The last reply is a notice with text the model wrote ahead of it.
     answered_prefix: bool
@@ -85,7 +87,18 @@ class CaseVerdict:
 
     @property
     def passed(self) -> bool:
-        return not self.failures
+        """No check failed and the reviewer did not find the answer wrong."""
+        return not self.reasons
+
+    @property
+    def reasons(self) -> tuple[str, ...]:
+        """Why the case failed: the checks' failures, then the reviewer's verdict."""
+        reviewer: tuple[str, ...] = ()
+        if self.label is not None and self.label.answer == "wrong":
+            reviewer = ("reviewer: wrong answer",)
+            if self.label.invented_fact:
+                reviewer += ("reviewer: invented fact",)
+        return (*self.failures, *reviewer)
 
     @property
     def critical(self) -> bool:
@@ -147,7 +160,10 @@ class CaseVerdict:
 
     @property
     def answer_pending(self) -> bool:
-        return self.dubious and (self.label is None or self.label.answer is None)
+        """An answer the model wrote waits for the reviewer: in M3's first round every one is
+        reviewed, since an added sentence with no number, link or negation can be invented too
+        (external review of 2026-10-11)."""
+        return self.model_text and (self.label is None or self.label.answer is None)
 
     @property
     def failed_by_pipeline(self) -> bool:
