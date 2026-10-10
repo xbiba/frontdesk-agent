@@ -17,9 +17,10 @@ settles every attempt on its own:
 
 A 429 that outlives the attempts, a budget with no room, and a ledger that cannot be read or written
 each stop the run for good, so that it can resume later: after a stop no further request is sent.
-Counted this way the ledger is an upper bound of what the provider billed, with one exception that
-no code can close: a process killed between a provider's answer and its ledger line loses that
-line, one request at most. The runner reads the calls of each turn with `drain`.
+Counted this way the ledger is an upper bound of what the provider billed, with two exceptions of one
+request each that no code can close: a process killed between a provider's answer and its ledger
+line loses that line, and so does the first request whose line a ledger that has become unwritable
+refuses (the run stops there). The runner reads the calls of each turn with `drain`.
 """
 
 from __future__ import annotations
@@ -208,7 +209,7 @@ class Meter:
             raise
 
     def record(
-        self, role: str, response: ModelResponse, seconds: float, *, reserved: float = 0.0
+        self, role: str, response: ModelResponse, seconds: float, *, reserved: float
     ) -> None:
         """What the provider says the attempt used; `reserved` is the hold it gives back. An
         answer that reports no usage may still have been billed in full: it counts its reserve."""
