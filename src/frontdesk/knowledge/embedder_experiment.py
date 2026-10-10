@@ -36,6 +36,9 @@ from frontdesk.knowledge.versions import active_version_id
 
 KS: Final = (1, 3, 5)
 RECALL_GAIN: Final = 0.10  # ten points of mean recall@3
+# A recall is a mean of fractions, and means that are the same number in arithmetic can differ in
+# the last bits of a float: a difference under this is none, for the gain and for "no language worse".
+FLOAT_NOISE: Final = 1e-9
 _TABLE: Final = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 
 
@@ -190,11 +193,11 @@ def decide(reference: CandidateResult, candidates: Sequence[CandidateResult]) ->
         worse = [
             language
             for language, scores in reference.languages.items()
-            if result.languages[language].recall[3] < scores.recall[3]
+            if result.languages[language].recall[3] < scores.recall[3] - FLOAT_NOISE
         ]
         if worse:
             reasons.append(f"{result.name}: recall@3 is worse in {', '.join(worse)}")
-        elif gain < RECALL_GAIN - 1e-9:
+        elif gain < RECALL_GAIN - FLOAT_NOISE:
             reasons.append(f"{result.name}: mean recall@3 gains {gain * 100:.1f} points, under 10")
         else:
             reasons.append(f"{result.name}: mean recall@3 gains {gain * 100:.1f} points")

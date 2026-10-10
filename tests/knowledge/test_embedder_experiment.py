@@ -7,6 +7,7 @@ import math
 from collections.abc import Callable, Sequence
 from datetime import date
 from pathlib import Path
+from statistics import fmean
 
 import pytest
 from sqlalchemy import text as sql
@@ -160,6 +161,34 @@ def test_equal_in_every_figure_the_first_in_the_order_given_wins() -> None:
     first, second = _result("first", 0.80, 0.90, 0.95), _result("second", 0.80, 0.90, 0.95)
     assert decide(REFERENCE, [first, second]).chosen == "first"
     assert decide(REFERENCE, [second, first]).chosen == "second"
+
+
+def test_float_noise_does_not_make_a_language_worse() -> None:
+    # Two means that are the same number in arithmetic (two fifths) and differ by a bit in floats.
+    before = fmean([3 / 5, 1 / 4, 1 / 2, 1 / 4])
+    after = fmean([3 / 5, 1 / 3, 0.0, 2 / 3])
+    assert after < before  # as the machine adds them ...
+    assert before - after < 1e-15  # ... and yet the same number
+
+    def result(name: str, sq: float, other: float) -> CandidateResult:
+        return CandidateResult(
+            name, name, 8, _scores((sq, other, other)), index_seconds=0.0, index_usd=0.0
+        )
+
+    decision = decide(result("reference", before, 0.2), [result("candidate", after, 0.8)])
+    assert decision.chosen == "candidate"
+    assert decision.reasons == (
+        "candidate: mean recall@3 gains 40.0 points",
+        "candidate replaces reference",
+    )
+
+
+def test_a_language_that_is_worse_by_more_than_noise_still_holds_a_candidate_back() -> None:
+    reference = CandidateResult("reference", "r", 8, _scores((0.4, 0.2, 0.2)), 0.0, 0.0)
+    candidate = CandidateResult("candidate", "c", 8, _scores((0.4 - 1e-6, 0.8, 0.8)), 0.0, 0.0)
+    decision = decide(reference, [candidate])
+    assert decision.chosen == "reference"
+    assert decision.reasons[0] == "candidate: recall@3 is worse in sq"
 
 
 def test_the_reference_stays_and_the_reasons_say_why() -> None:
