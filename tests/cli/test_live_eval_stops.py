@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import httpx2
 import pytest
@@ -335,6 +336,92 @@ def test_ctrl_c_ends_the_run_with_130_and_gives_the_budget_back(
     assert result.exit_code == 130
     assert result.stderr.splitlines() == ["stopped: run the same command again to resume"]
     assert not _holds(budget)
+
+
+def test_ctrl_c_brings_the_reports_up_to_date_before_it_ends_the_run(
+    tmp_path: Path,
+    businesses_dir: Path,
+    database: tuple[str, str],
+    gemini: Install,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Review m7: the interrupt ended the run before the reports, so the report.md of the invocation
+    # before stayed in the directory, as stale as the first line of it said.
+    gemini(PRICE)
+    env = bootstrapped(tmp_path, businesses_dir, database)
+    budget, cases = write_budget(tmp_path), write_cases(tmp_path, 3)
+    run_dir = tmp_path / "runs" / "live-1"
+    assert eval_live(env, budget, run_dir, cases, "--limit", "1").exit_code == 0
+    assert "cases 1/3" in (run_dir / "report.md").read_text(encoding="utf-8")
+    real = live.run_live_eval
+
+    async def one_more_case_then_ctrl_c(*args: Any, **kwargs: Any) -> RunProgress:
+        await real(*args, **{**kwargs, "limit": 1})
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(live, "run_live_eval", one_more_case_then_ctrl_c)
+
+    result = eval_live(env, budget, run_dir, cases)
+
+    assert result.exit_code == 130
+    assert result.stderr.splitlines() == ["stopped: run the same command again to resume"]
+    assert recorded_cases(run_dir) == ["price-1", "price-2"]
+    assert "cases 2/3" in (run_dir / "report.md").read_text(encoding="utf-8")  # not the old 1/3
+    assert "report:" in result.stdout  # and it says where the report is
+    assert not _holds(budget)
+
+
+def test_ctrl_c_before_the_run_starts_writes_no_report_and_leaves_no_directory(
+    tmp_path: Path,
+    businesses_dir: Path,
+    database: tuple[str, str],
+    gemini: Install,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def ctrl_c(*args: object, **kwargs: object) -> bool:
+        raise KeyboardInterrupt
+
+    gemini(PRICE)
+    monkeypatch.setattr("frontdesk.cli.live.typer.confirm", ctrl_c)  # at the question
+    env = bootstrapped(tmp_path, businesses_dir, database)
+    budget, run_dir = write_budget(tmp_path), tmp_path / "runs" / "live-1"
+
+    result = eval_live(env, budget, run_dir, write_cases(tmp_path, 1), yes=False)
+
+    assert result.exit_code == 130
+    assert result.stderr.splitlines() == ["stopped: run the same command again to resume"]
+    assert not run_dir.exists()
+    assert not budget.ledger_path.exists()
+    assert not _holds(budget)
+
+
+def test_a_report_that_cannot_be_written_does_not_turn_ctrl_c_into_another_exit_code(
+    tmp_path: Path,
+    businesses_dir: Path,
+    database: tuple[str, str],
+    gemini: Install,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gemini(PRICE)
+    env = bootstrapped(tmp_path, businesses_dir, database)
+    budget, cases = write_budget(tmp_path), write_cases(tmp_path, 2)
+    run_dir = tmp_path / "runs" / "live-1"
+    assert eval_live(env, budget, run_dir, cases, "--limit", "1").exit_code == 0
+    (run_dir / "report.md").unlink()
+    (run_dir / "report.md").mkdir()  # a directory where the report goes
+
+    async def ctrl_c(*args: object, **kwargs: object) -> RunProgress:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(live, "run_live_eval", ctrl_c)
+
+    result = eval_live(env, budget, run_dir, cases)
+
+    assert result.exit_code == 130
+    assert result.stderr.splitlines() == [
+        f"error: {run_dir / 'report.md'}: Is a directory",
+        "stopped: run the same command again to resume",
+    ]
 
 
 # --- The breaker -----------------------------------------------------------------------------------

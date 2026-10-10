@@ -17,7 +17,7 @@ import asyncio
 import hashlib
 import os
 from collections.abc import Sequence
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import AbstractContextManager, nullcontext, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -294,16 +294,29 @@ def _start(run: _Run, *, limit: int | None, yes: bool) -> RunProgress:
         _claim(run)  # before the ledger is touched: a refused run leaves no line in it
         if run.meter is not None:
             run.meter.check_ledger()  # the last gate before the first paid request
-    return asyncio.run(
-        run_live_eval(
-            run.runtime,
-            run.cases,
-            files=run.files,
-            run_id=run.run_id,
-            meter=run.meter,
-            limit=limit,
+    return _run(run, limit)
+
+
+def _run(run: _Run, limit: int | None) -> RunProgress:
+    """The cases themselves. Ctrl-C ends the run with what it recorded, and says so."""
+    try:
+        return asyncio.run(
+            run_live_eval(
+                run.runtime,
+                run.cases,
+                files=run.files,
+                run_id=run.run_id,
+                meter=run.meter,
+                limit=limit,
+            )
         )
-    )
+    except KeyboardInterrupt as stop:
+        # The reports of an earlier invocation would be stale: bring them up to date first. A
+        # report that cannot be written has said so (an error line); the exit code stays 130.
+        with suppress(typer.Exit):
+            _write_reports(run.files, run.manifest, run.cases, run.budget)
+        typer.echo(f"stopped: {_RESUME}", err=True)
+        raise typer.Exit(EXIT_INTERRUPTED) from stop
 
 
 def _claim(run: _Run) -> None:
