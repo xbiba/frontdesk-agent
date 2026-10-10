@@ -374,6 +374,15 @@ def test_the_text_length_counts_invisible_characters_read_as_spaces() -> None:
     assert rule_text_length(message) == 2_331
 
 
+def test_the_text_length_counts_the_text_as_written() -> None:
+    # A letter and its accent are one character folded, and the accent is dropped normalized: of
+    # the 3,000 characters as written only 1,500 are left in any form the rules read. (A text of
+    # one letter and many invisible characters would not do: read as spaces, they stay as long.)
+    message = "e\N{COMBINING ACUTE ACCENT}" * 1_500
+    assert (len(fold(message)), len(normalize(message))) == (1_500, 1_500)
+    assert rule_text_length(message) == len(message) == 3_000
+
+
 def test_the_text_length_counts_the_fold_with_invisible_characters_read_as_spaces() -> None:
     # The phone pattern reads that fold too. U+3316 is six letters folded, none of them one for
     # `normalize`, so 333 units of it and a zero-width space are 666 characters as written, 1,998
