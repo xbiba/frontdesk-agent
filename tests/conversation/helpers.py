@@ -11,6 +11,7 @@ from pydantic_ai import ModelResponse, ToolCallPart
 from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.settings import ModelSettings
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.agent.classifier import build_classifier
@@ -112,6 +113,7 @@ def make_runtime(
     *,
     capture_content: bool = False,
     timeout_seconds: float = 45.0,
+    model_settings: ModelSettings | None = None,
 ) -> TurnRuntime:
     used = embedder or HashEmbedder()
     services = ToolServices(session_factory=factory, embedder=used, today=lambda: TODAY)
@@ -119,11 +121,17 @@ def make_runtime(
     responder_prompt = read_prompt(pack.profile, "responder")
     return TurnRuntime(
         pack=pack,
-        classifier=build_classifier(classifier, pack.profile, instructions=classifier_prompt.text),
+        classifier=build_classifier(
+            classifier,
+            pack.profile,
+            model_settings=model_settings,
+            instructions=classifier_prompt.text,
+        ),
         responder=build_responder(
             responder,
             pack.profile,
             build_toolset(pack.profile, services),
+            model_settings=model_settings,
             instructions=responder_prompt.text,
         ),
         classifier_prompt_version=classifier_prompt.version,

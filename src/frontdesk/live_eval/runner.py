@@ -2,7 +2,8 @@
 
 Cases already recorded are skipped, so a run that stopped resumes where it stopped: no call of a
 finished case is made again. A case is written only once all its turns have run, so a case cut
-short (by the budget, a rate limit or Ctrl-C) leaves no turn behind and runs again in full.
+short (by the budget, a rate limit, a ledger that failed or Ctrl-C) leaves no turn behind and
+runs again in full.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ from frontdesk.model_gateway.metering import CallRecord, Meter
 class RunProgress:
     done: int  # cases recorded, this call's and earlier ones
     total: int
-    stopped: str | None  # "budget" or "rate_limited" when the run had to stop
+    stopped: str | None  # "budget", "rate_limited" or "ledger" when the run had to stop
 
 
 def _utc_now() -> datetime:

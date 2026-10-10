@@ -94,8 +94,12 @@ class Budget:
         """Everything the ledger records; a missing ledger means nothing was spent yet."""
         if not self.ledger_path.exists():
             return 0.0
+        try:
+            text = self.ledger_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as error:
+            raise BudgetError(f"{self.ledger_path}: is not UTF-8 text") from error
         total = 0.0
-        for number, line in enumerate(self.ledger_path.read_text(encoding="utf-8").splitlines(), 1):
+        for number, line in enumerate(text.splitlines(), 1):
             if not line.strip():
                 continue
             try:
