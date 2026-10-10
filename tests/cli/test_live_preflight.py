@@ -27,7 +27,7 @@ from tests.cli.live_chat_helpers import (
     live,
     refused,
 )
-from tests.cli.live_eval_helpers import eval_live, one_error_line, write_cases
+from tests.cli.live_eval_helpers import eval_live, one_error_line, recorded_cases, write_cases
 from tests.model_gateway.budget_helpers import ROUTE, write_budget
 
 LOCK = "spend.jsonl.lock"
@@ -234,7 +234,10 @@ def test_a_ledger_that_can_be_read_but_not_appended_to_stops_a_live_command_befo
     assert sent == []  # not one request went out on a ledger that could not have counted it
     # And the ledger holds only what it held.
     assert [(e["run"], e["kind"], e["usd"]) for e in ledger(budget)] == [("earlier", "chat", 1.0)]
-    assert not (tmp_path / "run").exists()
+    # Nothing was recorded. An evaluation has claimed its directory by now (the claim comes before
+    # the proof, so that a directory that cannot take the run leaves no line in the ledger): the
+    # same command, once the ledger is mended, resumes that run.
+    assert recorded_cases(tmp_path / "run") == []
     with budget.exclusive():
         pass
 

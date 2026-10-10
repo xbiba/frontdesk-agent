@@ -291,10 +291,9 @@ def _start(run: _Run, *, limit: int | None, yes: bool) -> RunProgress:
     if pending:
         if not yes and not typer.confirm("Start the run?", default=False):
             raise typer.Exit(EXIT_ERROR)
+        _claim(run)  # before the ledger is touched: a refused run leaves no line in it
         if run.meter is not None:
             run.meter.check_ledger()  # the last gate before the first paid request
-        if not run.resumed:
-            write_manifest(run.files, run.manifest)
     return asyncio.run(
         run_live_eval(
             run.runtime,
@@ -305,6 +304,16 @@ def _start(run: _Run, *, limit: int | None, yes: bool) -> RunProgress:
             limit=limit,
         )
     )
+
+
+def _claim(run: _Run) -> None:
+    """Claim the run directory: write the manifest of a new run (which creates the directory) and
+    open the record file for appending, so that a directory that cannot take what the run records
+    refuses it here, before a request is paid for a case that could not be written down."""
+    if not run.resumed:
+        write_manifest(run.files, run.manifest)
+    with run.files.turns.open("a", encoding="utf-8"):
+        pass
 
 
 def _pending(run: _Run, limit: int | None) -> list[TurnCase]:

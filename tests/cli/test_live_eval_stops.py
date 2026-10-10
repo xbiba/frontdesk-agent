@@ -609,4 +609,5 @@ def test_a_run_directory_that_cannot_take_the_run_is_one_error_line(
     line = one_error_line(result)
     assert line.startswith(f"error: {blocker / 'run'}")
     assert "Not a directory" in line
+    assert not budget.ledger_path.exists()  # refused before the ledger was touched
     assert not _holds(budget)
