@@ -58,6 +58,29 @@ The demo replaces the models with deterministic keyword stand-ins: it shows the 
 
 A second deployment, `deploy/demo-shop.env`, runs a shop with its own profile and order status, and without any clinic data or calendar. Run the same `db upgrade` and `bootstrap-demo` commands with that file, then chat and ask `Dov'è il mio ordine ORD-10427? CAP 20121`.
 
+## Try it with the real model
+
+The same demo chat can answer with Gemini on Vertex AI (EU) instead of the stand-ins. It needs a Google Cloud project with Vertex AI enabled, and the budget file of the M3 evaluation phase, which caps what live requests may cost and keeps the ledger of what they did.
+
+```bash
+docker compose up -d --wait postgres
+uv sync
+uv run frontdesk db upgrade --env-file deploy/demo-clinic-live.env
+uv run frontdesk knowledge bootstrap-demo --env-file deploy/demo-clinic-live.env
+gcloud auth application-default login   # once
+FRONTDESK_GCP_PROJECT=<project> uv run frontdesk chat --live \
+  --budget <path to the M3 budget file> --env-file deploy/demo-clinic-live.env
+```
+
+`deploy/demo-clinic-live.env` and `deploy/demo-shop-live.env` are the demo files with the Gemini route; the shop takes the same commands with its own file. They keep the same databases and the same embedder, so knowledge loaded with the offline files still matches, and they do not name the project: it comes from `FRONTDESK_GCP_PROJECT` in your shell.
+
+The line printed before the first prompt states two rules, and the program enforces what it can:
+
+- **Every request is paid from the budget.** After each reply the chat prints `cost: <this turn> EUR · session <total> EUR · left <remaining> EUR`. When the budget has no room, Google keeps refusing with 429, or the ledger cannot be read or written, the chat prints `stopped: <reason>` and exits with code 1. One live session or run holds the budget at a time: a second one is refused until the first has ended. `exit` or the end of input ends a session normally.
+- **Test messages only.** Gemini is approved for evaluation data, not for patients' words, until Vertex AI's data retention for it is checked. Type made-up questions, never a real patient's data. The chat writes no transcript to disk: the ledger holds amounts, never message text.
+
+If every reply is the hand-off text and the trace says `rule=error`, the model request itself failed: check the `gcloud` login, the project, and that Vertex AI is enabled for it.
+
 ## Evaluation
 
 - `uv run frontdesk eval turns --env-file deploy/demo-clinic.env`: labelled messages and short conversations, 79 cases over the two demo businesses (56 for the clinic, 23 for the shop), including zero-tolerance suites for medical advice, personal data, data access and prompt injection. CI runs them for both demo businesses, together with a suite of plausible but wrong answers that must never reach a person.
