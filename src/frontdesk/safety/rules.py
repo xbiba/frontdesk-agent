@@ -319,6 +319,25 @@ def _normal_forms(text: str) -> tuple[str, ...]:
     return (removed,) if spaced == removed else (removed, spaced)
 
 
+def _folded_forms(text: str) -> tuple[str, ...]:
+    """The folded forms of `text` that the phone pattern reads; the first is the email pattern's.
+
+    Folded with the invisible characters removed, the digits of a number they split are joined
+    ("333", a zero-width space, "123"). But a number whose only boundary with the word beside it
+    is an invisible character is glued to that word, and the pattern refuses digits that follow a
+    letter ("call", a zero-width space, "12345678"). So the text is also folded with each such
+    character read as a space, and a number found in either form is found. The email pattern has no
+    boundary to lose and reads the first form alone. The second form is left out when it equals
+    the first, and not even computed when the text has no format character.
+    """
+    removed = fold(text)
+    spaced_text = space_invisible(text)
+    if spaced_text == text:
+        return (removed,)
+    spaced = fold(spaced_text)
+    return (removed,) if spaced == removed else (removed, spaced)
+
+
 def _in_any_form(pattern: re.Pattern[str], forms: tuple[str, ...]) -> bool:
     return any(pattern.search(form) for form in forms)
 
@@ -326,12 +345,13 @@ def _in_any_form(pattern: re.Pattern[str], forms: tuple[str, ...]) -> bool:
 def personal_fields(text: str) -> frozenset[PersonalField]:
     forms = _normal_forms(text)
     # The phone and email patterns read the raw text folded: an address with a fullwidth at sign
-    # and a number with zero-width spaces between its digits are what they look like (P57).
-    folded = fold(text)
+    # and a number with zero-width spaces between its digits are what they look like (P57). The
+    # phone pattern reads two folds (`_folded_forms`), the email pattern the first.
+    folds = _folded_forms(text)
     found: set[PersonalField] = set()
-    if _PHONE.search(_NOT_PHONE.sub(" ", folded)):
+    if any(_PHONE.search(_NOT_PHONE.sub(" ", folded)) for folded in folds):
         found.add(PersonalField.PHONE)
-    if _EMAIL.search(folded):
+    if _EMAIL.search(folds[0]):
         found.add(PersonalField.EMAIL)
     if _in_any_form(_NAME, forms):
         found.add(PersonalField.NAME)
@@ -354,15 +374,17 @@ def emergency_rule(text: str) -> str | None:
 
 def rule_text_length(text: str) -> int:
     """The length of the longest form of `text` a rule reads: as written, folded (the phone and
-    email patterns) or normalized (the others), the latter with invisible characters removed and
-    with them read as spaces, `len(normalize(space_invisible(text)))`.
+    email patterns) or normalized (the others), each of the last two with invisible characters
+    removed and with them read as spaces, `len(fold(space_invisible(text)))` and
+    `len(normalize(space_invisible(text)))`.
 
     A compatibility character can fold into several: U+33AF becomes six, so a message under the
     length limit as written could reach the patterns six times as long. An invisible character
     read as a space can add a character too: a unit of U+33AF and one is seven characters spaced
     and six removed. The limit applies to this length (security review of the M3 plan).
     """
-    return max(len(text), len(fold(text)), *(len(form) for form in _normal_forms(text)))
+    forms = (text, *_folded_forms(text), *_normal_forms(text))
+    return max(len(form) for form in forms)
 
 
 def evaluate(text: str, *, expected: frozenset[PersonalField] = frozenset()) -> RuleResult:

@@ -580,6 +580,7 @@ def test_redaction_masks_every_phone_and_email_the_rules_find(message: str) -> N
     masked = redact(message)
     for field in found:
         assert MASKS[field] in masked
+    assert re.search(r"\d{8,}", fold(masked)) is None
 
 
 # The same agreement for any mix of the pieces of a phone number or an address, some of them
