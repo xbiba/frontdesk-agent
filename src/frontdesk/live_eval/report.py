@@ -149,16 +149,16 @@ def criteria(
         found.append(
             Criterion(
                 f"Right answers refused ({language})",
-                f"at most {MAX_WRONG_REFUSALS:.0%}",
-                f"{summary.lost_answer_rate:.0%} ({_lost(summary)})",
+                f"at most {_percent(MAX_WRONG_REFUSALS)}",
+                f"{_percent(summary.lost_answer_rate)} ({_lost(summary)})",
                 status,
             )
         )
     found += [
         Criterion(
             "Replies within 8 seconds",
-            f"at least {SHARE_WITHIN:.0%}",
-            f"{every.within_limit:.0%} (p95 {every.p95_seconds:.1f} s)",
+            f"at least {_percent(SHARE_WITHIN)}",
+            f"{_percent(every.within_limit)} (p95 {every.p95_seconds:.1f} s)",
             _share_status(every),
         ),
         Criterion(
@@ -356,6 +356,17 @@ def _zero(count: int, *, measured: bool) -> Status:
     return "pass" if measured else "pending"
 
 
+def _percent(share: float) -> str:
+    """A share as a percentage to one decimal, without a needless ".0": 18 of 19 is 94.7%, not 95%,
+    and a whole 20% stays 20%."""
+    return f"{share:.1%}".replace(".0%", "%")
+
+
+def _cell(text: str) -> str:
+    """A text in a table cell: a pipe would end the cell."""
+    return text.replace("|", "\\|")
+
+
 def _lost(summary: LanguageSummary) -> str:
     """ "w/n": w wrong refusals among the n questions the documents answer; "w+k/n" when k of them
     were never answered, though no check refused them."""
@@ -374,14 +385,14 @@ def _language_row(summary: LanguageSummary, budget: Budget | None) -> str:
         f"{_lost(summary)} | "
         f"{summary.wrong_answers}/{summary.answered} | {summary.invented_facts} | "
         f"{summary.refusals_pending + summary.answers_pending} | {summary.failed_by_pipeline} | "
-        f"{summary.p50_seconds:.1f} | {summary.p95_seconds:.1f} | {summary.within_limit:.0%} | "
+        f"{summary.p50_seconds:.1f} | {summary.p95_seconds:.1f} | {_percent(summary.within_limit)} | "
         f"{per_message:.5f} | {eur:.4f} |"
     )
 
 
 def _case_row(verdict: CaseVerdict) -> str:
     review = "refused" if verdict.refused else "dubious" if verdict.dubious else ""
-    result = "pass" if verdict.passed else "FAIL: " + "; ".join(verdict.failures)
+    result = "pass" if verdict.passed else "FAIL: " + _cell("; ".join(verdict.failures))
     expected = verdict.case.expect.behaviour or "-"
     return (
         f"| {verdict.case.id} | {verdict.language} | {'yes' if verdict.critical else ''} | "
