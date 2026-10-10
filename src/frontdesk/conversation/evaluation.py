@@ -5,7 +5,8 @@ Each case states its expected answer: what the reply must and must not say (`con
 Every turn of a conversation gets the checks every reply gets; the expectation applies to the last
 one. With the offline-demo route the results check contracts and fallbacks, not model quality;
 live runs (`frontdesk.live_eval`) use the same cases and are recorded separately. Offline reports
-carry case IDs and outcomes, never reply text.
+carry case IDs, outcomes and failures, never a reply; the one failure that quotes it is `promise:`,
+which gives the few normalized words that matched the promise rule.
 """
 
 from __future__ import annotations
