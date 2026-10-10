@@ -18,7 +18,7 @@ from google.auth.exceptions import RefreshError
 from pydantic_ai import Agent, ModelResponse
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
-from frontdesk.model_gateway.costs import BudgetExhaustedError
+from frontdesk.model_gateway.costs import Budget, BudgetExhaustedError
 from frontdesk.model_gateway.factory import GOOGLE_RETRIES
 from frontdesk.model_gateway.metering import (
     MAX_ATTEMPTS,
@@ -266,3 +266,22 @@ def test_the_engine_retries_what_the_sdk_options_still_describe() -> None:
     waits = tuple(min(first * base**step, longest) for step in range(MAX_ATTEMPTS - 1))
     assert waits == RETRY_WAITS == BACKOFF
     assert MAX_ATTEMPTS == 4
+
+
+async def test_a_failure_worth_retrying_ends_the_request_at_once_when_the_run_has_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The first attempt timed out and its line cannot be written: the ledger has stopped the run,
+    # so no second attempt can be sent. The request ends with the timeout, without the wait.
+    def cannot_write(*args: object, **kwargs: object) -> None:
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(Budget, "record", cannot_write)
+    sleeps = Sleeps()
+    meter = Meter(write_budget(tmp_path), route_id=ROUTE, run_id="run-1", sleep=sleeps)
+    model = ScriptedModel(read_timeout, answer())
+    with pytest.raises(httpx2.ReadTimeout):
+        await Agent(meter.wrap(model, "classifier")).run("x", model_settings=CAP)
+    assert model.requests == 1
+    assert sleeps.waits == []
+    assert meter.stop_reason == "ledger"

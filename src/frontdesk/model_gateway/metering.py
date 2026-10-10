@@ -121,8 +121,9 @@ class Meter:
         """Why the run must stop, once it must; None while it may go on. The first cause stays.
 
         "budget": the budget has no room for the next request, or cannot bound what it would cost.
-        "rate_limited": a 429 outlived the attempts. "ledger": the spend ledger cannot be read or written, so what a request costs can
-        no longer be counted. After any of them no further request is sent.
+        "rate_limited": a 429 outlived the attempts. "ledger": the spend ledger cannot be read or
+        written, so what a request costs can no longer be counted. After any of them no further
+        request is sent.
         """
         return self._stop_reason
 
@@ -284,15 +285,20 @@ class MeteredModel(WrapperModel):
         model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
+        """The request in up to `MAX_ATTEMPTS` attempts. The last attempt ends it with what it
+        ended with, which is what the runner's stop logic reads (a 429, a refusal by the budget)."""
         cap = self._meter.admit(messages, model_request_parameters, model_settings)
         for attempt in range(MAX_ATTEMPTS):
             try:
                 return await self._attempt(messages, model_settings, model_request_parameters, cap)
             except Exception as error:
-                if attempt == MAX_ATTEMPTS - 1 or not _worth_retrying(error):
+                last = attempt == MAX_ATTEMPTS - 1
+                # Once the run has stopped (a ledger that failed under this very attempt) nothing
+                # more is sent, so there is nothing to wait for.
+                if last or self._meter.stop_reason is not None or not _worth_retrying(error):
                     if isinstance(error, ModelHTTPError) and error.status_code == 429:
                         self._meter.rate_limited()  # it outlived the attempts
-                    raise  # what the last attempt ended with, for the runner's stop logic
+                    raise
             await self._meter.sleep(RETRY_WAITS[attempt])
         raise AssertionError("the last attempt returns or raises")  # pragma: no cover
 
