@@ -10,6 +10,7 @@ import pytest
 from google.genai import Client
 from google.genai import errors as genai_errors
 
+from frontdesk.model_gateway.access import RouteAccessError
 from frontdesk.model_gateway.costs import BudgetError, BudgetExhaustedError, load_budget
 from frontdesk.model_gateway.embeddings import EmbeddingRateLimitedError, VertexEmbedder
 from frontdesk.model_gateway.routes import DataClass, require_route
@@ -72,7 +73,7 @@ def test_a_text_is_billed_on_its_bytes_when_vertex_counts_fewer(tmp_path: Path) 
 
 def test_a_text_sent_without_an_answer_is_charged_its_reserve(tmp_path: Path) -> None:
     embedder = _embedder(tmp_path, _client([], error=TimeoutError("no answer")))
-    with pytest.raises(TimeoutError):
+    with pytest.raises(RouteAccessError, match=r"cannot be reached \(TimeoutError\)"):
         embedder.embed(["\N{LATIN SMALL LETTER E WITH DIAERESIS}" * 10])  # twenty bytes
     assert embedder._budget.spent_usd() == pytest.approx(20 * 0.5 / 1_000)
 

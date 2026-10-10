@@ -15,6 +15,7 @@ import pytest
 from google.genai import errors as genai_errors
 from google.oauth2.credentials import Credentials
 
+from frontdesk.model_gateway.access import RouteAccessError
 from frontdesk.model_gateway.costs import Budget
 from frontdesk.model_gateway.embeddings import EmbeddingRateLimitedError, VertexEmbedder
 from frontdesk.model_gateway.routes import DataClass, require_route
@@ -159,7 +160,8 @@ def test_a_refusal_the_client_raises_as_a_client_error_is_not_retried(
     wire: Callable[[Sequence[Outcome]], Wire],
 ) -> None:
     embedder, sent, waits, budget = wire([error(403)])
-    with pytest.raises(genai_errors.ClientError) as caught:
+    with pytest.raises(RouteAccessError, match="Vertex AI refused project 'clinica-mcu'") as caught:
         embedder.embed(["ciao mondo"])
-    assert caught.value.code == 403
+    assert isinstance(caught.value.__cause__, genai_errors.ClientError)
+    assert caught.value.__cause__.code == 403
     assert (len(sent), waits.waits, ledger(budget)) == (1, [], [])

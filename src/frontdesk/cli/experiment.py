@@ -12,6 +12,7 @@ set, and it holds the budget's ledger while it measures, so that no other live r
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
@@ -23,6 +24,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.cli.live_common import (
     eur_left,
+    prove_ledger,
     refuse_environment_overrides,
     refuse_retired,
     spent_usd,
@@ -48,6 +50,7 @@ from frontdesk.knowledge.versions import (
     create_draft,
     version_status,
 )
+from frontdesk.model_gateway.access import RouteAccessError
 from frontdesk.model_gateway.costs import Budget, BudgetError, BudgetExhaustedError, load_budget
 from frontdesk.model_gateway.embeddings import EmbeddingRateLimitedError, VertexEmbedder
 from frontdesk.model_gateway.routes import DataClass, UnapprovedRouteError, require_route
@@ -88,6 +91,25 @@ def vertex_candidate(route_id: str, settings: Settings, budget: Budget, run_id: 
     return Candidate(route_id, route.dimension, embedder("documents"), embedder("queries"))
 
 
+@dataclass(frozen=True)
+class _Experiment:
+    """What the command has read and built by the time it asks: nothing here has cost anything."""
+
+    settings: Settings
+    budget: Budget
+    cases: Sequence[RetrievalCase]
+    pack: BusinessPack
+    reference: Embedder
+    chosen: Sequence[Candidate]
+    run_dir: Path
+
+    @property
+    def everyone(self) -> list[Candidate]:
+        """The reference first, then the candidates in the order given."""
+        reference = Candidate(REFERENCE, self.reference.dimension, self.reference, self.reference)
+        return [reference, *self.chosen]
+
+
 def eval_embedders(
     env_file: Path,
     *,
@@ -116,14 +138,9 @@ def eval_embedders(
     if not yes and not typer.confirm("Start the experiment?", default=False):
         raise typer.Exit(1)
     _require_scratch_server(settings.migration_database_url)
-    upgrade_to_head(settings.migration_database_url)
-    factory = make_session_factory(make_engine(settings.migration_database_url))
-    _activate(factory, pack, reference)
-    run_dir.mkdir(parents=True, exist_ok=True)
-    everyone = [Candidate(REFERENCE, reference.dimension, reference, reference), *chosen]
+    experiment = _Experiment(settings, budget, cases, pack, reference, chosen, run_dir)
     try:
-        with budget.exclusive():  # no live run spends from the same ledger meanwhile
-            results = _run_all(factory, pack, cases, everyone, run_dir, budget)
+        results = _measure(experiment)
     except BudgetError as error:
         raise fail(str(error)) from error
     decision = decide(results[0], results[1:])
@@ -132,6 +149,30 @@ def eval_embedders(
     )
     (run_dir / "embedders.md").write_text(report, encoding="utf-8")
     typer.echo(report)
+
+
+def _measure(experiment: _Experiment) -> list[CandidateResult]:
+    """Everything after the question, under the hold on the budget's ledger.
+
+    The ledger is proved before anything else is written: a ledger that cannot take a line would
+    let the first paid text through uncounted.
+    """
+    settings, run_dir = experiment.settings, experiment.run_dir
+    with experiment.budget.exclusive():  # no live run spends from the same ledger meanwhile
+        first = experiment.chosen[0].name if experiment.chosen else REFERENCE
+        prove_ledger(experiment.budget, run_id=run_dir.name, route_id=first)
+        upgrade_to_head(settings.migration_database_url)
+        factory = make_session_factory(make_engine(settings.migration_database_url))
+        _activate(factory, experiment.pack, experiment.reference)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        return _run_all(
+            factory,
+            experiment.pack,
+            experiment.cases,
+            experiment.everyone,
+            run_dir,
+            experiment.budget,
+        )
 
 
 def _run_all(
@@ -162,6 +203,10 @@ def _run_all(
         except (BudgetExhaustedError, EmbeddingRateLimitedError) as error:
             raise fail(
                 f"{error}: the results so far are kept; run the same command to resume"
+            ) from error
+        except RouteAccessError as error:  # one sentence that says what to do about Vertex AI
+            raise fail(
+                f"{error}; the results so far are kept; run the same command to resume"
             ) from error
         saved.write_text(result_json(result) + "\n", encoding="utf-8")
         results.append(result)

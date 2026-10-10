@@ -19,6 +19,7 @@ from frontdesk.model_gateway.access import (
     environment_overrides,
 )
 from frontdesk.model_gateway.costs import Budget, BudgetError
+from frontdesk.model_gateway.metering import PREFLIGHT_KIND
 from frontdesk.model_gateway.routes import ModelRoute, UnapprovedRouteError
 
 
@@ -61,6 +62,24 @@ def spent_usd(budget: Budget) -> float:
     except OSError as error:
         raise BudgetError(
             f"{budget.ledger_path}: cannot be read ({error.strerror or error})"
+        ) from error
+
+
+def prove_ledger(budget: Budget, *, run_id: str, route_id: str) -> None:
+    """Prove that the ledger can be read and appended to, before the first paid request.
+
+    What `Meter.check_ledger` does for a chat or an evaluation, for a command that has no meter
+    (the embedder experiment counts characters, a meter tokens): read the ledger, so that a damaged
+    one is named, then append a line of zero dollars, as a paid request will. It costs nothing and
+    sends no request. Without it a ledger that cannot take a line would let the first paid request
+    through uncounted.
+    """
+    spent_usd(budget)
+    try:
+        budget.record(run_id=run_id, route_id=route_id, kind=PREFLIGHT_KIND, usd=0.0)
+    except OSError as error:
+        raise BudgetError(
+            f"{budget.ledger_path}: cannot be appended to ({error.strerror or error})"
         ) from error
 
 

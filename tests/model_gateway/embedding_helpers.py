@@ -8,6 +8,7 @@ from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
 
+from google.auth.exceptions import DefaultCredentialsError, RefreshError
 from google.genai import Client
 from google.genai import errors as genai_errors
 
@@ -71,3 +72,13 @@ def status(code: int) -> Step:
         return kind(code, error)
 
     return step
+
+
+def expired_credentials() -> BaseException:
+    """The refresh of the access token fails: the credentials expired."""
+    return RefreshError("Reauthentication is needed")
+
+
+def no_credentials() -> BaseException:
+    """There are no Application Default Credentials at all."""
+    return DefaultCredentialsError("Your default credentials were not found.")

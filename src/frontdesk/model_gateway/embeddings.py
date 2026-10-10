@@ -18,13 +18,18 @@ attempt on its own, as `MeteredModel` does for a chat request (`frontdesk.model_
   recorded at its reserve; so is an answer that reports no usage.
 
 429 and 5xx answers, timeouts and refused connections are tried again after 2, 4 and 8 seconds,
-four attempts in all. A 429 that outlives them stops the experiment, which resumes later.
+four attempts in all. A 429 that outlives them stops the experiment, which resumes later; any
+other failure that outlives them is explained in one sentence that says what to do
+(`frontdesk.model_gateway.access.explain_failure`, the sentences of the access check), because the
+first embedding of a run is its first proof of the credentials, the API and the model. A ledger
+that cannot be read or written is the budget's error, whatever the operating system called it.
 """
 
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from typing import Final, Literal
 
 import httpx2
@@ -32,6 +37,7 @@ from google.genai import Client
 from google.genai import errors as genai_errors
 from google.genai.types import EmbedContentConfig
 
+from frontdesk.model_gateway.access import explain_failure
 from frontdesk.model_gateway.costs import Budget, BudgetError
 from frontdesk.model_gateway.factory import google_client
 from frontdesk.model_gateway.metering import MAX_ATTEMPTS, NOT_SENT, RETRY_STATUSES, RETRY_WAITS
@@ -86,6 +92,7 @@ class VertexEmbedder:
                 "and the embedder counts characters"
             )
         self._run_id = run_id
+        self._gcp_project = gcp_project
         self._client = client or google_client(route, gcp_project=gcp_project)
         self._sleep = sleep
         self.dimension = route.dimension
@@ -95,8 +102,9 @@ class VertexEmbedder:
         return [self._embed_one(text) for text in texts]
 
     def _embed_one(self, text: str) -> list[float]:
-        """The text in up to `MAX_ATTEMPTS` attempts. The last ends it with what it ended with, a
-        429 as `EmbeddingRateLimitedError`."""
+        """The text in up to `MAX_ATTEMPTS` attempts. The last ends it with what it ended with: a
+        429 as `EmbeddingRateLimitedError`, a failure to reach the model as the `RouteAccessError`
+        that explains it, anything else as it is."""
         size = len(text.encode("utf-8"))
         reserve = self._price.cost(input_units=size)
         for attempt in range(MAX_ATTEMPTS):
@@ -111,6 +119,9 @@ class VertexEmbedder:
                         f"{self._route.model_name} is rate limited (Vertex AI answered 429 after "
                         f"{MAX_ATTEMPTS} attempts): run the experiment again later"
                     ) from error
+                explained = explain_failure(error, self._route, self._gcp_project)
+                if explained is not None:
+                    raise explained from error
                 raise
         raise AssertionError("the last attempt returns or raises")  # pragma: no cover
 
@@ -118,7 +129,8 @@ class VertexEmbedder:
         """One attempt: the budget must have room for its reserve, and it is settled as soon as it
         ends. A ledger that cannot take the line ends the text with its error, never with a retry:
         another attempt would be paid and uncounted."""
-        self._budget.ensure_room(reserve)
+        with self._ledger("read"):
+            self._budget.ensure_room(reserve)
         try:
             response = self._client.models.embed_content(
                 model=self._route.model_name,
@@ -148,4 +160,18 @@ class VertexEmbedder:
         return vector
 
     def _record(self, usd: float, kind: str) -> None:
-        self._budget.record(run_id=self._run_id, route_id=self._route.route_id, kind=kind, usd=usd)
+        with self._ledger("appended to"):
+            self._budget.record(
+                run_id=self._run_id, route_id=self._route.route_id, kind=kind, usd=usd
+            )
+
+    @contextmanager
+    def _ledger(self, action: str) -> Iterator[None]:
+        """The ledger's own failures are the budget's errors, named with the file: an OSError from
+        the ledger must never be taken for one from the network."""
+        try:
+            yield
+        except OSError as error:
+            raise BudgetError(
+                f"{self._budget.ledger_path}: cannot be {action} ({error.strerror or error})"
+            ) from error

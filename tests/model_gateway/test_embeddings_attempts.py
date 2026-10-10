@@ -17,6 +17,7 @@ import pytest
 from google.auth.exceptions import RefreshError
 from google.genai import errors as genai_errors
 
+from frontdesk.model_gateway.access import RouteAccessError
 from frontdesk.model_gateway.costs import Budget, BudgetError, BudgetExhaustedError
 from frontdesk.model_gateway.embeddings import EmbeddingRateLimitedError, VertexEmbedder
 from frontdesk.model_gateway.routes import DataClass, require_route
@@ -52,7 +53,9 @@ class Row:
     script: tuple[Step, ...]  # how each attempt ends, in order
     ledger: tuple[tuple[str, float], ...]  # the lines the attempts leave: kind and cost
     waits: tuple[float, ...] = ()
-    raises: type[BaseException] | None = None  # what the last attempt ends with, if it failed
+    raises: type[BaseException] | None = None  # what the text ends with, if it failed
+    says: str = ""  # a part of the one sentence it says, for an explained failure
+    cause: type[BaseException] | None = None  # what that sentence was made from
 
 
 def unconfirmed(count: int) -> tuple[tuple[str, float], ...]:
@@ -62,8 +65,22 @@ def unconfirmed(count: int) -> tuple[tuple[str, float], ...]:
 TABLE: dict[str, Row] = {
     "answered": Row((answer(),), ((EMBEDDING, USED),)),
     # Sent, and nothing came back: each attempt may have been billed in full.
-    "four read timeouts": Row((read_timeout,) * 4, unconfirmed(4), BACKOFF, httpx2.ReadTimeout),
-    "four write timeouts": Row((write_timeout,) * 4, unconfirmed(4), BACKOFF, httpx2.WriteTimeout),
+    "four read timeouts": Row(
+        (read_timeout,) * 4,
+        unconfirmed(4),
+        BACKOFF,
+        RouteAccessError,
+        "Vertex AI cannot be reached (ReadTimeout)",
+        httpx2.ReadTimeout,
+    ),
+    "four write timeouts": Row(
+        (write_timeout,) * 4,
+        unconfirmed(4),
+        BACKOFF,
+        RouteAccessError,
+        "Vertex AI cannot be reached (WriteTimeout)",
+        httpx2.WriteTimeout,
+    ),
     "two timeouts then an answer": Row(
         (read_timeout, read_timeout, answer()),
         (*unconfirmed(2), (EMBEDDING, USED)),
@@ -75,21 +92,58 @@ TABLE: dict[str, Row] = {
         unconfirmed(1),
         BACKOFF,
         EmbeddingRateLimitedError,
+        "rate limited",
+        genai_errors.ClientError,
     ),
     "a timeout then 503 three times": Row(
         (read_timeout, status(503), status(503), status(503)),
         unconfirmed(1),
         BACKOFF,
+        RouteAccessError,
+        "Vertex AI is not answering (503 SCRIPTED)",
         genai_errors.ServerError,
     ),
     "a timeout then a refused connection three times": Row(
-        (read_timeout, refused, refused, refused), unconfirmed(1), BACKOFF, httpx2.ConnectError
+        (read_timeout, refused, refused, refused),
+        unconfirmed(1),
+        BACKOFF,
+        RouteAccessError,
+        "Vertex AI cannot be reached (ConnectError)",
+        httpx2.ConnectError,
     ),
     # Refused by status, or never made: nothing was billed.
-    "429 four times": Row((status(429),) * 4, (), BACKOFF, EmbeddingRateLimitedError),
-    "503 four times": Row((status(503),) * 4, (), BACKOFF, genai_errors.ServerError),
-    "refused connection four times": Row((refused,) * 4, (), BACKOFF, httpx2.ConnectError),
-    "connect timeout four times": Row((connect_timeout,) * 4, (), BACKOFF, httpx2.ConnectTimeout),
+    "429 four times": Row(
+        (status(429),) * 4,
+        (),
+        BACKOFF,
+        EmbeddingRateLimitedError,
+        "answered 429 after 4 attempts",
+        genai_errors.ClientError,
+    ),
+    "503 four times": Row(
+        (status(503),) * 4,
+        (),
+        BACKOFF,
+        RouteAccessError,
+        "Vertex AI is not answering (503 SCRIPTED): try again later",
+        genai_errors.ServerError,
+    ),
+    "refused connection four times": Row(
+        (refused,) * 4,
+        (),
+        BACKOFF,
+        RouteAccessError,
+        "Vertex AI cannot be reached (ConnectError): check the network connection",
+        httpx2.ConnectError,
+    ),
+    "connect timeout four times": Row(
+        (connect_timeout,) * 4,
+        (),
+        BACKOFF,
+        RouteAccessError,
+        "Vertex AI cannot be reached (ConnectTimeout)",
+        httpx2.ConnectTimeout,
+    ),
     "503 then a good answer": Row((status(503), answer()), ((EMBEDDING, USED),), (2.0,)),
     "429 then a good answer": Row(
         (status(429), status(429), answer()), ((EMBEDDING, USED),), (2.0, 4.0)
@@ -101,15 +155,63 @@ TABLE: dict[str, Row] = {
         (status(500), status(502), status(504), answer()), ((EMBEDDING, USED),), BACKOFF
     ),
     # Not retried: the SDK did not retry them either.
-    "a 400": Row((status(400),), (), (), genai_errors.ClientError),
-    "a 403": Row((status(403),), (), (), genai_errors.ClientError),
-    "a 404": Row((status(404),), (), (), genai_errors.ClientError),
-    "a 408": Row((status(408),), (), (), genai_errors.ClientError),
-    "credentials that cannot be refreshed": Row(
-        (lambda: RefreshError("expired"),), (), (), RefreshError
+    "a 400": Row(
+        (status(400),),
+        (),
+        (),
+        RouteAccessError,
+        "Vertex AI answered 400 SCRIPTED",
+        genai_errors.ClientError,
     ),
-    "a connection reset": Row((reset,), unconfirmed(1), (), httpx2.ReadError),
-    "a broken protocol": Row((broken,), unconfirmed(1), (), httpx2.RemoteProtocolError),
+    "a 403": Row(
+        (status(403),),
+        (),
+        (),
+        RouteAccessError,
+        "Vertex AI refused project 'p' (SCRIPTED: scripted). Check that the API is enabled",
+        genai_errors.ClientError,
+    ),
+    "a 404": Row(
+        (status(404),),
+        (),
+        (),
+        RouteAccessError,
+        "model 'gemini-embedding-001' is not served at "
+        "https://europe-west1-aiplatform.googleapis.com",
+        genai_errors.ClientError,
+    ),
+    "a 408": Row(
+        (status(408),),
+        (),
+        (),
+        RouteAccessError,
+        "Vertex AI answered 408 SCRIPTED",
+        genai_errors.ClientError,
+    ),
+    "credentials that cannot be refreshed": Row(
+        (lambda: RefreshError("expired"),),
+        (),
+        (),
+        RouteAccessError,
+        "Google credentials are missing or expired: run `gcloud auth application-default login`",
+        RefreshError,
+    ),
+    "a connection reset": Row(
+        (reset,),
+        unconfirmed(1),
+        (),
+        RouteAccessError,
+        "Vertex AI cannot be reached (ReadError)",
+        httpx2.ReadError,
+    ),
+    "a broken protocol": Row(
+        (broken,),
+        unconfirmed(1),
+        (),
+        RouteAccessError,
+        "Vertex AI cannot be reached (RemoteProtocolError)",
+        httpx2.RemoteProtocolError,
+    ),
     "Ctrl-C while the request is away": Row(
         (lambda: KeyboardInterrupt(),), unconfirmed(1), (), KeyboardInterrupt
     ),
@@ -142,8 +244,11 @@ def test_each_attempt_is_settled_on_its_own(tmp_path: Path, row: Row) -> None:
     if row.raises is None:
         embedder.embed([TEXT])
     else:
-        with pytest.raises(row.raises):
+        with pytest.raises(row.raises) as caught:
             embedder.embed([TEXT])
+        assert row.says in str(caught.value)
+        if row.cause is not None:  # the sentence keeps what it was made from, for whoever debugs it
+            assert isinstance(caught.value.__cause__, row.cause)
     assert len(scripted.requests) == len(row.script)  # no attempt more, none fewer
     assert ledger(budget) == [(kind, pytest.approx(usd)) for kind, usd in row.ledger]
     assert waits.waits == list(row.waits)
@@ -180,16 +285,37 @@ def test_a_text_that_cannot_be_recorded_is_not_sent_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The first attempt timed out and its line cannot be written: another attempt would be paid
-    # and uncounted, so the experiment stops at once, with the ledger's error.
+    # and uncounted, so the experiment stops at once, with the ledger named: not "cannot be
+    # reached", which is what an OSError would be taken for.
     def cannot_write(*args: object, **kwargs: object) -> None:
         raise OSError(30, "Read-only file system")
 
     monkeypatch.setattr(Budget, "record", cannot_write)
+    budget = write_budget(tmp_path)
     waits, scripted = Waits(), ScriptedEmbeddings(read_timeout, answer())
-    with pytest.raises(OSError, match="Read-only file system"):
-        _embedder(write_budget(tmp_path), scripted, waits).embed([TEXT])
+    with pytest.raises(BudgetError) as caught:
+        _embedder(budget, scripted, waits).embed([TEXT])
+    assert (
+        str(caught.value) == f"{budget.ledger_path}: cannot be appended to (Read-only file system)"
+    )
+    assert isinstance(caught.value.__cause__, OSError)
     assert len(scripted.requests) == 1
     assert waits.waits == []
+
+
+def test_a_ledger_that_cannot_be_read_is_named_and_no_text_is_sent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def cannot_read(*args: object, **kwargs: object) -> float:
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(Budget, "spent_usd", cannot_read)
+    budget = write_budget(tmp_path)
+    scripted = ScriptedEmbeddings(answer())
+    with pytest.raises(BudgetError) as caught:
+        _embedder(budget, scripted, Waits()).embed([TEXT])
+    assert str(caught.value) == f"{budget.ledger_path}: cannot be read (Permission denied)"
+    assert scripted.requests == []
 
 
 def test_a_ledger_that_cannot_be_read_stops_the_text_before_it_is_sent(tmp_path: Path) -> None:
