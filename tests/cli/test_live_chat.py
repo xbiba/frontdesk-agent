@@ -10,7 +10,6 @@ sees when something goes wrong is in `test_live_chat_failures.py`.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +35,7 @@ from tests.cli.live_chat_helpers import (
     QUESTION,
     RUN_ID,
     USAGE,
+    Install,
     bootstrapped,
     env_file,
     ledger,
@@ -183,7 +183,7 @@ def test_a_session_shows_the_banner_each_reply_and_what_it_cost(
     tmp_path: Path,
     businesses_dir: Path,
     database: tuple[str, str],
-    gemini: Callable[[dict[str, Any]], list[str]],
+    gemini: Install,
 ) -> None:
     sent = gemini(PRICE)
     env = bootstrapped(tmp_path, businesses_dir, database)
@@ -221,7 +221,7 @@ def test_the_cost_line_comes_after_the_reply_and_its_trace(
     tmp_path: Path,
     businesses_dir: Path,
     database: tuple[str, str],
-    gemini: Callable[[dict[str, Any]], list[str]],
+    gemini: Install,
 ) -> None:
     gemini(PRICE)
     env = bootstrapped(tmp_path, businesses_dir, database)
@@ -245,7 +245,7 @@ def test_both_agents_are_metered_under_their_own_roles(
     tmp_path: Path,
     businesses_dir: Path,
     database: tuple[str, str],
-    gemini: Callable[[dict[str, Any]], list[str]],
+    gemini: Install,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     roles: list[str] = []
@@ -276,7 +276,7 @@ def test_exit_and_the_end_of_input_end_the_session_normally(
     tmp_path: Path,
     businesses_dir: Path,
     database: tuple[str, str],
-    gemini: Callable[[dict[str, Any]], list[str]],
+    gemini: Install,
     farewell: str,
 ) -> None:
     sent = gemini(PRICE)
@@ -293,7 +293,7 @@ def test_a_budget_with_no_room_stops_the_session_before_any_reply(
     tmp_path: Path,
     businesses_dir: Path,
     database: tuple[str, str],
-    gemini: Callable[[dict[str, Any]], list[str]],
+    gemini: Install,
 ) -> None:
     sent = gemini(PRICE)
     env = bootstrapped(tmp_path, businesses_dir, database)
@@ -303,10 +303,14 @@ def test_a_budget_with_no_room_stops_the_session_before_any_reply(
     result = live(env, budget, input=f"{QUESTION}\n{QUESTION}\nexit\n")
 
     assert result.exit_code == 1
-    assert result.stderr.splitlines() == ["stopped: budget"]
+    # The refused request is the turn's failure (its exception type), then the stop itself.
+    assert result.stderr.splitlines() == ["model error: BudgetExhaustedError", "stopped: budget"]
     assert "Live: gemini-3.1-flash-lite" in result.stdout  # the banner came first
     assert "bot>" not in result.output  # the handoff the failed turn fell back to is not shown
-    assert "cost:" not in result.output
+    assert result.output.splitlines()[-2:] == [
+        "cost: 0.0000 EUR \N{MIDDLE DOT} session 0.0000 EUR \N{MIDDLE DOT} left 0.02 EUR",
+        "stopped: budget",
+    ]
     assert sent == []  # nothing was sent
     assert not budget.ledger_path.exists()  # nothing was spent
     with budget.exclusive():  # and the budget was given back
@@ -318,7 +322,7 @@ def test_the_session_ends_when_the_budget_runs_out_in_the_middle(
     tmp_path: Path,
     businesses_dir: Path,
     database: tuple[str, str],
-    gemini: Callable[[dict[str, Any]], list[str]],
+    gemini: Install,
 ) -> None:
     sent = gemini(PRICE)
     env = bootstrapped(tmp_path, businesses_dir, database)
@@ -328,12 +332,15 @@ def test_the_session_ends_when_the_budget_runs_out_in_the_middle(
     result = live(env, budget, input=f"{QUESTION}\n{QUESTION}\n{QUESTION}\n")
 
     assert result.exit_code == 1
-    assert result.stderr.splitlines() == ["stopped: budget"]
+    assert result.stderr.splitlines() == ["model error: BudgetExhaustedError", "stopped: budget"]
     replies = [line for line in result.stdout.splitlines() if line.startswith("bot> ")]
     assert len(replies) == 1  # the second turn raised because of the stop: no reply
-    assert "cost: 0.0130 EUR \N{MIDDLE DOT} session 0.0130 EUR \N{MIDDLE DOT} left 0.03 EUR" in (
-        result.stdout
-    )
+    assert result.stdout.count("cost: 0.0130 EUR") == 1  # the first turn's
+    # The second turn paid nothing, and says so before the stop.
+    assert result.output.splitlines()[-2:] == [
+        "cost: 0.0000 EUR \N{MIDDLE DOT} session 0.0130 EUR \N{MIDDLE DOT} left 0.03 EUR",
+        "stopped: budget",
+    ]
     assert sent == ["classifier"]  # the third line was never read
     assert len(ledger(budget)) == 1
 
@@ -466,7 +473,7 @@ def test_the_chat_writes_no_transcript_and_the_ledger_holds_amounts_only(
     tmp_path: Path,
     businesses_dir: Path,
     database: tuple[str, str],
-    gemini: Callable[[dict[str, Any]], list[str]],
+    gemini: Install,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gemini(PRICE)

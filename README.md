@@ -76,10 +76,10 @@ FRONTDESK_GCP_PROJECT=<project> uv run frontdesk chat --live \
 
 The line printed before the first prompt states two rules, and the program enforces what it can:
 
-- **Every request is paid from the budget.** After each reply the chat prints `cost: <this turn> EUR · session <total> EUR · left <remaining> EUR`. When the budget has no room, Google keeps refusing with 429, or the ledger cannot be read or written, the chat prints `stopped: <reason>` and exits with code 1. One live session or run holds the budget at a time: a second one is refused until the first has ended. `exit` or the end of input ends a session normally.
+- **Every request is paid from the budget.** After each reply the chat prints `cost: <this turn> EUR · session <total> EUR · left <remaining> EUR`. When the budget has no room, Google keeps refusing with 429, or the ledger cannot be read or written, the chat shows what the turn that was cut short had cost, then `stopped: <reason>`, and exits with code 1. One live session or run holds the budget at a time: a second one is refused until the first has ended. `exit` or the end of input ends a session normally; Ctrl-C ends it at once, with exit code 130, and gives the budget back.
 - **Test messages only.** Gemini is approved for evaluation data, not for patients' words, until Vertex AI's data retention for it is checked. Type made-up questions, never a real patient's data. The chat writes no transcript to disk: the ledger holds amounts, never message text.
 
-If every reply is the hand-off text and the trace says `rule=error`, the model request itself failed: check the `gcloud` login, the project, and that Vertex AI is enabled for it.
+If a reply is the hand-off text and a `model error: <Type>` line came just before it, the model request failed. `DefaultCredentialsError` or `RefreshError`: run `gcloud auth application-default login`. `ModelHTTPError`: Google refused the request (a wrong project, no permission, or Vertex AI not enabled for the project). `ConnectError`: no network (the chat retries for about 14 s first). `OperationalError`: the database stopped. A hand-off that took 45 s, with `rule=timeout` in the trace and no such line, means the request did not answer in time.
 
 ## Evaluation
 

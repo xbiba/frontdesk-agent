@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -80,18 +81,36 @@ def refused(result: Result) -> str:
     return line
 
 
-def fake_gemini(classification: dict[str, Any], sent: list[str]) -> FunctionModel:
+# What a failing role raises, or None to answer this request as usual; called once per request.
+Failure = Callable[[], BaseException | None]
+# What the `gemini` fixture gives a test: install a fake Gemini, get the roles of the requests it
+# is sent. See conftest.py.
+Install = Callable[..., list[str]]
+
+
+def fake_gemini(
+    classification: dict[str, Any],
+    sent: list[str],
+    failing: Mapping[str, Failure] | None = None,
+) -> FunctionModel:
     """Stands for Gemini: the classifier gets `classification`, the responder quotes its first
-    passage. `sent` collects the role of each request."""
+    passage. `sent` collects the role of each request. A role named in `failing` raises what its
+    function gives instead of answering, unless it gives None."""
+    failures = failing or {}
 
     def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         tool = info.output_tools[0]
-        if "claims" in tool.parameters_json_schema["properties"]:
-            sent.append("responder")
-            args = _quote_the_first_passage(first_prompt(messages))
-        else:
-            sent.append("classifier")
-            args = classification
+        role = (
+            "responder" if "claims" in tool.parameters_json_schema["properties"] else "classifier"
+        )
+        sent.append(role)
+        if role in failures and (failure := failures[role]()) is not None:
+            raise failure
+        args = (
+            _quote_the_first_passage(first_prompt(messages))
+            if role == "responder"
+            else classification
+        )
         return ModelResponse(
             parts=[ToolCallPart(tool.name, args)], usage=USAGE, finish_reason="stop"
         )

@@ -6,6 +6,10 @@ for the turn.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import threading
+import time
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
@@ -17,11 +21,18 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.usage import RequestUsage
 
 from frontdesk.cli.chat import run_chat
-from frontdesk.cli.live_chat import LiveCosts, chat_run_id, format_cost_line, live_banner
+from frontdesk.cli.live_chat import (
+    LiveCosts,
+    chat_run_id,
+    format_cost_line,
+    live_banner,
+    model_errors_on_stderr,
+)
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, TurnResult, TurnRuntime, TurnTrace
 from frontdesk.model_gateway.metering import Meter
 from frontdesk.model_gateway.routes import ROUTES
+from frontdesk.observability.logs import log_event
 from tests.cli.live_chat_helpers import BANNER
 from tests.model_gateway.budget_helpers import ROUTE, write_budget
 
@@ -169,7 +180,7 @@ async def test_a_cost_line_follows_each_reply_and_the_trace(
 
 
 @pytest.mark.parametrize("reason", ["budget", "ledger", "rate_limited"])
-async def test_a_stopped_meter_ends_the_loop_without_the_reply_of_that_turn(
+async def test_a_stopped_meter_ends_the_loop_with_the_cost_but_not_the_reply_of_that_turn(
     monkeypatch: pytest.MonkeyPatch, reason: str
 ) -> None:
     costs = StubCosts()
@@ -184,8 +195,9 @@ async def test_a_stopped_meter_ends_the_loop_without_the_reply_of_that_turn(
         costs=costs,
     )
     assert stopped == reason
-    # The turn the stop cut short printed no reply and no cost line, and "third" was never read.
-    assert written == ["bot> echo first", "cost after reply 1"]
+    # The turn the stop cut short printed no reply, but what it had cost (a request may have been
+    # paid before the next one was refused), and "third" was never read.
+    assert written == ["bot> echo first", "cost after reply 1", "cost after reply 2"]
     assert next(lines) == "third"
 
 
@@ -203,3 +215,171 @@ async def test_a_loop_without_costs_prints_no_cost_line_and_never_stops(
     )
     assert stopped is None
     assert written == ["bot> echo ciao"]
+
+
+# --- A failed model request -------------------------------------------------------------------------
+
+TURN_LOGGER = logging.getLogger("frontdesk.conversation.turn")
+
+
+@pytest.mark.parametrize("event", ["turn.failed", "classifier.failed", "responder.failed"])
+def test_a_failed_turn_event_is_one_model_error_line_with_the_exception_type(
+    event: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with model_errors_on_stderr():
+        log_event(TURN_LOGGER, event, business_id="demo-clinic", reason="ModelHTTPError")
+    captured = capsys.readouterr()
+    assert captured.err == "model error: ModelHTTPError\n"
+    assert captured.out == ""
+
+
+def test_the_other_turn_events_print_nothing(capsys: pytest.CaptureFixture[str]) -> None:
+    with model_errors_on_stderr():
+        # Its `reason` is a rejection code, not an exception type, and the turn did not fail.
+        log_event(
+            TURN_LOGGER, "turn.completed", business_id="demo-clinic", reason="classifier_error"
+        )
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param({}, id="none"),
+        pytest.param({"reason": None}, id="null"),
+        pytest.param({"reason": "free text, with spaces"}, id="text"),
+        pytest.param({"reason": "two\nlines"}, id="newline"),
+        pytest.param({"reason": "A" * 101}, id="too-long"),
+    ],
+)
+def test_a_reason_that_is_not_a_type_name_is_never_shown(
+    fields: dict[str, object], capsys: pytest.CaptureFixture[str]
+) -> None:
+    with model_errors_on_stderr():
+        log_event(TURN_LOGGER, "turn.failed", business_id="demo-clinic", **fields)
+    assert capsys.readouterr().err == "model error: unknown\n"
+
+
+def test_the_logger_is_left_as_it_was_after_a_normal_exit() -> None:
+    TURN_LOGGER.setLevel(logging.WARNING)
+    try:
+        before = (list(TURN_LOGGER.handlers), TURN_LOGGER.level)
+        with model_errors_on_stderr():
+            assert TURN_LOGGER.level == logging.INFO  # turn.py logs at INFO
+            assert len(TURN_LOGGER.handlers) == len(before[0]) + 1
+        assert (TURN_LOGGER.handlers, TURN_LOGGER.level) == before
+    finally:
+        TURN_LOGGER.setLevel(logging.NOTSET)
+
+
+@pytest.mark.parametrize("failure", [ValueError, KeyboardInterrupt])
+def test_the_logger_is_left_as_it_was_when_the_session_fails_or_is_interrupted(
+    failure: type[BaseException],
+) -> None:
+    before = (list(TURN_LOGGER.handlers), TURN_LOGGER.level)
+    with pytest.raises(failure), model_errors_on_stderr():
+        raise failure
+    assert (TURN_LOGGER.handlers, TURN_LOGGER.level) == before
+
+
+def test_a_line_that_cannot_be_written_does_not_break_the_turn(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def closed(*args: object, **kwargs: object) -> None:
+        raise OSError("stderr is closed")
+
+    monkeypatch.setattr("frontdesk.cli.live_chat.typer.echo", closed)
+    with model_errors_on_stderr():
+        log_event(TURN_LOGGER, "turn.failed", business_id="demo-clinic", reason="ConnectError")
+    # The logging module reports it and goes on; the exception does not reach the turn.
+    assert "Logging error" in capsys.readouterr().err
+
+
+# --- Ctrl-C at the prompt ---------------------------------------------------------------------------
+
+WAIT_LIMIT = 8.0  # how long a stand-in for readline() waits for a person who never types
+
+
+class PendingRead:
+    """A `read_line` that waits for a person, as `readline()` does, until the test lets it go."""
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def __call__(self) -> str | None:
+        self.started.set()
+        self.release.wait(timeout=WAIT_LIMIT)
+        return None
+
+
+async def _cancelled_while_waiting_for_a_line(read: PendingRead) -> None:
+    """The session as `asyncio.run` leaves it at the first Ctrl-C: its task is cancelled."""
+    task = asyncio.create_task(
+        run_chat(cast(TurnRuntime, None), read_line=read, write=lambda line: None, show_trace=False)
+    )
+    assert await asyncio.to_thread(read.started.wait, 5)  # the read is under way
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+def _join_the_input_threads() -> None:
+    for thread in threading.enumerate():
+        if thread.name == "chat-input":
+            thread.join(timeout=5)
+
+
+def test_a_session_waiting_for_a_line_ends_at_once_when_it_is_cancelled() -> None:
+    read = PendingRead()
+    started = time.monotonic()
+    try:
+        # `asyncio.run` also joins the loop's own executor when it ends: a line read there would
+        # keep the session (and the budget it holds) alive until the person pressed Enter.
+        asyncio.run(_cancelled_while_waiting_for_a_line(read))
+        waited = time.monotonic() - started
+    finally:
+        read.release.set()
+    assert waited < WAIT_LIMIT / 2
+
+
+def test_a_line_typed_after_the_loop_closed_is_dropped_without_a_thread_error() -> None:
+    read = PendingRead()
+    errors: list[threading.ExceptHookArgs] = []
+    previous, threading.excepthook = threading.excepthook, errors.append
+    try:
+        asyncio.run(_cancelled_while_waiting_for_a_line(read))
+        read.release.set()  # the person types at last, in a process whose loop is gone
+        _join_the_input_threads()
+    finally:
+        read.release.set()
+        threading.excepthook = previous
+    assert errors == []
+
+
+def test_a_line_typed_after_the_wait_was_cancelled_is_dropped_by_a_loop_that_goes_on() -> None:
+    read = PendingRead()
+    problems: list[dict[str, object]] = []
+
+    async def session() -> None:
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(lambda _, context: problems.append(context))
+        await _cancelled_while_waiting_for_a_line(read)
+        read.release.set()  # the person types after the wait was cancelled
+        await asyncio.to_thread(_join_the_input_threads)
+        await asyncio.sleep(0.05)  # the loop runs what the thread handed over
+
+    asyncio.run(session())
+    assert problems == []  # setting a result on the cancelled wait would be one
+
+
+def test_an_interrupt_raised_while_waiting_for_a_line_reaches_the_session() -> None:
+    def interrupted() -> str | None:
+        raise KeyboardInterrupt
+
+    session = run_chat(
+        cast(TurnRuntime, None), read_line=interrupted, write=lambda line: None, show_trace=False
+    )
+    with pytest.raises(KeyboardInterrupt):
+        # The limit only turns a session that never hears of the interrupt into a failure.
+        asyncio.run(asyncio.wait_for(session, timeout=5))

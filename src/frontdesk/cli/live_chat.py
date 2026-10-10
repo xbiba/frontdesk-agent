@@ -11,7 +11,10 @@ live use runs at a time. Nothing is written to disk but the ledger's amounts.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+import logging
+import re
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,6 +29,7 @@ from frontdesk.composition import (
     build_turn_runtime,
     open_deployment,
 )
+from frontdesk.conversation import turn
 from frontdesk.conversation.turn import TurnRuntime
 from frontdesk.knowledge.versions import EmbedderMismatchError
 from frontdesk.model_gateway.costs import Budget, BudgetError, load_budget
@@ -41,6 +45,52 @@ from frontdesk.model_gateway.routes import (
 from frontdesk.settings import Settings, load_settings
 
 NOTICE: Final = "Test messages only: never type a real patient's data."
+# turn.py logs these at INFO when a request to the model fails, with the class name of the exception
+# in `reason` and never its message. The trace cannot tell them apart: a request that raises
+# something other than an AgentRunError ends the turn with rule=error, and one that raises an
+# AgentRunError (an HTTP 403 or 404 from Google) leaves rule=pass and a rejection code.
+_FAILED_REQUEST_EVENTS: Final = frozenset({"turn.failed", "classifier.failed", "responder.failed"})
+_TYPE_NAME: Final = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,99}")
+
+
+class _ModelErrorLine(logging.Handler):
+    """Writes `model error: <ExceptionType>` to stderr when a turn logs a failed model request.
+
+    The type is shown only if it looks like a type name: what else a record might hold under
+    `reason` is not something to put on a terminal.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.msg not in _FAILED_REQUEST_EVENTS:
+            return
+        try:
+            reason = (getattr(record, "fields", None) or {}).get("reason")
+            shown = (
+                reason if isinstance(reason, str) and _TYPE_NAME.fullmatch(reason) else "unknown"
+            )
+            typer.echo(f"model error: {shown}", err=True)
+        except Exception:  # a log handler must not break the turn that is being logged
+            self.handleError(record)
+
+
+@contextmanager
+def model_errors_on_stderr() -> Iterator[None]:
+    """While it lasts, a turn that logs a failed model request writes `model error: <type>` to
+    stderr, before the hand-off it falls back to.
+
+    The CLI sets up no logging, and the failure is logged at INFO, so without this the person sees
+    a hand-off reply and nothing says why (no credentials, Vertex AI not enabled, no network). The
+    turn logger is given back as it was on every way out.
+    """
+    log = logging.getLogger(turn.__name__)
+    handler, level = _ModelErrorLine(), log.level
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+    try:
+        yield
+    finally:
+        log.removeHandler(handler)
+        log.setLevel(level)
 
 
 def _fail(message: str) -> typer.Exit:
@@ -159,9 +209,12 @@ def _converse(
     runtime = _build_runtime(deployment, env_file, meter)
     typer.echo(live_banner(route, budget, spent_usd=costs.spent_before_usd))
     typer.echo(f"{deployment.pack.name} ({deployment.pack.profile}) — type 'exit' to quit")
-    return asyncio.run(
-        run_chat(runtime, read_line=read_line, write=typer.echo, show_trace=show_trace, costs=costs)
-    )
+    with model_errors_on_stderr():
+        return asyncio.run(
+            run_chat(
+                runtime, read_line=read_line, write=typer.echo, show_trace=show_trace, costs=costs
+            )
+        )
 
 
 def _build_runtime(deployment: Deployment, env_file: Path, meter: Meter) -> TurnRuntime:
