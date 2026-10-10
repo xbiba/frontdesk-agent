@@ -16,6 +16,7 @@ from frontdesk.db.engine import business_session, make_engine, make_session_fact
 from frontdesk.knowledge.embedder_experiment import (
     Candidate,
     CandidateResult,
+    Decision,
     LanguageScores,
     decide,
     render_experiment,
@@ -51,25 +52,53 @@ class SmallHashEmbedder:
         return vectors
 
 
-def _scores(sq: float, it: float, en: float) -> dict[str, LanguageScores]:
+LANGUAGES = ("sq", "it", "en")
+Figures = tuple[float, float, float]  # one figure for each of sq, it and en
+
+
+def _scores(
+    at3: Figures,
+    *,
+    at1: Figures | None = None,
+    at5: Figures | None = None,
+    mrr: Figures | None = None,
+) -> dict[str, LanguageScores]:
+    """Recall@3 as given. Recall@1, recall@5 and the MRR are given too, or derived from it so that
+    the four figures of a language all differ: a verdict read from the wrong one then changes."""
+    first = at1 or tuple(round(value / 2, 4) for value in at3)
+    fifth = at5 or tuple(min(1.0, round(value + 0.2, 4)) for value in at3)
+    reciprocal = mrr or tuple(round(value * 0.9, 4) for value in at3)
     return {
-        language: LanguageScores(cases=10, recall={1: value, 3: value, 5: value}, mrr=value)
-        for language, value in (("sq", sq), ("it", it), ("en", en))
+        language: LanguageScores(
+            cases=10, recall={1: first[i], 3: at3[i], 5: fifth[i]}, mrr=reciprocal[i]
+        )
+        for i, language in enumerate(LANGUAGES)
     }
 
 
-def _result(name: str, sq: float, it: float, en: float) -> CandidateResult:
+def _result(
+    name: str,
+    sq: float,
+    it: float,
+    en: float,
+    *,
+    first: Figures | None = None,
+    fifth: Figures | None = None,
+    mrr: Figures | None = None,
+) -> CandidateResult:
     return CandidateResult(
         name=name,
         identity=name,
         dimension=8,
-        languages=_scores(sq, it, en),
+        languages=_scores((sq, it, en), at1=first, at5=fifth, mrr=mrr),
         index_seconds=0.0,
         index_usd=0.0,
     )
 
 
 REFERENCE = _result("reference", 0.60, 0.70, 0.80)
+ZEROS: Figures = (0.0, 0.0, 0.0)
+ONES: Figures = (1.0, 1.0, 1.0)
 
 
 @pytest.mark.parametrize(
@@ -79,6 +108,20 @@ REFERENCE = _result("reference", 0.60, 0.70, 0.80)
         pytest.param(_result("a", 0.69, 0.80, 0.90), "reference", id="just-under-ten"),
         pytest.param(_result("a", 0.95, 0.95, 0.75), "reference", id="worse-in-one-language"),
         pytest.param(_result("a", 0.60, 0.70, 0.80), "reference", id="parity"),
+        # Only recall@3 counts: a candidate is not held back by a loss at any other figure ...
+        pytest.param(
+            _result("a", 0.70, 0.80, 0.90, first=ZEROS), "a", id="lost-first-places-but-gains-at-3"
+        ),
+        pytest.param(
+            _result("a", 0.70, 0.80, 0.90, fifth=ZEROS), "a", id="lost-fifth-places-but-gains-at-3"
+        ),
+        pytest.param(_result("a", 0.70, 0.80, 0.90, mrr=ZEROS), "a", id="lost-mrr-but-gains-at-3"),
+        # ... nor carried by a gain at any other figure.
+        pytest.param(
+            _result("a", 0.65, 0.75, 0.85, first=ONES, fifth=ONES, mrr=ONES),
+            "reference",
+            id="gains-everywhere-but-at-3",
+        ),
     ],
 )
 def test_a_candidate_must_gain_ten_points_and_lose_no_language(
@@ -95,6 +138,13 @@ def test_among_candidates_that_qualify_the_best_mean_recall_at_3_wins() -> None:
     assert decision.reasons[-1] == "better replaces reference"
 
 
+def test_the_best_of_several_is_read_at_recall_at_3_and_not_at_another_figure() -> None:
+    best_at_3 = _result("best-at-3", 0.80, 0.90, 0.95, fifth=(0.5, 0.5, 0.5), mrr=(0.2, 0.2, 0.2))
+    best_elsewhere = _result("best-elsewhere", 0.75, 0.85, 0.90, fifth=ONES, mrr=(0.99,) * 3)
+    for order in ([best_at_3, best_elsewhere], [best_elsewhere, best_at_3]):
+        assert decide(REFERENCE, order).chosen == "best-at-3"
+
+
 def test_equal_mean_recall_at_3_is_broken_by_the_mean_mrr() -> None:
     def with_mrr(name: str, mrr: float) -> CandidateResult:
         scores = {
@@ -104,6 +154,12 @@ def test_equal_mean_recall_at_3_is_broken_by_the_mean_mrr() -> None:
         return CandidateResult(name, name, 8, scores, index_seconds=0.0, index_usd=0.0)
 
     assert decide(REFERENCE, [with_mrr("slow", 0.70), with_mrr("quick", 0.90)]).chosen == "quick"
+
+
+def test_equal_in_every_figure_the_first_in_the_order_given_wins() -> None:
+    first, second = _result("first", 0.80, 0.90, 0.95), _result("second", 0.80, 0.90, 0.95)
+    assert decide(REFERENCE, [first, second]).chosen == "first"
+    assert decide(REFERENCE, [second, first]).chosen == "second"
 
 
 def test_the_reference_stays_and_the_reasons_say_why() -> None:
@@ -132,7 +188,7 @@ def test_a_result_survives_the_file_it_is_saved_in() -> None:
         name="vertex-ew1-gemini-embedding-001",
         identity="vertex:gemini-embedding-001",
         dimension=3072,
-        languages=_scores(0.5, 0.6, 0.7),
+        languages=_scores((0.5, 0.6, 0.7)),
         index_seconds=1.5,
         index_usd=0.01,
         query_seconds=(0.1, 0.2, 0.3),
@@ -141,7 +197,7 @@ def test_a_result_survives_the_file_it_is_saved_in() -> None:
     assert result_from_json(result_json(saved)) == saved
 
 
-def test_the_report_lists_every_embedder_with_its_figures_and_the_decision() -> None:
+def test_the_report_lists_every_embedder_and_the_decision() -> None:
     candidate = _result("candidate", 0.70, 0.80, 0.90)
     report = render_experiment(
         [REFERENCE, candidate], decide(REFERENCE, [candidate]), usd_per_eur=1.25
@@ -150,10 +206,39 @@ def test_the_report_lists_every_embedder_with_its_figures_and_the_decision() -> 
     header, separator = (line for line in lines if line.startswith(("| embedder", "|---")))
     assert header.count("|") == separator.count("|")  # one separator cell for each column
     assert header.index("en R@1") < header.index("it R@1") < header.index("sq R@1")
-    assert "| reference | 8 | 0.80 | 0.80 | 0.80 | 0.80 | 0.70 |" in report  # English first
-    assert "| candidate | 8 | 0.90 | 0.90 | 0.90 | 0.90 | 0.80 |" in report
+    assert header.endswith("| mean R@3 | index s | index EUR | query s (mean) | queries EUR |")
+    assert sum(line.startswith(("| reference |", "| candidate |")) for line in lines) == 2
     assert "**Decision: candidate**" in lines
     assert "- candidate: mean recall@3 gains 10.0 points" in lines
+
+
+def test_a_row_of_the_report_reads_each_figure_from_its_own_column() -> None:
+    languages = {
+        "sq": LanguageScores(cases=10, recall={1: 0.11, 3: 0.33, 5: 0.55}, mrr=0.77),
+        "it": LanguageScores(cases=10, recall={1: 0.12, 3: 0.34, 5: 0.56}, mrr=0.78),
+        "en": LanguageScores(cases=10, recall={1: 0.13, 3: 0.35, 5: 0.57}, mrr=0.79),
+    }
+    result = CandidateResult(
+        "vertex-x",
+        "vertex:x",
+        768,
+        languages,
+        index_seconds=12.34,
+        index_usd=0.5,
+        query_seconds=(0.2, 0.4),
+        query_usd=0.125,
+    )
+    report = render_experiment([result], Decision("vertex-x", ()), usd_per_eur=1.25)
+    row = (
+        "| vertex-x | 768 "
+        "| 0.13 | 0.35 | 0.57 | 0.79 "  # en: R@1, R@3, R@5, MRR (languages in alphabetical order)
+        "| 0.12 | 0.34 | 0.56 | 0.78 "  # it
+        "| 0.11 | 0.33 | 0.55 | 0.77 "  # sq
+        "| 0.34 "  # mean R@3 over the languages
+        "| 12.3 | 0.4000 "  # indexing: seconds, euros (dollars over the rate)
+        "| 0.30 | 0.1000 |"  # questions: mean seconds, euros
+    )
+    assert row in report.splitlines()
 
 
 @pytest.mark.db
