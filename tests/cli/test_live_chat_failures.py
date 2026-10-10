@@ -182,6 +182,40 @@ def test_a_turn_cut_short_by_the_stop_shows_what_it_had_cost_before_the_stop(
     assert entry["usd"] == pytest.approx(0.013)
 
 
+@pytest.mark.db
+def test_a_ledger_that_breaks_between_turns_is_named_in_an_error_and_not_a_bare_stop(
+    tmp_path: Path,
+    businesses_dir: Path,
+    database: tuple[str, str],
+    gemini: Install,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent = gemini(PRICE)
+    env = bootstrapped(tmp_path, businesses_dir, database)
+    budget = write_budget(tmp_path)
+    typed = iter([f"{QUESTION}\n", f"{QUESTION}\n", None])
+
+    def read_line() -> str | None:
+        if len(sent) == 1:  # the first turn is over: something else damages the ledger
+            budget.ledger_path.write_text("not a spend entry\n", encoding="utf-8")
+        return next(typed)
+
+    monkeypatch.setattr("frontdesk.cli.main._read_line", read_line)
+
+    result = live(env, budget)
+
+    # The ledger is what stopped the second turn, and it cannot be read to show the turn's cost, so
+    # the person gets the ledger's own error (which names the file and the line), not `stopped:`.
+    assert result.exit_code == 1
+    assert result.stderr.splitlines() == [
+        "model error: BudgetError",
+        f"error: {budget.ledger_path}: line 1 is not a spend entry",
+    ]
+    assert sent == ["classifier"]  # the second request was refused
+    with budget.exclusive():
+        pass
+
+
 # --- A database or a ledger that cannot be reached or read -------------------------------------------
 
 
