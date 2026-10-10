@@ -412,7 +412,7 @@ def test_turn_evaluation_command(
     _run("knowledge", "bootstrap-demo", "--env-file", env)
     report = tmp_path / "turns.json"
     output = _run("eval", "turns", "--env-file", env, "--output", str(report))
-    assert "| case | language | outcome | result |" in output
+    assert "| case | language | outcome | rule | result |" in output
     assert "FAIL" not in output
     assert report.exists()
 
@@ -430,7 +430,7 @@ def test_a_failing_case_fails_the_turn_evaluation_but_the_report_is_still_writte
     report = tmp_path / "turns.json"
     result = runner.invoke(app, ["eval", "turns", "--env-file", env, "--output", str(report)])
     assert result.exit_code == 1
-    assert "| wrong-on-purpose | it | replied | FAIL: outcome: replied |" in result.stdout
+    assert "| wrong-on-purpose | it | replied | pass | FAIL: outcome: replied |" in result.stdout
     written = json.loads(report.read_text(encoding="utf-8"))
     assert written["cases"] == written["passed"] + 1
     failed = [entry["case_id"] for entry in written["results"] if not entry["passed"]]

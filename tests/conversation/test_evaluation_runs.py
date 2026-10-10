@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic_ai import ModelResponse, ToolCallPart
+from pydantic_ai.messages import ModelMessage
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.conversation.evaluation import (
@@ -91,7 +94,7 @@ async def test_a_failing_case_is_reported_and_does_not_stop_the_run(
     assert (failed.language, failed.outcome, failed.intent) == ("it", "replied", "price")
     assert (failed.suite, failed.tags) == ("data_access", ("manipulated",))
     assert report.by_suite() == {"data_access": (0, 1)}
-    assert "| wrong | it | replied | FAIL: outcome: replied; missing text: 99 EUR |" in (
+    assert "| wrong | it | replied | pass | FAIL: outcome: replied; missing text: 99 EUR |" in (
         render_turn_markdown(report)
     )
 
@@ -244,3 +247,30 @@ async def test_the_shop_injection_case_accepts_a_clarification_that_spells_the_o
     report = await run_turn_eval(runtime, [case], route=ROUTE)
     assert report.ok, render_turn_markdown(report)
     assert report.results[0].outcome == "asked"
+
+
+async def test_a_crash_on_an_earlier_turn_fails_the_conversation(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    calls: list[int] = []
+
+    def classifier(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        calls.append(len(calls))
+        if len(calls) == 1:
+            raise RuntimeError("the model connection dropped")
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, HOURS)])
+
+    runtime = make_runtime(
+        clinic_pack,
+        activate_pack(clinic_pack),
+        FunctionModel(classifier),
+        document_responder(),
+    )
+    case = _case(
+        id="crash-then-hours",
+        messages=["Quanto costa la fisioterapia?", "Quali sono gli orari?"],
+        expect={"outcome": "replied", "intent": "hours"},
+    )
+    report = await run_turn_eval(runtime, [case], route=ROUTE)
+    assert report.results[0].failures == ("turn 1: handoff by failure: error",)
+    assert report.results[0].rule == "pass"
