@@ -18,7 +18,9 @@ from frontdesk.model_gateway.access import (
     RouteAccessError,
     check_route_access,
     environment_overrides,
+    explain_failure,
 )
+from frontdesk.model_gateway.costs import BudgetError, BudgetExhaustedError
 from frontdesk.model_gateway.routes import ROUTES, DataClass, require_route
 
 ROUTE = require_route("vertex-eu-gemini-flash-lite", DataClass.EVALUATION)
@@ -270,3 +272,111 @@ async def test_a_route_that_is_not_a_gemini_route_cannot_be_proved_so_it_is_refu
     route = ROUTES[route_id]
     with pytest.raises(RouteAccessError, match=f"route '{route_id}' .* has no free access check"):
         await check_route_access(route, gcp_project="clinica-mcu", client=_client(None))
+
+
+# --- One explanation for every request to Vertex AI (fix round 1 of Task 9) -----------------------
+
+FAILURES = [
+    pytest.param(
+        auth_errors.DefaultCredentialsError("no ADC"),
+        "Google credentials are missing or expired: run `gcloud auth application-default login`, "
+        "then try again",
+        id="no credentials",
+    ),
+    pytest.param(
+        auth_errors.RefreshError("expired"),
+        "Google credentials are missing or expired: run `gcloud auth application-default login`, "
+        "then try again",
+        id="expired credentials",
+    ),
+    pytest.param(
+        auth_errors.TransportError("the token endpoint did not answer"),
+        "Google could not sign the request (TransportError): check the network, then run "
+        "`gcloud auth application-default login` if it happens again",
+        id="the token endpoint",
+    ),
+    pytest.param(
+        _api_error(genai_errors.ClientError, 403, "PERMISSION_DENIED"),
+        "Vertex AI refused project 'clinica-mcu' (PERMISSION_DENIED: Vertex AI says no). "
+        "Check that the API is enabled (`gcloud services enable aiplatform.googleapis.com "
+        "--project clinica-mcu`) and that your account may use it",
+        id="403",
+    ),
+    pytest.param(
+        _api_error(genai_errors.ClientError, 404, "NOT_FOUND"),
+        "model 'gemini-3.1-flash-lite' is not served at https://aiplatform.eu.rep.googleapis.com",
+        id="404",
+    ),
+    pytest.param(
+        _api_error(genai_errors.ClientError, 429, "RESOURCE_EXHAUSTED"),
+        "Vertex AI is rate limiting project 'clinica-mcu' (429 RESOURCE_EXHAUSTED): try again later",
+        id="429",
+    ),
+    pytest.param(
+        _api_error(genai_errors.ClientError, 400, "INVALID_ARGUMENT"),
+        "Vertex AI answered 400 INVALID_ARGUMENT",
+        id="400",
+    ),
+    pytest.param(
+        _api_error(genai_errors.ServerError, 503, "UNAVAILABLE"),
+        "Vertex AI is not answering (503 UNAVAILABLE): try again later",
+        id="503",
+    ),
+    pytest.param(
+        httpx2.ConnectError("no route to host"),
+        "Vertex AI cannot be reached (ConnectError): check the network connection, then try again",
+        id="no network",
+    ),
+    pytest.param(
+        httpx2.ReadTimeout("no answer"),
+        "Vertex AI cannot be reached (ReadTimeout): check the network connection, then try again",
+        id="no answer",
+    ),
+    pytest.param(
+        TimeoutError("timed out"),
+        "Vertex AI cannot be reached (TimeoutError): check the network connection, then try again",
+        id="a timeout of the socket layer",
+    ),
+]
+
+
+@pytest.mark.parametrize(("error", "sentence"), FAILURES)
+def test_a_failed_request_is_one_sentence_that_says_what_to_do(
+    error: Exception, sentence: str
+) -> None:
+    explained = explain_failure(error, ROUTE, "clinica-mcu")
+    assert isinstance(explained, RouteAccessError)
+    assert str(explained) == sentence
+
+
+@pytest.mark.parametrize(("error", "sentence"), FAILURES)
+async def test_the_access_check_raises_the_sentence_the_explanation_gives(
+    error: Exception, sentence: str
+) -> None:
+    with pytest.raises(RouteAccessError) as caught:
+        await check_route_access(ROUTE, gcp_project="clinica-mcu", client=_client(error))
+    assert str(caught.value) == sentence
+    assert caught.value.__cause__ is error
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(TypeError("a bug"), id="a bug"),
+        pytest.param(ValueError("a value"), id="a value"),
+        pytest.param(BudgetError("the ledger is damaged"), id="the ledger"),
+        pytest.param(BudgetExhaustedError("no room"), id="the budget"),
+        pytest.param(KeyboardInterrupt(), id="Ctrl-C"),
+    ],
+)
+def test_anything_that_is_not_a_failure_to_reach_vertex_ai_is_left_alone(
+    error: BaseException,
+) -> None:
+    assert explain_failure(error, ROUTE, "clinica-mcu") is None
+
+
+def test_the_text_of_what_google_said_about_the_network_is_never_in_the_sentence() -> None:
+    error = httpx2.ConnectError("could not reach https://aiplatform.eu.rep.googleapis.com/secret")
+    explained = explain_failure(error, ROUTE, "clinica-mcu")
+    assert explained is not None
+    assert "secret" not in str(explained)
