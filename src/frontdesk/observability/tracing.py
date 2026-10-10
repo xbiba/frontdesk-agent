@@ -17,6 +17,8 @@ from typing import Final
 from opentelemetry import trace
 from opentelemetry.trace import Span, Status, StatusCode
 
+from frontdesk.safety.normalize import fold
+
 TRACER_NAME: Final = "frontdesk"
 ALLOWED_ATTRIBUTES: Final = frozenset(
     {
@@ -63,8 +65,15 @@ def record_metadata(span: Span, **attributes: str | int | list[str] | None) -> N
 
 
 def redact(text: str) -> str:
-    """Emails first, so digits inside an address are not mistaken for a phone number."""
-    return _PHONE.sub("[phone]", _mask_emails(text))
+    """`text` folded, with every address and phone number masked.
+
+    The text is folded the way the personal-data rules read it (invisible characters removed,
+    compatibility forms such as a fullwidth at sign made plain), so a phone number or an address
+    that the rules detect is masked here too; what the trace keeps is the folded text. Emails
+    first, so digits inside an address are not mistaken for a phone number.
+    """
+    folded = fold(text)
+    return _PHONE.sub("[phone]", _mask_emails(folded))
 
 
 def _mask_emails(text: str) -> str:

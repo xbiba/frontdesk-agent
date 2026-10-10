@@ -265,14 +265,16 @@ def test_invisible_characters_do_not_hide_an_emergency(message: str) -> None:
     assert evaluate(message).verdict is Verdict.EMERGENCY
 
 
-@pytest.mark.parametrize(
-    ("message", "field"),
-    [
-        ("scrivimi a mario\N{FULLWIDTH COMMERCIAL AT}example.com", PersonalField.EMAIL),
-        ("il mio numero è 333\N{ZERO WIDTH SPACE}123\N{ZERO WIDTH SPACE}4567", PersonalField.PHONE),
-        ("my number is \N{FULLWIDTH PLUS SIGN}355 69 123 4567", PersonalField.PHONE),
-    ],
-)
+# A phone number and an address written with fullwidth or invisible characters, and the field the
+# rules find in each. The tests of trace redaction read the same messages.
+DISGUISED_PERSONAL_DATA: list[tuple[str, PersonalField]] = [
+    ("scrivimi a mario\N{FULLWIDTH COMMERCIAL AT}example.com", PersonalField.EMAIL),
+    ("il mio numero è 333\N{ZERO WIDTH SPACE}123\N{ZERO WIDTH SPACE}4567", PersonalField.PHONE),
+    ("my number is \N{FULLWIDTH PLUS SIGN}355 69 123 4567", PersonalField.PHONE),
+]
+
+
+@pytest.mark.parametrize(("message", "field"), DISGUISED_PERSONAL_DATA)
 def test_fullwidth_and_invisible_characters_do_not_hide_personal_data(
     message: str, field: PersonalField
 ) -> None:
