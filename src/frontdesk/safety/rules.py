@@ -305,6 +305,92 @@ PROMISE: Final = _any(
     r"do te merrni (?:nje )?(?:telefonate|email|mesazh|konfirmim|pergjigje)",
     r"po ia kaloj",
     r"do ta shohe",
+    # --- More wordings of the same promises (task 4 review). Appended; the patterns above stay. ---
+    # English: any subject ("the clinic will call you"), the contact verbs the first two lack,
+    # "you will hear from us", and an action arranged with the clinic's own people.
+    r"(?:\w+ ){0,2}(?:ll|will|is going to|are going to|m going to|re going to)"
+    r" (?:also |then |soon |shortly )?(?:call|phone|ring|contact|e mail|email|text|message"
+    r"|write to|reply to|respond to|get back to|get in touch with|reach out to"
+    r"|be in touch with|follow up with|notify) you\b(?! in\b| into\b)",
+    r"(?:ll|will) (?:reach out|get in touch|be in touch|follow up|call back|write back|get back)\b",
+    r"(?:ll|will) (?:reply|respond|answer) (?:shortly|soon|as soon|within|tomorrow|today|later"
+    r"|by (?:e ?mail|phone|sms|text|message|tomorrow))",
+    r"(?:come|go) back to you",
+    r"and let you know",
+    r"expect (?:a|an|the) (?:\w+ )?(?:call|message|text|reply|e mail|email|answer|sms) from",
+    rf"i (?:am|m) going to {_CONTACT_EN}",
+    r"you (?:ll|will) (?:hear (?:back )?from|be (?:contacted|notified|emailed|texted|messaged"
+    r"|phoned|called back|called by|reached))",
+    r"you (?:ll|will) (?:receive|get) (?:a|an|the|our|your|some) (?:\w+ ){0,2}(?:sms|reminder"
+    r"|notification|call|e mail|email|message|text|reply|answer|confirmation|link)",
+    r"(?:i|we) (?:ll|will|am going to|m going to|are going to|re going to) (?:keep you (?:posted"
+    r"|updated|informed)|update you|inform you(?! that))",
+    r"(?:i|we) (?:ll|will|am going to|m going to|are going to|re going to) (?:now |just |also )?"
+    r"(?:ask|tell|notify|inform|alert|brief|contact|update|let) (?:the |our )?(?:reception"
+    r"(?:ist)?|doctors?|clinic|team|staff|colleagues?|secretary|nurse|specialist"
+    r"|physiotherapist)\b",
+    r"(?:i|we) (?:ll|will|am going to|m going to) (?:also |now )?(?:have|get) (?:someone"
+    r"|somebody|a colleague|the reception(?:ist)?|reception|the doctor|our team"
+    r"|a member of (?:our )?(?:staff|team)) (?:to |call|contact|get back|reply|write|send"
+    r"|e ?mail|text|message|phone|ring)",
+    r"(?:i|we) (?:ll|will|am going to|m going to) make sure (?:that )?(?:the |our |a )?"
+    r"(?:reception(?:ist)?|doctors?|team|staff|colleague|someone)\b",
+    # Italian: the present tense for the near future ("ti chiamo domani"), the other contact
+    # verbs, the passive ("sarai ricontattato"), and a first person with no pronoun.
+    r"(?:ti|vi|la|le) (?:ri)?(?:chiamo|contatto)\b",
+    r"(?:ti|vi|la|le) (?:faccio|facciamo|faro|faremo) (?:sapere|avere)",
+    r"(?:ti|vi|la|le) (?:scrivo|mando|invio|avviso|aggiorno|informo|confermo|rispondo)"
+    r" (?:io |noi )?(?:domani|presto|appena|non appena|a breve|piu tardi|dopo|stasera|oggi"
+    r"|in giornata|entro)",
+    r"(?:ti|vi|la|le) (?:mando|invio|spedisco) (?:una|un) (?:mail|email|e mail|sms)",
+    r"(?:ti|vi|la|le) (?:daremo|daro) (?:conferma|una risposta|risposta|notizie|un riscontro)",
+    r"(?:ti|vi) (?:passo|passero) (?:la|il|alla|al) (?:reception|segreteria|medico|dottor\w*)",
+    r"(?:ti|vi|la|le) (?:ri)?(?:avviser|aggiorner|segnaler|avvertir)(?:o|a|emo|anno)\b",
+    r"(?:ti|vi|la|le) (?:informer|confermer|comunicher)(?:o|emo)\b",
+    r"(?:ti|vi|la|le) terr(?:o|a|emo|anno) (?:aggiornat|informat|al corrente)",
+    r"(?:ri)?(?:contatter|chiamer|avviser|aggiorner|segnaler)(?:o|emo)\b|informero\b",
+    r"chieder(?:o|emo) (?:alla|al|all|ai) (?:reception|segreteria|medico|dottor\w*|collegh\w*)"
+    r" (?:di|se)\b",
+    r"(?:provveder|cercher)(?:o|emo) (?:a |di )?(?:contattarti|chiamarti|richiamarti"
+    r"|ricontattarti|risponderti|avvisarti|scriverti)",
+    r"risponder(?:o|emo) (?:entro|a breve|presto|appena|non appena|domani)",
+    r"(?:mettero|metteremo|mettera|metteranno) (?:in contatto|in comunicazione)",
+    r"(?:sarai|sarete|verrai|verrete|sara|saranno|verra|verranno) (?:ri)?(?:contattat|richiamat"
+    r"|avvisat)[oaie]\b",
+    r"(?:ti|vi) arrivera (?:una|un|la|il) (?:conferma|e mail|email|mail|notifica|chiamata"
+    r"|telefonata|risposta|messaggio|sms|promemoria)",
+    r"(?:riceverai|riceverete|ricevera) (?:\w+ ){0,2}(?:promemoria|sms|notifica|link|conferma"
+    r"|chiamata|telefonata|risposta|messaggio|e mail|email|mail)",
+    # Albanian: "do t'ju" with any contact verb and any person ("do t'ju telefonoj", "do t'ju
+    # telefonojë recepsioni"), the passive, "I will pass it on", and "ju telefonoj nesër".
+    r"do (?:t |te )?ju (?:telefon|kontakt|shkru|dergo|njoft|pergjigj|lajm)\w*",
+    r"do (?:t |te )?ju (?:inform|konfirm)oj(?:me)?\b",
+    r"do (?:t |te )?ju (?:kthe\w* (?:me )?pergjigje|bejme me dije)",
+    r"do te (?:flas|komunikoj|bisedoj)\w* me ju\b",
+    r"do te (?:kontaktoheni|njoftoheni|telefonoheni|pergjigjeni)\b",
+    r"do te merrni (?:nje )?(?:sms|njoftim|thirrje|kujtese|mail|link)",
+    r"do t(?:e)? (?:ia|i|ua) (?:kaloj|percjell|dergoj|tregoj|them)\b",
+    r"do ta (?:informoj|njoftoj|kontaktoj|pyes|lajmeroj)\b",
+    r"po (?:ia|i|ua) (?:percjell|dergoj|tregoj)\b",
+    r"(?<!t )ju (?:telefonoj|kontaktoj|pergjigjem|lajmeroj|njoftoj|informoj|konfirmoj)\b"
+    r"(?! se\b| qe\b| per\b)",
+    # A contact claimed as done is the same untruth: nothing was forwarded or told to anyone.
+    r"(?:i ve|i have|we ve|we have|i|we) (?:already |just )?(?:forwarded|passed on|passed"
+    r"|relayed|notified|alerted|informed|escalated) (?:your|this|the|our) (?:request|message"
+    r"|question|conversation|details|enquiry|inquiry|doctor|reception|team|staff|clinic)\b",
+    r"your (?:request|message|question|conversation|details|enquiry|inquiry) (?:has|have) been"
+    r" (?:forwarded|passed|sent|relayed|transferred|escalated|shared)",
+    r"(?:ho|abbiamo) (?:gia )?(?:inoltrato|passato|girato|trasmesso|segnalato|notificato"
+    r"|avvisato|informato) (?:la|il|le|i|alla|al|all|ai|agli) (?:tua |tuo |vostra |vostro )?"
+    r"(?:richiesta|messaggio|conversazione|reception|segreteria|medico|team|staff|collega)\b",
+    r"(?:la tua|il tuo|la vostra|il vostro) (?:richiesta|messaggio|conversazione)"
+    r" (?:e stata|e stato) (?:inoltrat|passat|trasmess|segnalat|girat)[ao]\b",
+    r"(?:e |ia |i )?(?:percolla|kalova|dergova|njoftova|informova|lajmerova) (?:kerkesen"
+    r"|mesazhin|pyetjen|recepsionin|mjekun|stafin|ekipin)",
+    r"(?:e )?kam (?:njoftuar|informuar|percjelle|kaluar|derguar|lajmeruar) (?:recepsionin"
+    r"|mjekun|stafin|ekipin|kolegun|klinike|kerkesen|mesazhin)",
+    r"(?:mesazhi|kerkesa|pyetja)(?: juaj| yte| jote)? (?:i)?u (?:percoll|kalua|dergua"
+    r"|transmetua)\b",
 )
 
 _PHONE: Final = re.compile(r"(?<![\w-])(?:\+|00)?\d(?:[\s().-]?\d){7,}(?!\w)")
