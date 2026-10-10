@@ -20,7 +20,8 @@ def test_defaults_are_offline_and_metadata_only(monkeypatch: pytest.MonkeyPatch)
     assert settings.min_support_similarity == 0.5
 
 
-def test_the_retrieval_floor_is_off_unless_it_is_set() -> None:
+def test_the_retrieval_floor_is_off_unless_it_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FRONTDESK_MIN_RETRIEVAL_SIMILARITY", raising=False)
     assert Settings().min_retrieval_similarity == 0.0
 
 
