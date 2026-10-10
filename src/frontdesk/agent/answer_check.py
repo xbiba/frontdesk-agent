@@ -127,6 +127,14 @@ def links_in(text: str) -> set[str]:
     }
 
 
+def negations_in(text: str, language: Language) -> set[str]:
+    """The negations of `language` that `text` holds, lower case: the words of its list and the two
+    contractions that are rules rather than words, English "n't" and Albanian "s'" (so "isn't" and
+    "s'ka" count, as they do in front of a quote)."""
+    words = {word.lower() for word in _LEAD_WORD.findall(_flat(text))}
+    return {word for word in words if _is_negation(word, (language,))}
+
+
 def quote_in(quote: str, source: str, language: Language | None = None) -> bool:
     """The quote is in the source word for word, and was not cut out of a word or a negation.
 
