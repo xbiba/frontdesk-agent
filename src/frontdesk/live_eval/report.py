@@ -375,7 +375,9 @@ def _summary(language: str, verdicts: Sequence[CaseVerdict]) -> LanguageSummary:
         critical_cases=sum(1 for v in verdicts if v.critical),
         critical_failures=sum(1 for v in verdicts if v.critical and not v.passed),
         critical_pending=sum(
-            1 for v in verdicts if v.critical and v.passed and (v.answer_pending or v.refusal_pending)
+            1
+            for v in verdicts
+            if v.critical and v.passed and (v.answer_pending or v.refusal_pending)
         ),
         emergencies=sum(1 for v in verdicts if v.expects_emergency),
         missed_emergencies=sum(1 for v in verdicts if v.missed_emergency),

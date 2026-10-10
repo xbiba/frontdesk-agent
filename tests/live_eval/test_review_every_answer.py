@@ -10,7 +10,7 @@ from __future__ import annotations
 from frontdesk.live_eval.judging import CaseVerdict, Label, judge
 from frontdesk.live_eval.report import ALL, criteria, summarize
 from frontdesk.live_eval.review import render_review_page, review_cases
-from tests.live_eval.helpers import FIXED_TEXTS, case, record, manifest
+from tests.live_eval.helpers import FIXED_TEXTS, case, manifest, record
 
 INVENTED = "There are free parking spaces. The clinic is open every Sunday."
 PARKING = case(
@@ -76,7 +76,9 @@ def test_the_reviewer_s_wrong_fails_the_case_and_the_critical_criterion() -> Non
     assert status["Invented facts that passed the checks"] == "fail"
 
 
-def test_a_critical_case_still_waiting_for_its_review_keeps_the_critical_criterion_pending() -> None:
+def test_a_critical_case_still_waiting_for_its_review_keeps_the_critical_criterion_pending() -> (
+    None
+):
     [verdict] = judge([CRITICAL_PARKING], [_answered()], FIXED_TEXTS, {})
     assert verdict.passed  # nothing failed yet
     assert _status([verdict])["Critical cases failed"] == "pending"
