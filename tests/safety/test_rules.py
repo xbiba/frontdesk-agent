@@ -276,6 +276,15 @@ GLUED_PHONE_NUMBERS = [
     "call\N{ZERO WIDTH SPACE}333\N{SOFT HYPHEN}123\N{SOFT HYPHEN}4567",
 ]
 
+# A phone number beside a symbol that folding turns into a letter, a hyphen or an underscore. As
+# written the symbol is none of those, so each was found before folding (re-review of Task 2).
+PHONE_NUMBERS_BESIDE_FOLDING_SYMBOLS = [
+    "12345678\N{CIRCLED LATIN SMALL LETTER A}",
+    "\N{CIRCLED LATIN SMALL LETTER A}12345678",
+    "\N{SMALL HYPHEN-MINUS}12345678",
+    "12345678\N{FULLWIDTH LOW LINE}",
+]
+
 # A phone number and an address written with fullwidth or invisible characters, and the field the
 # rules find in each. The tests of trace redaction read the same messages.
 DISGUISED_PERSONAL_DATA: list[tuple[str, PersonalField]] = [
@@ -283,6 +292,7 @@ DISGUISED_PERSONAL_DATA: list[tuple[str, PersonalField]] = [
     ("il mio numero è 333\N{ZERO WIDTH SPACE}123\N{ZERO WIDTH SPACE}4567", PersonalField.PHONE),
     ("my number is \N{FULLWIDTH PLUS SIGN}355 69 123 4567", PersonalField.PHONE),
     *[(message, PersonalField.PHONE) for message in GLUED_PHONE_NUMBERS],
+    *[(message, PersonalField.PHONE) for message in PHONE_NUMBERS_BESIDE_FOLDING_SYMBOLS],
     # Two invisible characters in a row are two spaces when read as spaces, which splits the
     # number in two: only the fold with the invisible characters removed joins it.
     ("my number is 1234\N{ZERO WIDTH SPACE}\N{SOFT HYPHEN}5678", PersonalField.PHONE),

@@ -346,10 +346,11 @@ def personal_fields(text: str) -> frozenset[PersonalField]:
     forms = _normal_forms(text)
     # The phone and email patterns read the raw text folded: an address with a fullwidth at sign
     # and a number with zero-width spaces between its digits are what they look like (P57). The
-    # phone pattern reads two folds (`_folded_forms`), the email pattern the first.
+    # phone pattern reads two folds (`_folded_forms`) and the text as written, where a symbol that
+    # folds into a letter, such as a circled "a", is not one yet; the email pattern reads the first.
     folds = _folded_forms(text)
     found: set[PersonalField] = set()
-    if any(_PHONE.search(_NOT_PHONE.sub(" ", folded)) for folded in folds):
+    if any(_PHONE.search(_NOT_PHONE.sub(" ", form)) for form in (text, *folds)):
         found.add(PersonalField.PHONE)
     if _EMAIL.search(folds[0]):
         found.add(PersonalField.EMAIL)
