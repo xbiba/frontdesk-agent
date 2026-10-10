@@ -19,13 +19,19 @@ def sections(page: str) -> dict[str, str]:
     return {case_id: body for body, case_id in found}
 
 
-def test_the_refused_and_the_dubious_cases_of_a_run_are_reviewed_in_order() -> None:
-    assert [v.case.id for v in review_cases(verdicts())] == ["hours", "refused"]
+def test_the_refused_cases_and_the_model_s_answers_are_reviewed_in_order() -> None:
+    assert [v.case.id for v in review_cases(verdicts())] == [
+        "parking",
+        "hours",
+        "refused",
+        "en-parking",
+    ]
 
 
 def test_a_run_with_nothing_to_review_has_an_empty_page() -> None:
-    answered = judge(CASES[:1], [verdicts()[0].turns[0]], FIXED_TEXTS, {})
-    assert review_cases(answered) == ()
+    alarm = judge(CASES[3:4], [verdicts()[3].turns[0]], FIXED_TEXTS, {})  # the rule answered
+    assert review_cases(alarm) == ()
+    answered = alarm
     page = render_review_page(manifest(), answered, {}, run_dir="runs/run-1")
     assert "0 cases to review" in page
     assert "<section" not in page
@@ -35,7 +41,7 @@ def test_the_page_counts_the_cases_and_names_the_run_and_the_command() -> None:
     page = render_review_page(manifest(), verdicts(), {}, run_dir="runs/run-1")
     assert "<title>Review: run-1</title>" in page
     assert "<h1>Review: run-1</h1>" in page
-    assert "2 cases to review" in page
+    assert "4 cases to review" in page
     assert "<code>frontdesk eval report --run-dir runs/run-1</code>" in page
     assert page.startswith('<!doctype html>\n<html lang="en">')
     assert page.rstrip().endswith("</html>")

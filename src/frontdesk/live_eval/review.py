@@ -1,4 +1,6 @@
-"""The targeted review page: only the refused and the dubious cases (M3 design §4.4).
+"""The review page: the refused cases and, in M3's first round, every answer the model wrote (M3
+design §4.4; external review of 2026-10-11: the number, link and negation filter only says where to
+look first, since an added sentence without any of them can be invented too).
 
 For each case the page shows the question, the expected answer, the bot's reply, the model's draft
 and why a check refused it. The reviewer chooses "refusal right" or "refusal wrong", "answer right"
@@ -53,7 +55,7 @@ textarea { width: 100%; }
 
 
 def review_cases(verdicts: Sequence[CaseVerdict]) -> tuple[CaseVerdict, ...]:
-    return tuple(verdict for verdict in verdicts if verdict.refused or verdict.dubious)
+    return tuple(verdict for verdict in verdicts if verdict.refused or verdict.model_text)
 
 
 def render_review_page(
@@ -112,8 +114,13 @@ def _section(verdict: CaseVerdict, label: Label | None) -> str:
             f"<h3>Draft refused by the checks</h3>{claims}<p>Why: {reasons}</p>",
             _choice("refusal", case.id, label.refusal if label else None, "Refusal"),
         ]
-    if verdict.dubious:
+    if verdict.model_text:
         invented = " checked" if label is not None and label.invented_fact else ""
+        if verdict.dubious:
+            parts.append(
+                "<p>Look here first: the answer adds a number, a link or a negation the "
+                "expected answer lacks.</p>"
+            )
         parts += [
             _choice("answer", case.id, label.answer if label else None, "Answer"),
             f'<label><input type="checkbox" name="invented-{escape(case.id)}"{invented}> '

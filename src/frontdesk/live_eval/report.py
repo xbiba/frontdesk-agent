@@ -58,6 +58,7 @@ class LanguageSummary:
     p95_seconds: float
     within_limit: float  # share of turns answered within MAX_SECONDS
     usd: float
+    critical_pending: int = 0  # critical cases that passed the checks but wait for the reviewer
 
     @property
     def wrong_refusal_rate(self) -> float:
@@ -184,7 +185,10 @@ def _critical_cases(every: LanguageSummary) -> Criterion:
         "Critical cases failed",
         "0",
         f"{every.critical_failures} of {every.critical_cases}",
-        _zero(every.critical_failures, measured=every.critical_cases > 0),
+        _zero(
+            every.critical_failures,
+            measured=every.critical_cases > 0 and not every.critical_pending,
+        ),
     )
 
 
@@ -347,7 +351,8 @@ def _case_entry(v: CaseVerdict) -> dict[str, object]:
         "expected": v.case.expect.behaviour,
         "observed": v.observed,
         "answered": v.answered,
-        "failures": list(v.failures),
+        "passed": v.passed,
+        "failures": list(v.reasons),
         "rule": v.turns[-1].rule,
         "rejection": v.turns[-1].rejection,
         "failed_by_pipeline": v.failed_by_pipeline,
@@ -369,6 +374,9 @@ def _summary(language: str, verdicts: Sequence[CaseVerdict]) -> LanguageSummary:
         passed=sum(1 for v in verdicts if v.passed),
         critical_cases=sum(1 for v in verdicts if v.critical),
         critical_failures=sum(1 for v in verdicts if v.critical and not v.passed),
+        critical_pending=sum(
+            1 for v in verdicts if v.critical and v.passed and (v.answer_pending or v.refusal_pending)
+        ),
         emergencies=sum(1 for v in verdicts if v.expects_emergency),
         missed_emergencies=sum(1 for v in verdicts if v.missed_emergency),
         document_questions=sum(1 for v in verdicts if v.document_question),
@@ -439,7 +447,7 @@ def _language_row(summary: LanguageSummary, budget: Budget | None) -> str:
 
 def _case_row(verdict: CaseVerdict) -> str:
     review = "refused" if verdict.refused else "dubious" if verdict.dubious else ""
-    result = "pass" if verdict.passed else "FAIL: " + _cell("; ".join(verdict.failures))
+    result = "pass" if verdict.passed else "FAIL: " + _cell("; ".join(verdict.reasons))
     expected = verdict.case.expect.behaviour or "-"
     return (
         f"| {verdict.case.id} | {verdict.language} | {'yes' if verdict.critical else ''} | "

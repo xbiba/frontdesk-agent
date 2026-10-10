@@ -40,7 +40,7 @@ def test_the_summary_of_a_language_counts_every_kind_of_case() -> None:
         model_answers=2,
         wrong_answers=1,
         invented_facts=0,
-        answers_pending=1,
+        answers_pending=2,  # every answer the model wrote
         failed_by_pipeline=1,
         turns=6,
         p50_seconds=1.0,
@@ -63,7 +63,7 @@ def test_one_summary_adds_up_all_the_languages() -> None:
     assert (every.emergencies, every.missed_emergencies) == (2, 1)
     assert (every.document_questions, every.wrong_refusals, every.refusals_pending) == (4, 1, 0)
     assert every.unanswered_documents == 0  # the four were answered or refused
-    assert (every.answered, every.wrong_answers, every.answers_pending) == (3, 1, 1)
+    assert (every.answered, every.wrong_answers, every.answers_pending) == (3, 1, 3)  # all reviewed
     assert every.model_answers == 3  # the two Italian document answers and the English one
     assert (every.invented_facts, every.failed_by_pipeline, every.turns) == (0, 1, 7)
     assert (every.p50_seconds, every.p95_seconds) == (2.0, 9.0)
@@ -190,7 +190,7 @@ def test_the_invented_fact_criterion_waits_for_the_answers_to_check() -> None:
     assert _invented({"refused": Label(refusal="wrong")}) == Criterion(
         "Invented facts that passed the checks", "0", "0", "pending"
     )  # "hours" holds a time the case lacks, and nobody has judged it
-    judged = {"hours": Label(answer="right")}
+    judged = {name: Label(answer="right") for name in ("hours", "parking", "en-parking")}
     assert _invented(judged).status == "pass"
     assert _invented(judged, complete=False).status == "pending"
 
@@ -223,15 +223,15 @@ def test_the_languages_table_has_a_row_for_each_language_and_one_for_all(tmp_pat
         "| within 8 s | EUR per message | EUR |"
     ) in text
     assert (
-        "| en | 1 | 1 | 0 | 0 | 0/1 | 0/1 | 0 | 0 | 0 | 2.0 | 2.0 | 100% | 0.00080 | 0.0008 |"
+        "| en | 1 | 1 | 0 | 0 | 0/1 | 0/1 | 0 | 1 | 0 | 2.0 | 2.0 | 100% | 0.00080 | 0.0008 |"
         in text
     )
     assert (
-        "| it | 6 | 2 | 2 | 1 | 1/3 | 1/2 | 0 | 1 | 1 | 1.0 | 9.0 | 83.3% | 0.00080 | 0.0048 |"
+        "| it | 6 | 2 | 2 | 1 | 1/3 | 1/2 | 0 | 2 | 1 | 1.0 | 9.0 | 83.3% | 0.00080 | 0.0048 |"
         in text
     )
     assert (
-        "| all | 7 | 3 | 2 | 1 | 1/4 | 1/3 | 0 | 1 | 1 | 2.0 | 9.0 | 85.7% | 0.00080 | 0.0056 |"
+        "| all | 7 | 3 | 2 | 1 | 1/4 | 1/3 | 0 | 3 | 1 | 2.0 | 9.0 | 85.7% | 0.00080 | 0.0056 |"
         in text
     )
     rows = [line for line in text.splitlines() if line.startswith("| sq ")]
@@ -279,7 +279,7 @@ def test_a_run_without_a_budget_costs_nothing_and_has_no_spend_row() -> None:
     assert "Prices:" not in text
     assert "Live spend" not in text
     assert (
-        "| it | 6 | 2 | 2 | 1 | 1/3 | 1/2 | 0 | 1 | 1 | 1.0 | 9.0 | 83.3% | 0.00000 | 0.0000 |"
+        "| it | 6 | 2 | 2 | 1 | 1/3 | 1/2 | 0 | 2 | 1 | 1.0 | 9.0 | 83.3% | 0.00000 | 0.0000 |"
         in text
     )
 
@@ -392,7 +392,7 @@ def test_the_invented_fact_criterion_has_nothing_to_measure_before_an_answer_is_
     found = criteria(summarize(only_the_alarm), spent_eur=None, cap_eur=None)
     invented = next(c for c in found if c.name == "Invented facts that passed the checks")
     assert (invented.value, invented.status) == ("0", "pending")
-    answered = judge(CASES[:1], RECORDS[:1], FIXED_TEXTS, {})
+    answered = judge(CASES[:1], RECORDS[:1], FIXED_TEXTS, {"parking": Label(answer="right")})
     found = criteria(summarize(answered), spent_eur=None, cap_eur=None)
     invented = next(c for c in found if c.name == "Invented facts that passed the checks")
     assert (invented.value, invented.status) == ("0", "pass")
