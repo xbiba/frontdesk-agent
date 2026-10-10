@@ -132,6 +132,16 @@ class Price(Frozen):
         return self
 
 
+class OrientationMap(Frozen):
+    """Which version of the orientation map the bot uses and the doctor who approved it (spec §7;
+    final review P94). It goes into the knowledge version with the map, so the approval report
+    shows it and a new version or approver needs a new approval."""
+
+    version: NonBlankStr
+    approved_by: NonBlankStr
+    approved_on: date
+
+
 class OrientationEntry(Frozen):
     id: str = Field(pattern=_ID)
     labels: dict[Language, list[str]]
@@ -178,6 +188,7 @@ class BusinessPack(Frozen):
     doctors: list[Doctor] = Field(default_factory=list)
     prices: list[Price] = Field(default_factory=list)
     orientation: list[OrientationEntry] = Field(default_factory=list)
+    orientation_map: OrientationMap | None = None
     orders: list[Order] = Field(default_factory=list)
     documents: list[KnowledgeDocument] = Field(default_factory=list)
 
@@ -286,6 +297,12 @@ def _profile_problems(pack: BusinessPack) -> list[str]:
         problems.append("profile 'receptionist' needs at least one service")
     if pack.features.orientation and not (receptionist and pack.orientation):
         problems.append("feature 'orientation' needs profile 'receptionist' and an orientation map")
+    if pack.features.orientation and pack.orientation_map is None:
+        problems.append(
+            "feature 'orientation' needs orientation_map: the map's version and approving doctor"
+        )
+    if pack.orientation_map is not None and not pack.orientation:
+        problems.append("orientation_map describes a map, but data/orientation.yaml has no entries")
     if pack.features.order_status and not (pack.profile is Profile.SUPPORT_SALES and pack.orders):
         problems.append("feature 'order_status' needs profile 'support-sales' and orders")
     calendar = pack.integrations.calendar

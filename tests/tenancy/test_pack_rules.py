@@ -358,3 +358,62 @@ def test_amounts_are_plain_decimals_with_two_places(
 def test_pack_records_are_frozen(clinic_pack: BusinessPack) -> None:
     with pytest.raises(ValidationError, match="Instance is frozen"):
         clinic_pack.location.phone = "+355 11 111 1111"
+
+
+# --- The orientation map's provenance (spec §7, final review P94) --------------------------------------
+
+
+def test_the_demo_map_records_its_version_and_approving_doctor(clinic_pack: BusinessPack) -> None:
+    approval = clinic_pack.orientation_map
+    assert approval is not None
+    assert (approval.version, approval.approved_by) == (
+        "demo-2026-10",
+        "Dr. Arben Demo (synthetic)",
+    )
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        pytest.param(
+            lambda d: d.pop("orientation_map"),
+            "feature 'orientation' needs orientation_map: the map's version and approving doctor",
+            id="map-without-provenance",
+        ),
+        pytest.param(
+            lambda d: d["orientation_map"].update(approved_by="  "),
+            "orientation_map.approved_by",
+            id="blank-approver",
+        ),
+        pytest.param(
+            lambda d: d["orientation_map"].pop("version"),
+            "orientation_map.version",
+            id="no-version",
+        ),
+        pytest.param(
+            lambda d: d["orientation_map"].update(version=" "),
+            "orientation_map.version",
+            id="blank-version",
+        ),
+        pytest.param(
+            lambda d: d["orientation_map"].pop("approved_on"),
+            "orientation_map.approved_on",
+            id="no-approval-date",
+        ),
+    ],
+)
+def test_orientation_needs_the_version_and_the_approving_doctor_of_its_map(
+    businesses_dir: Path, tmp_path: Path, change: Change, message: str
+) -> None:
+    pack_dir = copy_pack(businesses_dir, CLINIC, tmp_path)
+    edit_yaml(pack_dir / "business.yaml", change)
+    with pytest.raises(PackError, match=re.escape(message)):
+        load_pack(pack_dir)
+
+
+def test_a_map_approval_without_a_map_is_refused(businesses_dir: Path, tmp_path: Path) -> None:
+    pack_dir = copy_pack(businesses_dir, CLINIC, tmp_path)
+    edit_yaml(pack_dir / "business.yaml", lambda d: d["features"].update(orientation=False))
+    edit_yaml(pack_dir / "data" / "orientation.yaml", lambda d: d.clear())
+    with pytest.raises(PackError, match="orientation_map describes a map"):
+        load_pack(pack_dir)

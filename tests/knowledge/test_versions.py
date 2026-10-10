@@ -1,7 +1,7 @@
 import shutil
 import uuid
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -341,6 +341,7 @@ def test_a_draft_stores_every_document_chunk_and_record_of_the_pack(
         | {("doctor", doctor.id) for doctor in clinic_pack.doctors}
         | {("price", price.service_id) for price in clinic_pack.prices}
         | {("orientation", entry.id) for entry in clinic_pack.orientation}
+        | {("orientation_map", "approval")}
     )
 
 
@@ -621,3 +622,50 @@ def test_activate_pack_activates_a_pack_for_other_tests(
         assert embedded_by == identity
         assert _chunk_count(session, version_id) > 0
         assert _chunk_count(session, version_id, unembedded=True) == 0
+
+
+def test_the_approval_report_names_the_orientation_map_version_and_its_doctor(
+    factory: sessionmaker[Session], clinic_pack: BusinessPack
+) -> None:
+    with business_session(factory, clinic_pack.id) as session:
+        report = review_report(session, create_draft(session, clinic_pack).version_id)
+    lines = report.splitlines()
+    start = lines.index("- added: orientation_map:approval")
+    assert lines[start + 1 : start + 4] == [
+        '  - approved_by: "Dr. Arben Demo (synthetic)"',
+        '  - approved_on: "2026-10-01"',
+        '  - version: "demo-2026-10"',
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "before", "after"),
+    [
+        ("version", "demo-2026-10", "demo-2026-11"),
+        ("approved_by", "Dr. Arben Demo (synthetic)", "Dr. Elira Demo (synthetic)"),
+        ("approved_on", date(2026, 10, 1), date(2026, 10, 2)),
+    ],
+)
+def test_a_new_map_version_approver_or_date_is_a_new_draft_and_shows_in_the_report(
+    factory: sessionmaker[Session],
+    clinic_pack: BusinessPack,
+    field: str,
+    before: str | date,
+    after: str | date,
+) -> None:
+    """The map's approval is part of the knowledge version: changing it needs a new approval."""
+    approval = clinic_pack.orientation_map
+    assert approval is not None
+    changed = clinic_pack.model_copy(
+        update={"orientation_map": approval.model_copy(update={field: after})}
+    )
+    with business_session(factory, clinic_pack.id) as session:
+        first = create_draft(session, clinic_pack)
+        approve(session, first.version_id, approved_by="Owner", evidence="sheet v1", now=NOW)
+        activate(session, first.version_id, HashEmbedder(), now=NOW)
+
+        second = create_draft(session, changed)
+        report = review_report(session, second.version_id)
+    assert second.unchanged is False
+    assert second.version_id != first.version_id
+    assert f'- changed: orientation_map:approval\n  - {field}: "{before}" → "{after}"' in report

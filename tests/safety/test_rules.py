@@ -13,6 +13,7 @@ from frontdesk.safety.rules import (
     emergency_rule,
     evaluate,
     personal_fields,
+    promise_phrase,
     rule_text_length,
 )
 from tests.timing import LINEAR_TIME_LIMIT_SECONDS
@@ -403,3 +404,385 @@ def test_the_text_length_counts_the_fold_with_invisible_characters_read_as_space
     assert len(normalize(space_invisible(message))) == 0
     assert len(fold(space_invisible(message))) == 2_331
     assert rule_text_length(message) == 2_331
+
+
+# --- Promises of an action no one will take (final review P85) ----------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "phrase"),
+    [
+        ("Ti contatteremo noi al più presto.", "ti contatteremo"),
+        ("Passo la conversazione alla reception.", "passo la conversazione"),
+        ("Riceverai una conferma via SMS.", "riceverai una conferma"),
+        ("We will email you the instructions.", "we will email"),
+        ("Someone will call you back shortly.", "someone will call"),
+        ("I'm passing this conversation to a colleague.", "passing this conversation"),
+        ("Do t'ju telefonojmë nesër.", "do t ju telefonojme"),
+        ("Po ia kaloj recepsionit.", "po ia kaloj"),
+        ("Do të merrni një konfirmim.", "do te merrni nje konfirmim"),
+    ],
+)
+def test_a_promise_of_an_action_is_found_in_each_language(text: str, phrase: str) -> None:
+    assert promise_phrase(text) == phrase
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Per parlare con una persona, chiama la reception al +355 00 000 0000.",
+        "To talk to a person, write to ciao@bottega-demo.example.",
+        "Would you like prices or opening hours, or would you rather talk to reception?",
+        "We will be closed on Sunday.",
+        "La clinica invia un promemoria il giorno prima.",
+        "Mund t'ju ndihmoj me diçka tjetër?",
+    ],
+)
+def test_ordinary_replies_promise_nothing(text: str) -> None:
+    assert promise_phrase(text) is None
+
+
+# A wording for each pattern of the rule that the cases above leave out, and for each form of
+# "will" in the first pattern, so that none of them can be dropped or broken unseen.
+@pytest.mark.parametrize(
+    ("text", "phrase"),
+    [
+        ("I'll call you tomorrow.", "i ll call"),
+        ("We are going to call you tomorrow.", "we are going to call"),
+        ("We're going to send you a link.", "we re going to send"),
+        ("A colleague will get back to you.", "a colleague will get back"),
+        ("You will receive a confirmation.", "you will receive a confirmation"),
+        ("The doctor will see your message.", "will see your message"),
+        ("Ti richiamiamo domani.", "ti richiamiamo"),
+        ("Qualcuno ti richiamerà domani.", "qualcuno ti richiamera"),
+        ("La reception vedrà il tuo messaggio.", "vedra il tuo messaggio"),
+        ("Ti faremo sapere.", "ti faremo sapere"),
+        ("Dikush do t'ju telefonojë.", "dikush do t ju telefonoje"),
+        ("Mjeku do ta shohë mesazhin.", "do ta shohe"),
+    ],
+)
+def test_a_promise_is_found_in_every_pattern_of_the_rule(text: str, phrase: str) -> None:
+    assert promise_phrase(text) == phrase
+
+
+# The promise rule reads the text in the forms the other word patterns read (`_normal_forms`): with
+# the invisible characters removed, which keeps a word whole, and read as spaces, which keeps two
+# words apart.
+
+
+@pytest.mark.parametrize(
+    ("text", "phrase"),
+    [
+        ("We will\N{ZERO WIDTH SPACE}email you the instructions.", "we will email"),
+        ("Ti\N{ZERO WIDTH SPACE}contatteremo noi al più presto.", "ti contatteremo"),
+        ("Do t'ju\N{ZERO WIDTH SPACE}telefonojmë nesër.", "do t ju telefonojme"),
+    ],
+)
+def test_an_invisible_character_between_two_words_does_not_hide_a_promise(
+    text: str, phrase: str
+) -> None:
+    assert promise_phrase(text) == phrase
+
+
+def test_an_invisible_character_inside_a_word_does_not_hide_a_promise() -> None:
+    assert promise_phrase("We will em\N{SOFT HYPHEN}ail you the instructions.") == "we will email"
+
+
+def test_the_promise_of_the_form_without_the_invisible_characters_is_reported_first() -> None:
+    # Removed, only the second promise is whole; read as spaces, only the first is. Each form finds
+    # one, and the one found in the form with the characters removed is the one reported.
+    text = "We will\N{ZERO WIDTH SPACE}email you. Ti contat\N{SOFT HYPHEN}teremo."
+    assert promise_phrase(text) == "ti contatteremo"
+
+
+# --- More wordings of the same promises (review of task 4) ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "phrase"),
+    [
+        # English
+        ("The clinic will call you tomorrow.", "the clinic will call you"),
+        ("Someone will get in touch shortly.", "will get in touch"),
+        ("We have received your request and will reply shortly.", "will reply shortly"),
+        ("I'll check with the doctor and come back to you.", "come back to you"),
+        ("I will speak to the doctor and let you know.", "and let you know"),
+        ("Expect a call from us tomorrow.", "expect a call from"),
+        ("I am going to pass your request to the reception.", "i am going to pass"),
+        ("You will hear from us soon.", "you will hear from"),
+        ("You will receive a reminder by SMS.", "you will receive a reminder by sms"),
+        ("We will keep you updated.", "we will keep you updated"),
+        ("I'll notify the reception right away.", "i ll notify the reception"),
+        ("I will have someone call you.", "i will have someone call"),
+        ("I'll make sure the doctor gets your message.", "i ll make sure the doctor"),
+        ("I've passed your message to the team.", "i ve passed your message"),
+        ("Your request has been forwarded to the reception.", "your request has been forwarded"),
+        ("They will call you back.", "they will call you"),
+        ("She will contact you tomorrow.", "she will contact you"),
+        ("Dr. Rossi will call you.", "dr rossi will call you"),
+        ("Our receptionist will call you.", "our receptionist will call you"),
+        ("The shop will email you a tracking link.", "the shop will email you"),
+        ("You'll hear from the clinic tomorrow.", "you ll hear from"),
+        ("You will be notified by SMS.", "you will be notified"),
+        # Italian
+        ("Ti chiamo domani.", "ti chiamo"),
+        ("Ti faccio sapere.", "ti faccio sapere"),
+        ("Ti scrivo appena possibile.", "ti scrivo appena"),
+        ("Ti mando una mail con i dettagli domani.", "ti mando una mail"),
+        ("Ti daremo conferma al più presto.", "ti daremo conferma"),
+        ("Ti passo la reception.", "ti passo la reception"),
+        ("Ti avvertiremo in caso di variazioni.", "ti avvertiremo"),
+        ("Ti confermeremo l'orario.", "ti confermeremo"),
+        ("Ti terremo aggiornato.", "ti terremo aggiornat"),
+        ("Contatterò la reception per te.", "contattero"),
+        ("Informerò il medico.", "informero"),
+        ("Chiederò alla reception di richiamarti.", "chiedero alla reception di"),
+        ("Provvederemo a contattarti.", "provvederemo a contattarti"),
+        ("Risponderemo entro 24 ore.", "risponderemo entro"),
+        ("Ci metteremo in contatto con te.", "metteremo in contatto"),
+        ("Sarai ricontattato dalla segreteria.", "sarai ricontattato"),
+        ("Ti arriverà una conferma via SMS.", "ti arrivera una conferma"),
+        ("Riceverai un promemoria via SMS.", "riceverai un promemoria"),
+        ("Ho inoltrato la tua richiesta alla reception.", "ho inoltrato la tua richiesta"),
+        ("La tua richiesta è stata inoltrata.", "la tua richiesta e stata inoltrata"),
+        ("Ti richiamo io.", "ti richiamo"),
+        ("Ti avviso io appena ho notizie.", "ti avviso io appena"),
+        ("Ti farò sapere domani.", "ti faro sapere"),
+        ("Verrai richiamato entro oggi.", "verrai richiamato"),
+        ("Le faremo sapere.", "le faremo sapere"),
+        # Albanian
+        ("Do t'ju telefonojë recepsioni.", "do t ju telefonoje"),
+        ("Do t'ju informojmë për orarin.", "do t ju informojme"),
+        ("Do t'ju kthejmë përgjigje brenda ditës.", "do t ju kthejme pergjigje"),
+        ("Ekipi ynë do të flasë me ju.", "do te flase me ju"),
+        ("Do të kontaktoheni nga stafi ynë.", "do te kontaktoheni"),
+        ("Do të merrni një SMS konfirmimi.", "do te merrni nje sms"),
+        ("Do t'ia kaloj kërkesën tuaj recepsionit.", "do t ia kaloj"),
+        ("Do ta informoj mjekun.", "do ta informoj"),
+        ("Po ia përcjell kërkesën tuaj mjekut.", "po ia percjell"),
+        ("Ju telefonoj nesër.", "ju telefonoj"),
+        ("Ia kalova kërkesën tuaj recepsionit.", "ia kalova kerkesen"),
+        ("E kam njoftuar recepsionin.", "e kam njoftuar recepsionin"),
+        ("Mesazhi juaj u përcoll te recepsioni.", "mesazhi juaj u percoll"),
+        ("Do t'ju telefonoj nesër.", "do t ju telefonoj"),
+        ("Do t'ju kontaktoj sa më shpejt.", "do t ju kontaktoj"),
+        ("Do t'ju telefonojë mjeku nesër.", "do t ju telefonoje"),
+        ("Klinika do t'ju kontaktojë për konfirmim.", "do t ju kontaktoje"),
+        ("Do të njoftoheni me SMS.", "do te njoftoheni"),
+        ("Do t'ju dërgoj një email.", "do t ju dergoj"),
+    ],
+)
+def test_a_promise_in_other_words_is_found_in_each_language(text: str, phrase: str) -> None:
+    assert promise_phrase(text) == phrase
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # English
+        "To talk to a person, call reception on +355 00 000 0000.",
+        "You can call us at +355 00 000 0000.",
+        "Call 127 now.",
+        "We are open until 18:00.",
+        "We will be closed on Sunday.",
+        "Please call reception to confirm your appointment.",
+        "Let us know if you need anything else.",
+        "Would you like me to pass your message to reception?",
+        "I will answer questions about services and opening hours.",
+        "Please notify us if you are late.",
+        "You will need an ID card.",
+        "You will receive a bill at the end of the visit.",
+        "The doctor will inform you about the treatment during the visit.",
+        "The nurse will call you in when the doctor is ready.",
+        "You will be informed of the price before treatment.",
+        "You will hear a beep when the door opens.",
+        "We have updated the opening hours for October.",
+        "The doctor has informed the patients about the new policy.",
+        "We will inform you that the clinic is closed on Sunday.",
+        "I have checked the passages.",
+        "The clinic is on the ground floor and has a ramp.",
+        # Italian
+        "Per parlare con una persona, chiama la reception al +355 00 000 0000.",
+        "La clinica invia un promemoria il giorno prima.",
+        "Quando l'ordine parte ricevi un'email con il link per seguire la spedizione.",
+        "Ti scrivo qui sotto l'indirizzo: Via Demo 1.",
+        "Ti mando qui i dettagli.",
+        "Ti scrivo per informarti che l'orario è cambiato.",
+        "Ti rispondo subito: siamo aperti fino alle 18:00.",
+        "Ti informo che la clinica è chiusa domenica.",
+        "Ti confermo che apriamo alle 9:00.",
+        "Ti avviso che i prezzi possono cambiare.",
+        "Come ti chiami?",
+        "Il medico ti informerà sul trattamento durante la visita.",
+        "Il medico ti confermerà il trattamento durante la visita.",
+        "Verrai informato dei costi prima del trattamento.",
+        "Sarai chiamato dal medico quando è il tuo turno.",
+        "Riceverai la fattura al termine della visita.",
+        "Non posso inoltrare messaggi.",
+        "Non posso chiamarti: chiama tu la reception.",
+        "Contattaci per qualsiasi domanda.",
+        "Vuoi che ti passi la reception?",
+        # Albanian
+        "Për të folur me një person, telefononi recepsionin në +355 00 000 0000.",
+        "Mund t'ju ndihmoj me diçka tjetër?",
+        "Ju shkruan asistenti automatik i Klinikës Demo.",
+        "Do t'ju presim të hënën në orën 10:00.",
+        "Do të merrni një faturë në fund të vizitës.",
+        "Do t'ju shërbejmë me kënaqësi.",
+        "Do t'ju duhet një dokument identiteti.",
+        "Mjeku do t'ju informojë për trajtimin gjatë vizitës.",
+        "Mjeku do t'ju konfirmojë trajtimin gjatë vizitës.",
+        "Do të informoheni për çmimin para trajtimit.",
+        "Ju njoftojmë se orari ndryshon të dielën.",
+        "Ju njoftoj se klinika është e mbyllur të dielën.",
+        "Nuk mund t'ju telefonoj: telefononi ju recepsionin.",
+        "Nuk mund të përcjell mesazhe: telefononi recepsionin në +355 00 000 0000.",
+        "Mjeku do t'ju vizitojë në orën 10:00.",
+        "Do t'ju pyesim për historikun mjekësor.",
+    ],
+)
+def test_a_reply_about_contact_that_promises_nothing_stays_clear(text: str) -> None:
+    assert promise_phrase(text) is None
+
+
+# --- The first patterns, word by word (review of task 4) ------------------------------------------
+# One wording for each verb, subject, article and ending that the first 17 patterns list, so that
+# dropping any one of them fails a test: the phrase is the one those patterns give, and an appended
+# pattern, which comes later, would give a longer phrase for the same words, or none. Three things
+# cannot be pinned, because an appended pattern finds the very same text and no test can tell the
+# two apart: "ti faremo sapere" and "vi faremo sapere", the verbs of "do t'ju" other than "marrim",
+# and "e mail" after "riceverai una". They appear below as plain cases.
+
+
+@pytest.mark.parametrize(
+    ("text", "phrase"),
+    [
+        # English: we or I, will, 'll, are going to, 're going to, and each contact verb
+        ("I'll call tomorrow.", "i ll call"),
+        ("We will phone you.", "we will phone"),
+        ("We are going to ring you later.", "we are going to ring"),
+        ("We're going to email the details.", "we re going to email"),
+        ("I will e-mail you the form.", "i will e mail"),
+        ("We'll write to you.", "we ll write"),
+        ("I'll text you.", "i ll text"),
+        ("We will message you.", "we will message"),
+        ("I will contact you.", "i will contact"),
+        ("We'll get back to you.", "we ll get back"),
+        ("I will reply tomorrow.", "i will reply"),
+        ("We are going to send you a link.", "we are going to send"),
+        ("We're going to confirm the time.", "we re going to confirm"),
+        ("I'll let you know.", "i ll let you know"),
+        ("We will be in touch.", "we will be in touch"),
+        ("I will pass your request on.", "i will pass"),
+        ("We'll forward your message.", "we ll forward"),
+        ("We will transfer you to a colleague.", "we will transfer"),
+        # English: each subject, will, 'll, and each contact verb again
+        ("Someone will call you.", "someone will call"),
+        ("Somebody will phone you.", "somebody will phone"),
+        ("A colleague will ring you.", "a colleague will ring"),
+        ("Our staff will email you.", "our staff will email"),
+        ("Our team will e-mail you.", "our team will e mail"),
+        ("The reception will write to you.", "the reception will write"),
+        ("Reception will text you.", "reception will text"),
+        ("The doctor will message you.", "the doctor will message"),
+        ("A member of staff will contact you.", "a member of staff will contact"),
+        ("A member of our staff will reply.", "a member of our staff will reply"),
+        ("Someone'll let you know.", "someone ll let you know"),
+        ("Somebody will send you the details.", "somebody will send"),
+        ("A colleague will confirm the time.", "a colleague will confirm"),
+        ("Our staff will be in touch.", "our staff will be in touch"),
+        ("Our team will pass your request on.", "our team will pass"),
+        ("The reception will forward your message.", "the reception will forward"),
+        ("Reception will transfer you.", "reception will transfer"),
+        ("The doctor will get back to you.", "the doctor will get back"),
+        # English: you will or 'll receive or get, each article and each thing received (the
+        # last word of each case is what makes an appended pattern give a longer phrase)
+        ("You will receive a call reminder.", "you will receive a call"),
+        ("You'll get an email confirmation.", "you ll get an email"),
+        ("You will receive the e-mail reminder.", "you will receive the e mail"),
+        ("You will get our message notification.", "you will get our message"),
+        ("You'll receive a reply message.", "you ll receive a reply"),
+        ("You will get an answer email.", "you will get an answer"),
+        ("You will receive a confirmation email.", "you will receive a confirmation"),
+        ("You'll get a text message.", "you ll get a text"),
+        # English: passing, forwarding or transferring this or your conversation, message, request
+        ("I am forwarding your message to the reception.", "forwarding your message"),
+        ("We are transferring this request to the doctor.", "transferring this request"),
+        # Italian: ti, vi, la or le, each verb, each ending, with and without "ri"
+        ("Ti richiamerò domani.", "ti richiamero"),
+        ("Vi contatteremo presto.", "vi contatteremo"),
+        ("La scriverà appena possibile.", "la scrivera"),
+        ("Le invieranno i dettagli.", "le invieranno"),
+        ("Ti manderemo una mail.", "ti manderemo"),
+        ("Ti risponderà domani.", "ti rispondera"),
+        # Italian: ti or vi and each verb in the first person plural
+        ("Vi contattiamo presto.", "vi contattiamo"),
+        ("Ti scriviamo domani.", "ti scriviamo"),
+        ("Vi inviamo i dettagli.", "vi inviamo"),
+        ("Ti mandiamo le istruzioni.", "ti mandiamo"),
+        ("Vi rispondiamo domani.", "vi rispondiamo"),
+        # Italian: each form of "riceverai", each article and each thing received
+        ("Riceverai una chiamata promemoria.", "riceverai una chiamata"),
+        ("Riceverete una telefonata promemoria.", "riceverete una telefonata"),
+        ("Riceverà una email promemoria.", "ricevera una email"),
+        ("Riceverai un messaggio sms.", "riceverai un messaggio"),
+        ("Riceverai la risposta sms.", "riceverai la risposta"),
+        ("Riceverai il messaggio sms.", "riceverai il messaggio"),
+        ("Riceverai una conferma sms.", "riceverai una conferma"),
+        ("Riceverai una mail promemoria.", "riceverai una mail"),
+        ("Riceverai una e-mail promemoria.", "riceverai una e mail"),
+        # Italian: each form of "passo", each article and each thing passed
+        ("Inoltro la tua richiesta alla segreteria.", "inoltro la tua richiesta"),
+        ("Passerò il tuo messaggio al medico.", "passero il tuo messaggio"),
+        ("Inoltrerò la richiesta.", "inoltrero la richiesta"),
+        ("Passo il messaggio alla reception.", "passo il messaggio"),
+        # Italian: "qualcuno", ti or vi, and each verb
+        ("Qualcuno ti richiamerà.", "qualcuno ti richiamera"),
+        ("Qualcuno vi contatterà domani.", "qualcuno vi contattera"),
+        ("Qualcuno ti risponderà.", "qualcuno ti rispondera"),
+        ("Qualcuno vi scriverà.", "qualcuno vi scrivera"),
+        # Italian: "vi" and "faremo sapere" ("ti faremo sapere" is in the cases above)
+        ("Vi faremo sapere.", "vi faremo sapere"),
+        # Albanian: "do t'ju" with each verb in the first person plural
+        ("Do t'ju marrim në telefon nesër.", "do t ju marrim"),
+        ("Do t'ju kontaktojmë sot.", "do t ju kontaktojme"),
+        ("Do t'ju shkruajmë nesër.", "do t ju shkruajme"),
+        ("Do t'ju dërgojmë një email.", "do t ju dergojme"),
+        ("Do t'ju përgjigjemi shpejt.", "do t ju pergjigjemi"),
+        ("Do ju njoftojmë me SMS.", "do ju njoftojme"),
+        # Albanian: each subject and each verb of the third person
+        ("Recepsioni do t'ju kontaktojë.", "recepsioni do t ju kontaktoje"),
+        ("Stafi do t'ju shkruajë sot.", "stafi do t ju shkruaje"),
+        ("Dikush do t'ju përgjigjet.", "dikush do t ju pergjigjet"),
+        # Albanian: "do të merrni" with and without "një", and each thing received
+        ("Do të merrni një telefonatë nga recepsioni.", "do te merrni nje telefonate"),
+        ("Do të merrni një email me detajet.", "do te merrni nje email"),
+        ("Do të merrni një mesazh nesër.", "do te merrni nje mesazh"),
+        ("Do të merrni përgjigje brenda ditës.", "do te merrni pergjigje"),
+    ],
+)
+def test_each_verb_subject_and_form_of_the_first_patterns_is_found(text: str, phrase: str) -> None:
+    assert promise_phrase(text) == phrase
+
+
+# A long text without a promise: a pattern that reads up to two words before its verb starts at
+# every word, so short words give it the most starts. The rule must take time linear in the length.
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("a" * 100_000, id="one-long-word"),
+        pytest.param("a " * 50_000, id="short-words"),
+        pytest.param("you will receive a " * 5_300, id="repeated-start-of-a-promise"),
+        pytest.param("do t ju " * 12_500, id="repeated-start-of-an-albanian-promise"),
+        pytest.param("a\N{ZERO WIDTH SPACE}" * 50_000, id="invisible-separators"),
+        # Each of these characters becomes 18 once normalized (NFKD).
+        pytest.param(chr(0xFDFA) * 100_000, id="characters-that-expand"),
+        pytest.param("ciao come stai " * 7_000, id="prose"),
+    ],
+)
+def test_the_promise_rule_takes_time_linear_in_the_length(text: str) -> None:
+    started = time.perf_counter()
+    assert promise_phrase(text) is None
+    assert time.perf_counter() - started < LINEAR_TIME_LIMIT_SECONDS
