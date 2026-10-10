@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import json
 from collections.abc import Callable
 from pathlib import Path
@@ -196,3 +198,17 @@ def test_over_the_cap_the_message_says_so_without_a_negative_amount(tmp_path: Pa
     message = str(caught.value)
     assert "has 0.0000 EUR left (over by 4.0000 EUR)" in message
     assert "-" not in message
+
+
+def test_a_lock_the_system_cannot_give_is_reported_as_a_budget_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_locks(*args: object) -> None:
+        raise OSError(errno.ENOLCK, "No locks available")
+
+    monkeypatch.setattr(fcntl, "flock", no_locks)
+    with (
+        pytest.raises(BudgetError, match=r"cannot be locked \(No locks available\)"),
+        write_budget(tmp_path).exclusive(),
+    ):
+        pytest.fail("a run must not start without its lock")
