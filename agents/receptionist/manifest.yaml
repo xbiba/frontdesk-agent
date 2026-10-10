@@ -3,7 +3,7 @@ version: 0.2.0
 purpose: Answers administrative questions for a clinic, orients patients to services and hands off to reception.
 owner: frontdesk maintainers
 isolation: declared per deployment in the business pack (T3 for real clinics)
-model_route: vertex-eu-opus   # offline-demo in tests and the demo
+model_route: vertex-eu-opus   # the only route approved for patient-derived text (ADR-0004); offline-demo in tests and the demo
 limits:
   classifier_model_requests: 2
   responder_model_requests: 2

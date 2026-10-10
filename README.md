@@ -117,6 +117,10 @@ If a reply is the hand-off text and a `model error: <Type>` line came just befor
 
 Offline runs check contracts and fallbacks. Runs with real models are recorded in [`docs/evals`](docs/evals).
 
+Live runs (`frontdesk eval turns --live --route <route> --run-dir <dir> --budget <file> --env-file <file>`) use the same cases on a route approved for evaluation data. They start only after the checks of `chat --live` (no proxy, certificate or billing-project variable in the shell, a free request that proves the credentials, the API and the model, a ledger that takes a line) and a plan that shows the most the run could cost, which you confirm or skip with `--yes`. They reserve each request against the budget file's cap, hold the budget so that no other live run, chat or experiment spends from it meanwhile, record every turn in the run directory, and resume there after a stop (`--limit N` runs only N cases at a time). They write `report.md` and `report.json`, with a report per language and the criteria of the phase, and `review.html`, a page for the cases a person must judge; the page saves `labels.yaml`, and `frontdesk eval report --run-dir <dir>` recomputes the reports with the reviewer's labels. A live run exits 0 when it is done, 1 on an error, 3 when Google's rate limit stopped it, 4 when the budget has no room, 5 when the model keeps failing, and 130 on Ctrl-C; after a stop the same command resumes. They are launched by hand from the private configuration repository, never in CI.
+
+`frontdesk eval embedders --env-file <file> --cases <retrieval cases> --run-dir <dir> --budget <file> --candidate <route> [--candidate <route>]` compares embedding models on the retrieval cases in a scratch database, whose name must end in `_experiment`. The reference is the demo's local model (`FRONTDESK_EMBEDDING_BACKEND=fastembed`); the candidates are Vertex AI routes on `europe-west1` approved for evaluation data (`vertex-ew1-text-multilingual-embedding-002`, `vertex-ew1-gemini-embedding-001`). Each embedder indexes the pack's active knowledge in a table of its own dimension, and the production hybrid search answers every question with it. The report gives recall@1, @3 and @5 and MRR per language, the time and cost of indexing and of questions, and the decision of the rule in [ADR-0005](docs/adr/0005-embeddings-chosen-by-evaluation.md). It is metered against the same budget file, saves the results of each embedder, and resumes with the next one after a stop.
+
 ## Roadmap
 
 | Phase | Scope | Status |
@@ -124,7 +128,7 @@ Offline runs check contracts and fallbacks. Runs with real models are recorded i
 | M0 | Repository, CI, local stack, decision records | Done |
 | M1 | Business packs, approved versioned knowledge, hybrid retrieval, retrieval evaluation | Done |
 | M2 | Safety rules, classifier, replies written from records, document answers with checked quotes, offline evaluations, keyless demo with two deployments | Done |
-| M3 | Live model: Claude on Vertex AI (EU region) with a small set of approved clinic information; the evaluations also run live, and the claim checks are tuned by measurement | Next |
+| M3 | Live model on Vertex AI in the EU, chosen by evaluation (today Gemini 3.1 Flash-Lite), with a small set of approved clinic information; the evaluations also run live, within a budget, and the claim checks are tuned by measurement | In progress |
 | M4 | Instagram in shadow mode: the first channel adapter and its policy; the agent proposes replies and staff approve each one before it is sent | Planned |
 | M5 | Limited FAQ release in production, without bookings | Planned |
 | M6 | Bookings and WhatsApp | Planned |

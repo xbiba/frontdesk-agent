@@ -2,7 +2,7 @@
 
 Keyword rules, not language understanding: they exercise the real pipeline —
 rules, validation, facts written by code, retrieval, claim checks, handoffs —
-and say nothing about model quality. Real answers use the vertex-eu-opus route.
+and say nothing about model quality. Real answers use a live route (ADR-0004).
 """
 
 from __future__ import annotations

@@ -10,9 +10,10 @@ chunk id: ids are random, so the same knowledge would rank differently in every 
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
+from functools import partial
 from typing import Any
 
 from sqlalchemy import Row, Select, func, or_, select
@@ -36,6 +37,8 @@ Place = tuple[str, int]
 # What the queries that rank chunks select: the chunk id, then its place.
 type PlacedSelect = Select[uuid.UUID, str, int]
 type _PlacedRow = Row[uuid.UUID, str, int]
+# How the vector side ranks the eligible chunks: (eligible, query vector, candidates) -> query.
+type NearestQuery = Callable[[PlacedSelect, list[float], int], PlacedSelect]
 
 STOPWORDS = frozenset(
     {
@@ -146,6 +149,7 @@ def hybrid_search(
     candidates: int = 20,
     max_chars: int = 4000,
     min_similarity: float = 0.0,
+    nearest: NearestQuery | None = None,
 ) -> list[RetrievedChunk]:
     """Best chunks of the business's active knowledge for a query: full text and vector, fused.
 
@@ -154,6 +158,7 @@ def hybrid_search(
     Chunks with equal scores, in either search or after fusion, come in the order of their places.
     The vector side keeps only chunks whose cosine similarity to the query reaches
     `min_similarity` (final review P47): the nearest chunk is not relevant just for being nearest.
+    `nearest` replaces the vector side; the embedder experiment ranks its own vectors with it.
     """
     version_id = active_version_id(session, business_id)
     if version_id is None:
@@ -172,8 +177,8 @@ def hybrid_search(
         )
         ranked.append(session.execute(by_terms).all())
     if query_vector is not None and _has_direction(query_vector):
-        nearest = _nearest(eligible, list(query_vector), candidates, min_similarity=min_similarity)
-        ranked.append(session.execute(nearest).all())
+        rank = nearest or partial(_nearest, min_similarity=min_similarity)
+        ranked.append(session.execute(rank(eligible, list(query_vector), candidates)).all())
     places: dict[uuid.UUID, Place] = {
         row.id: (row.doc_key, row.ordinal) for ranking in ranked for row in ranking
     }

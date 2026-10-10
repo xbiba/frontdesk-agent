@@ -1,6 +1,6 @@
 # Recorded evaluations
 
-Runs with real models, kept as evidence for ADR-0005 and for later comparisons. Offline runs with the hash embedder and the demo models check contracts only and are not recorded here.
+Runs with real models, kept as evidence for ADR-0004, ADR-0005 and later comparisons. The M3 live turn runs and the embedder experiment are launched from the private configuration repository; their summaries are added here. Offline runs with the hash embedder and the demo models check contracts only and are not recorded here.
 
 | Date | Business | What | Embedder / model | File |
 |---|---|---|---|---|

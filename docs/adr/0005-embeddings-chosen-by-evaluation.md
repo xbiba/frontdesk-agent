@@ -1,7 +1,7 @@
 # ADR-0005: Embeddings and reranking chosen by evaluation
 
 ## Status
-Proposed. Decided after the retrieval evaluation runs on real models (M1 harness; approved clinic data from M3; decided before production in M5).
+Proposed. Decided after the retrieval evaluation runs on real models (M1 harness; approved clinic data from M3; decided before production in M5). M3 runs a bounded experiment (`frontdesk eval embedders`): the demo's model against `text-multilingual-embedding-002` and `gemini-embedding-001`, both on Vertex AI `europe-west1` (neither is served on the `eu` multi-region), on at least 30 clinic questions in Albanian, Italian and English written before the run. The rule is fixed before the run: a candidate replaces the reference only if it raises the mean recall@3 over the languages by at least 10 points and lowers it in no language; at parity the reference stays.
 
 ## Context
 Retrieval must work in Albanian, Italian and English, including a question in one language against a document in another. Query embeddings derive from patient messages, so they must run on approved EU routes.
