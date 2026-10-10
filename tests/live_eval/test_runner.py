@@ -23,6 +23,7 @@ from frontdesk.model_gateway.costs import Budget
 from frontdesk.model_gateway.metering import Meter
 from frontdesk.tenancy.pack import BusinessPack
 from tests.conversation.helpers import classifier_model, document_responder, make_runtime
+from tests.model_gateway.attempt_helpers import Sleeps
 from tests.model_gateway.budget_helpers import ROUTE, write_budget
 
 pytestmark = pytest.mark.db
@@ -183,7 +184,8 @@ async def test_a_rate_limit_stops_the_run_after_the_recorded_cases(
             raise ModelHTTPError(429, "gemini-3.1-flash-lite")
         return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, answers.pop())])
 
-    meter = Meter(write_budget(tmp_path), route_id=ROUTE, run_id="run-1")
+    sleeps = Sleeps()
+    meter = Meter(write_budget(tmp_path), route_id=ROUTE, run_id="run-1", sleep=sleeps)
     runtime = make_runtime(
         clinic_pack,
         activate_pack(clinic_pack),
@@ -195,6 +197,7 @@ async def test_a_rate_limit_stops_the_run_after_the_recorded_cases(
     progress = await run_live_eval(runtime, CASES, files=files, run_id="run-1", meter=meter)
     assert (progress.done, progress.stopped) == (1, "rate_limited")
     assert [r.case_id for r in read_turns(files)] == ["one"]
+    assert sleeps.waits == [2.0, 4.0, 8.0]  # the 429 was retried before the run stopped
 
 
 async def test_a_refused_answer_is_recorded_for_the_review(

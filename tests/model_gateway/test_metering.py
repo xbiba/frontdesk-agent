@@ -23,6 +23,7 @@ from frontdesk.model_gateway.metering import (
     MAX_INPUT_TOKENS_PER_REQUEST,
     Meter,
 )
+from tests.model_gateway.attempt_helpers import Sleeps
 from tests.model_gateway.budget_helpers import ROUTE, write_budget
 
 
@@ -91,7 +92,7 @@ async def test_a_rate_limit_that_outlived_the_retries_stops_the_run(tmp_path: Pa
     def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         raise ModelHTTPError(429, "gemini-3.1-flash-lite", body={"error": "RESOURCE_EXHAUSTED"})
 
-    meter = Meter(write_budget(tmp_path), route_id=ROUTE, run_id="run-1")
+    meter = Meter(write_budget(tmp_path), route_id=ROUTE, run_id="run-1", sleep=Sleeps())
     with pytest.raises(ModelHTTPError):
         await Agent(meter.wrap(FunctionModel(model), "classifier")).run("x")
     assert meter.stop_reason == "rate_limited"
@@ -102,7 +103,7 @@ async def test_other_provider_errors_do_not_stop_the_run(tmp_path: Path) -> None
     def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         raise ModelHTTPError(503, "gemini-3.1-flash-lite")
 
-    meter = Meter(write_budget(tmp_path), route_id=ROUTE, run_id="run-1")
+    meter = Meter(write_budget(tmp_path), route_id=ROUTE, run_id="run-1", sleep=Sleeps())
     with pytest.raises(ModelHTTPError):
         await Agent(meter.wrap(FunctionModel(model), "classifier")).run("x")
     assert meter.stop_reason is None
@@ -130,7 +131,7 @@ async def test_a_request_without_usage_is_charged_its_reserve_once_it_may_have_b
         raise error
 
     budget = write_budget(tmp_path, usd_per_eur=1.0)
-    meter = Meter(budget, route_id=ROUTE, run_id="run-1")
+    meter = Meter(budget, route_id=ROUTE, run_id="run-1", sleep=Sleeps())
     with pytest.raises(type(error)):
         await Agent(meter.wrap(FunctionModel(model), "classifier")).run(
             "x", model_settings={"max_tokens": 600}

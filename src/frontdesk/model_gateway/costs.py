@@ -3,8 +3,12 @@
 The budget file names the cap in euros, the exchange rate and the US-dollar list prices of each
 route, each with the page it was read from and the date. Spend goes to a ledger beside the file,
 one JSON line per paid call, so every live run of the phase counts against the same cap and a run
-that stops loses nothing. The ledger is the state: the spend is read from it, never kept apart. It
-keeps each cost unrounded, and one run at a time holds it, so it never counts less than was spent.
+that stops loses nothing. The ledger is the state: the spend is read from it, never kept apart.
+
+A line holds a finite amount that is not negative, unrounded (a rounded cost could count less than
+was spent), and a ledger that cannot be read in full refuses every call. One run at a time holds
+the ledger. Whether it counts every attempt that may have been billed is the meter's work
+(`frontdesk.model_gateway.metering`): the ledger is only as complete as the lines written to it.
 """
 
 from __future__ import annotations

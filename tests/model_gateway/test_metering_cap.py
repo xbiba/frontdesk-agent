@@ -16,6 +16,7 @@ from pydantic_ai.usage import RequestUsage
 
 from frontdesk.model_gateway.costs import Budget, BudgetExhaustedError
 from frontdesk.model_gateway.metering import MAX_INPUT_TOKENS_PER_REQUEST, Meter
+from tests.model_gateway.attempt_helpers import Sleeps
 from tests.model_gateway.budget_helpers import ROUTE, write_budget
 
 CAP = {"max_tokens": 600}
@@ -104,7 +105,7 @@ def _ends_with(error: BaseException | None) -> FunctionModel:
 async def test_every_way_a_request_ends_gives_its_hold_back(
     tmp_path: Path, ending: BaseException | None
 ) -> None:
-    meter = Meter(write_budget(tmp_path), route_id=ROUTE, run_id="run-1")
+    meter = Meter(write_budget(tmp_path), route_id=ROUTE, run_id="run-1", sleep=Sleeps())
     agent = Agent(meter.wrap(_ends_with(ending), "classifier"))
     if ending is None:
         await agent.run("x", model_settings=CAP)
