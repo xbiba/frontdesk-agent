@@ -249,7 +249,7 @@ def _repeated_keys(path: Path, mapping: yaml.MappingNode, what: str) -> list[str
     first: dict[str, int] = {}
     found: list[str] = []
     for key, _ in mapping.value:
-        if not isinstance(key, yaml.ScalarNode):
+        if not isinstance(key, yaml.ScalarNode):  # pragma: no cover - safe_load refuses it first
             continue
         line = key.start_mark.line + 1
         if key.value in first:
