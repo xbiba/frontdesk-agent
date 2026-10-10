@@ -29,6 +29,9 @@ from tests.model_gateway.budget_helpers import ROUTE, write_budget
 pytestmark = pytest.mark.db
 Activate = Callable[..., sessionmaker[Session]]
 PRICE = {"category": "administrative", "intent": "price", "service_ids": ["physiotherapy"]}
+# The output cap the live agents carry (`live_model_settings`): the meter refuses a request
+# without one. 2,000 keeps the arithmetic of the budget tests below.
+CAP = {"max_tokens": 2_000}
 PARKING = {
     "category": "administrative",
     "intent": "general_question",
@@ -61,6 +64,7 @@ async def test_every_turn_is_recorded_with_its_calls_and_time(
         activate_pack(clinic_pack),
         meter.wrap(classifier_model(PRICE), "classifier"),
         meter.wrap(document_responder(), "responder"),
+        model_settings=CAP,
     )
     files = RunFiles(tmp_path / "run-1")
     files.directory.mkdir()
@@ -121,6 +125,7 @@ async def test_the_budget_stops_the_run_and_the_cut_case_leaves_no_turn(
         activate_pack(clinic_pack),
         meter.wrap(FunctionModel(classifier), "classifier"),
         meter.wrap(document_responder(), "responder"),
+        model_settings=CAP,
     )
     files = RunFiles(tmp_path / "run-1")
     files.directory.mkdir()
@@ -148,7 +153,10 @@ async def test_a_run_stopped_by_the_budget_resumes_under_a_larger_one_and_loses_
     def runtime_and_meter(budget: Budget) -> tuple[TurnRuntime, Meter]:
         meter = Meter(budget, route_id=ROUTE, run_id="run-1")
         model = meter.wrap(FunctionModel(classifier), "classifier")
-        return make_runtime(clinic_pack, factory, model, document_responder()), meter
+        runtime = make_runtime(
+            clinic_pack, factory, model, document_responder(), model_settings=CAP
+        )
+        return runtime, meter
 
     small = write_budget(tmp_path, cap_eur=0.10, usd_per_eur=1.0)
     runtime, meter = runtime_and_meter(small)
@@ -191,6 +199,7 @@ async def test_a_rate_limit_stops_the_run_after_the_recorded_cases(
         activate_pack(clinic_pack),
         meter.wrap(FunctionModel(classifier), "classifier"),
         meter.wrap(document_responder(), "responder"),
+        model_settings=CAP,
     )
     files = RunFiles(tmp_path / "run-1")
     files.directory.mkdir()

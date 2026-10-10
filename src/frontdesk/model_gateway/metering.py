@@ -4,6 +4,8 @@
 itself (the SDK makes one attempt, see `GOOGLE_RETRIES`), so that nothing hides below the meter, and
 settles every attempt on its own:
 
+- a request whose cost the reserve cannot bound (no output cap, or more bytes than the input the
+  reserve assumes) is not sent at all;
 - before an attempt it holds the most the attempt could cost, and refuses it when the budget has no
   room for that and for the attempts still in flight;
 - an attempt that was answered with usage costs what the provider reported;
@@ -15,9 +17,9 @@ settles every attempt on its own:
 
 A 429 that outlives the attempts, a budget with no room, and a ledger that cannot be read or written
 each stop the run for good, so that it can resume later: after a stop no further request is sent.
-What the ledger holds is therefore an upper bound of what was spent, up to one request: a process
-that is killed between a provider's answer and the ledger line loses that line. The runner reads the
-calls of each turn with `drain`.
+Counted this way the ledger is an upper bound of what the provider billed, with one exception that
+no code can close: a process killed between a provider's answer and its ledger line loses that
+line, one request at most. The runner reads the calls of each turn with `drain`.
 """
 
 from __future__ import annotations
@@ -27,23 +29,31 @@ import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Any, Final, NoReturn
 
 import httpx2
 from google.auth.exceptions import GoogleAuthError
 from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelHTTPError
-from pydantic_ai.messages import ModelMessage, ModelResponse
-from pydantic_ai.models import Model, ModelRequestParameters, StreamedResponse
+from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter, ModelResponse
+from pydantic_ai.models import (
+    Model,
+    ModelRequestContext,
+    ModelRequestParameters,
+    StreamedResponse,
+)
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.settings import ModelSettings
+from pydantic_ai.usage import RequestUsage
+from pydantic_core import to_json
 
 from frontdesk.model_gateway.costs import Budget, BudgetError, BudgetExhaustedError
 
-# The reserve assumes this many input tokens: the prompts (under 3,000 characters), the evidence
-# (at most 4,000 characters) and the schemas stay far below it, so the reserve is an upper bound.
+# The reserve assumes a request holds at most this many input tokens. Real requests stay far below
+# it (the prompts are under 3,000 characters, the evidence at most 4,000), and `Meter.admit` checks
+# it: no tokenizer makes more tokens than the UTF-8 bytes of its input, so a request of more bytes
+# is not sent.
 MAX_INPUT_TOKENS_PER_REQUEST: Final = 32_000
-DEFAULT_MAX_TOKENS: Final = 2_000  # a request without a cap is reserved as if it had this one
 # The errors that end a request before it reaches the provider, which bills nothing for it: no
 # credentials, no connection. An error status comes back as ModelHTTPError, also unbilled.
 NOT_SENT: Final = (GoogleAuthError, httpx2.ConnectError, httpx2.ConnectTimeout)
@@ -59,6 +69,10 @@ MAX_ATTEMPTS: Final = len(RETRY_WAITS) + 1
 
 class RunStoppedError(RuntimeError):
     """A request was refused because the run has already stopped (see `Meter.stop_reason`)."""
+
+
+class UnboundedRequestError(BudgetExhaustedError):
+    """A request whose cost the reserve cannot bound (no output cap, too long) is not sent."""
 
 
 @dataclass(frozen=True)
@@ -89,6 +103,11 @@ class Meter:
     ) -> None:
         self._budget = budget
         self._price = budget.price(route_id)
+        if self._price.unit != "tokens_1m":
+            raise BudgetError(
+                f"{budget.path}: route '{route_id}' is priced per {self._price.unit}, "
+                "and the meter counts tokens"
+            )
         self._route_id = route_id
         self._run_id = run_id
         self.clock = clock
@@ -101,8 +120,8 @@ class Meter:
     def stop_reason(self) -> str | None:
         """Why the run must stop, once it must; None while it may go on. The first cause stays.
 
-        "budget": the budget has no room for the next request. "rate_limited": a 429 outlived the
-        retries. "ledger": the spend ledger cannot be read or written, so what a request costs can
+        "budget": the budget has no room for the next request, or cannot bound what it would cost.
+        "rate_limited": a 429 outlived the attempts. "ledger": the spend ledger cannot be read or written, so what a request costs can
         no longer be counted. After any of them no further request is sent.
         """
         return self._stop_reason
@@ -123,6 +142,36 @@ class Meter:
         """The requests since the last drain, oldest first."""
         calls, self._calls = tuple(self._calls), []
         return calls
+
+    def admit(
+        self,
+        messages: list[ModelMessage],
+        parameters: ModelRequestParameters,
+        model_settings: ModelSettings | None,
+    ) -> int:
+        """The output cap of a request, when the reserve can bound what it would cost.
+
+        The reserve covers an output cap and at most `MAX_INPUT_TOKENS_PER_REQUEST` input tokens. A
+        request without a cap would be left to the provider's own, far larger, one; a request of
+        more bytes than that may hold more tokens. Either is refused before it is sent, and the
+        run stops: nothing the cap rests on can be said of it.
+        """
+        cap = (model_settings or {}).get("max_tokens")
+        if not cap:
+            self._refuse("has no output cap")
+        size = _request_bytes(messages, parameters)
+        if size > MAX_INPUT_TOKENS_PER_REQUEST:
+            self._refuse(
+                f"is {size} bytes long, more than the {MAX_INPUT_TOKENS_PER_REQUEST} tokens the "
+                "reserve assumes"
+            )
+        return cap
+
+    def _refuse(self, why: str) -> NoReturn:
+        self._stop("budget")
+        raise UnboundedRequestError(
+            f"the request {why}: its cost cannot be bounded, so it is not sent"
+        )
 
     def reserve(self, max_tokens: int) -> float:
         """Refuse a request when the run has stopped or the budget has no room for it and for the
@@ -208,6 +257,14 @@ class Meter:
         self._stop("rate_limited")
 
 
+def _request_bytes(messages: list[ModelMessage], parameters: ModelRequestParameters) -> int:
+    """The UTF-8 length of what a request carries: its messages, instructions included, and the
+    definitions of its tools."""
+    return len(ModelMessagesTypeAdapter.dump_json(messages)) + len(
+        to_json(parameters, fallback=str)
+    )
+
+
 def _worth_retrying(error: Exception) -> bool:
     """What google-genai used to retry: a 429 or 5xx answer, a timeout, a refused connection."""
     if isinstance(error, ModelHTTPError):
@@ -227,7 +284,7 @@ class MeteredModel(WrapperModel):
         model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
-        cap = (model_settings or {}).get("max_tokens") or DEFAULT_MAX_TOKENS
+        cap = self._meter.admit(messages, model_request_parameters, model_settings)
         for attempt in range(MAX_ATTEMPTS):
             try:
                 return await self._attempt(messages, model_settings, model_request_parameters, cap)
@@ -264,6 +321,23 @@ class MeteredModel(WrapperModel):
             raise
         self._meter.record(self._role, response, self._meter.clock() - started, reserved=reserved)
         return response
+
+    async def count_tokens(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> RequestUsage:
+        raise NotImplementedError(
+            "a metered model does not count tokens: the call would go unmetered"
+        )
+
+    async def compact_messages(
+        self, request_context: ModelRequestContext, *, instructions: str | None = None
+    ) -> ModelResponse:
+        raise NotImplementedError(
+            "a metered model does not compact messages: the call would go unmetered"
+        )
 
     @asynccontextmanager
     async def request_stream(

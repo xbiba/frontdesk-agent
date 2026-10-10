@@ -11,11 +11,17 @@ import pytest
 from pydantic_ai import Agent, ModelResponse, TextPart
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage
+from pydantic_ai.models import ModelRequestContext, ModelRequestParameters
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.tools import Tool
 from pydantic_ai.usage import RequestUsage
 
-from frontdesk.model_gateway.costs import Budget, BudgetExhaustedError
-from frontdesk.model_gateway.metering import MAX_INPUT_TOKENS_PER_REQUEST, Meter
+from frontdesk.model_gateway.costs import Budget, BudgetError, BudgetExhaustedError
+from frontdesk.model_gateway.metering import (
+    MAX_INPUT_TOKENS_PER_REQUEST,
+    Meter,
+    UnboundedRequestError,
+)
 from tests.model_gateway.attempt_helpers import Sleeps
 from tests.model_gateway.budget_helpers import ROUTE, write_budget
 
@@ -138,3 +144,95 @@ async def test_a_hold_is_what_one_request_could_cost_and_is_gone_when_it_is_sett
     assert meter.held_usd == pytest.approx(RESERVE)
     meter.release(reserved)
     assert meter.held_usd == 0.0
+
+
+def _counting() -> tuple[FunctionModel, list[str]]:
+    sent: list[str] = []
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        sent.append("request")
+        return ModelResponse(parts=[TextPart("ok")], usage=SMALL)
+
+    return FunctionModel(model), sent
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        pytest.param(None, id="no-settings"),
+        pytest.param({}, id="no-cap"),
+        pytest.param({"temperature": 0.0}, id="other-settings"),
+        pytest.param({"max_tokens": 0}, id="zero"),
+    ],
+)
+async def test_a_request_without_an_output_cap_is_refused_and_never_sent(
+    tmp_path: Path, settings: dict[str, float] | None
+) -> None:
+    # The provider's own default cap is far above anything the reserve could cover.
+    budget = write_budget(tmp_path)
+    model, sent = _counting()
+    meter = Meter(budget, route_id=ROUTE, run_id="run-1")
+    with pytest.raises(UnboundedRequestError, match="output cap"):
+        await Agent(meter.wrap(model, "classifier")).run("x", model_settings=settings)  # type: ignore[arg-type]
+    assert sent == []
+    assert budget.spent_usd() == 0.0
+    assert meter.held_usd == 0.0
+    assert meter.stop_reason == "budget"  # the budget cannot bound what it would pay for
+
+
+async def test_a_request_longer_than_the_reserve_assumes_is_refused_by_its_bytes(
+    tmp_path: Path,
+) -> None:
+    # 11,000 euro signs are 33,000 bytes of UTF-8 (three each) and no tokenizer makes more tokens
+    # than bytes, though they are only 11,000 characters.
+    budget = write_budget(tmp_path)
+    model, sent = _counting()
+    meter = Meter(budget, route_id=ROUTE, run_id="run-1")
+    with pytest.raises(UnboundedRequestError, match="bytes"):
+        await Agent(meter.wrap(model, "classifier")).run(
+            "\N{EURO SIGN}" * 11_000, model_settings=CAP
+        )
+    assert sent == []
+    assert budget.spent_usd() == 0.0
+    assert meter.stop_reason == "budget"
+
+
+async def test_a_request_within_the_bound_is_sent(tmp_path: Path) -> None:
+    model, sent = _counting()
+    meter = Meter(write_budget(tmp_path), route_id=ROUTE, run_id="run-1")
+    await Agent(meter.wrap(model, "classifier")).run("\N{EURO SIGN}" * 9_000, model_settings=CAP)
+    assert sent == ["request"]  # 27,000 bytes, and the JSON around them, are under 32,000
+
+
+async def test_the_tools_a_request_carries_count_toward_its_bytes(tmp_path: Path) -> None:
+    def look_up(question: str) -> str:
+        return question
+
+    heavy = Tool(look_up, description="x" * 33_000)
+    model, sent = _counting()
+    meter = Meter(write_budget(tmp_path), route_id=ROUTE, run_id="run-1")
+    with pytest.raises(UnboundedRequestError, match="bytes"):
+        await Agent(meter.wrap(model, "classifier"), tools=[heavy]).run("x", model_settings=CAP)
+    assert sent == []
+
+
+def test_a_meter_prices_tokens_not_characters(tmp_path: Path) -> None:
+    budget = write_budget(tmp_path)
+    with pytest.raises(BudgetError, match="priced per characters_1k"):
+        Meter(budget, route_id="vertex-ew1-gemini-embedding-001", run_id="run-1")
+
+
+async def test_a_metered_model_neither_counts_tokens_nor_compacts_messages(tmp_path: Path) -> None:
+    # Both go straight to the wrapped model, past `request`: unmetered if they were allowed.
+    model, _ = _counting()
+    metered = Meter(write_budget(tmp_path), route_id=ROUTE, run_id="run-1").wrap(model, "x")
+    with pytest.raises(NotImplementedError, match="count tokens"):
+        await metered.count_tokens([], None, ModelRequestParameters())
+    context = ModelRequestContext(
+        model=metered,
+        messages=[],
+        model_settings=None,
+        model_request_parameters=ModelRequestParameters(),
+    )
+    with pytest.raises(NotImplementedError, match="compact messages"):
+        await metered.compact_messages(context)
