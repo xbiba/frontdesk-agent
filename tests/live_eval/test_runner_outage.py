@@ -34,6 +34,7 @@ from frontdesk.tenancy.pack import BusinessPack
 from tests.conversation.helpers import document_responder, make_runtime
 from tests.live_eval.helpers import call, record
 from tests.live_eval.rig import CASES, Activate, Rig
+from tests.live_eval.turn_limit import hang
 
 db = pytest.mark.db
 
@@ -46,11 +47,6 @@ def _reset() -> None:
 def _refused() -> None:
     """Google refuses the request: the classifier step falls back with rejection=classifier_error."""
     raise ModelHTTPError(403, "gemini-3.1-flash-lite", body={"error": {"code": 403}})
-
-
-async def _hang() -> None:
-    """Never answers: the turn limit cuts the request and the case ends with rule=timeout."""
-    await asyncio.sleep(30)
 
 
 def _rate_limit() -> None:
@@ -115,7 +111,7 @@ def test_a_conversation_is_judged_by_its_last_turn() -> None:
 
 # (what the request does, the rule of the case it ends, its rejection)
 RESET = (_reset, "error", None)
-HANG = (_hang, "timeout", None)
+HANG = (hang, "timeout", None)  # never answers: the turn limit cuts it, the case is a timeout
 REFUSED = (_refused, "pass", "classifier_error")
 FAILURES = [
     pytest.param(RESET, id="a-reset"),
@@ -133,13 +129,7 @@ async def test_a_case_that_failed_is_written_when_a_later_case_completes_cleanly
     failure: tuple[Callable[[], Any], str, str | None],
 ) -> None:
     action, rule, rejection = failure
-    rig = Rig(
-        clinic_pack,
-        activate_pack(clinic_pack),
-        tmp_path,
-        on_request={1: action},
-        timeout_seconds=0.05,
-    )
+    rig = Rig(clinic_pack, activate_pack(clinic_pack), tmp_path, on_request={1: action})
 
     progress = await rig.start()
 
@@ -265,7 +255,6 @@ async def test_whatever_stops_the_run_drops_the_cases_held(
         tmp_path,
         on_request=on_request,
         cap_eur=0.048 if cause == "budget" else 10.0,
-        timeout_seconds=0.05,
     )
 
     progress = await rig.start()

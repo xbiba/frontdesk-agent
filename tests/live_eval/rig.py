@@ -43,7 +43,8 @@ class Rig:
     new meter, as a new process would; the classifier counts its requests, and `on_request` runs
     something at the n-th one (it happens while that request is away). The something may raise,
     to fail the request; it may be a coroutine, to keep the request away; and when it returns a
-    classification, that is the answer to the request instead of the price."""
+    classification, that is the answer to the request instead of the price. `hang` (see
+    `tests.live_eval.turn_limit`) keeps a request away until the turn limit cuts it."""
 
     def __init__(
         self,
@@ -53,7 +54,6 @@ class Rig:
         on_request: dict[int, Callable[[], Any]] | None = None,
         *,
         cap_eur: float = 10.0,
-        timeout_seconds: float = 45.0,
     ) -> None:
         self.pack = pack
         self.factory = factory
@@ -63,7 +63,6 @@ class Rig:
         self.requests: list[str] = []
         self.meter: Meter | None = None
         self._on_request = on_request or {}
-        self._timeout_seconds = timeout_seconds
 
     async def _classifier(self, messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         self.requests.append("classifier")
@@ -90,7 +89,6 @@ class Rig:
             meter.wrap(FunctionModel(self._classifier), "classifier"),
             meter.wrap(document_responder(), "responder"),
             model_settings=CAP,
-            timeout_seconds=self._timeout_seconds,
         )
         return await run_live_eval(
             runtime, cases, files=self.files, run_id="run-1", meter=meter, limit=limit

@@ -3,13 +3,12 @@ P4): the cases that ended in a failure just before the run stopped are not recor
 names them, and a resume runs them again, so that `report.md` counts only what the provider
 answered. A failure the provider recovered from is the case's own, and stays.
 
-The provider is a function that can be kept away: the turn limit (shortened here) then cuts the
-request. Nothing reaches a model or the network.
+The provider is a function that can be kept away: the turn limit then cuts the request (the clock of
+the loop jumps past the limit, so that nothing waits for it). Nothing reaches a model or the network.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 
@@ -18,20 +17,19 @@ import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 
 from frontdesk.conversation.evaluation import load_turn_cases
-from frontdesk.conversation.turn import TURN_TIMEOUT_SECONDS
 from tests.cli.live_chat_helpers import PARKING, PRICE, Install, bootstrapped
 from tests.cli.live_eval_helpers import (
     Behave,
     eval_live,
     failures_in,
     install_provider,
-    quick_turns,
     recorded_cases,
     rules_of,
     write_cases,
     write_mixed_cases,
     write_parking_cases,
 )
+from tests.live_eval.turn_limit import hang
 from tests.model_gateway.budget_helpers import write_budget
 
 pytestmark = pytest.mark.db
@@ -40,10 +38,6 @@ pytestmark = pytest.mark.db
 @pytest.fixture(autouse=True)
 def _no_waiting_between_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("frontdesk.model_gateway.metering.RETRY_WAITS", (0.0, 0.0, 0.0))
-
-
-async def _hang() -> None:
-    await asyncio.sleep(30)
 
 
 def test_a_provider_that_hangs_leaves_no_timeout_in_the_evidence_after_the_resume(
@@ -55,8 +49,7 @@ def test_a_provider_that_hangs_leaves_no_timeout_in_the_evidence_after_the_resum
 ) -> None:
     # Probe P3: every request hangs and the turn limit cuts it. The first case ends as a timeout
     # after one failed attempt, the second after two, and the third request ends the run.
-    sent = install_provider(monkeypatch, PRICE, lambda role, number: _hang())
-    limit = quick_turns(monkeypatch)
+    sent = install_provider(monkeypatch, PRICE, lambda role, number: hang())
     env = bootstrapped(tmp_path, businesses_dir, database)
     budget, cases = write_budget(tmp_path, usd_per_eur=1.0), write_cases(tmp_path, 5)
     run_dir = tmp_path / "runs" / "live-1"
@@ -74,7 +67,6 @@ def test_a_provider_that_hangs_leaves_no_timeout_in_the_evidence_after_the_resum
     )
 
     sent = gemini(PRICE)  # the provider answers again
-    limit.seconds = TURN_TIMEOUT_SECONDS
     resumed = eval_live(env, budget, run_dir, cases)
 
     assert resumed.exit_code == 0, resumed.output
@@ -134,9 +126,8 @@ def test_a_responder_that_hangs_while_the_classifier_answers_ends_the_run(
     # Probe P5: the classifier answers every request, so a count shared by both agents never
     # reaches three. Each agent has its own, and the responder's failures in a row end the run.
     sent = install_provider(
-        monkeypatch, PARKING, lambda role, number: _hang() if role == "responder" else None
+        monkeypatch, PARKING, lambda role, number: hang() if role == "responder" else None
     )
-    limit = quick_turns(monkeypatch)
     env = bootstrapped(tmp_path, businesses_dir, database)
     budget, cases = write_budget(tmp_path, usd_per_eur=1.0), write_parking_cases(tmp_path, 6)
     run_dir = tmp_path / "runs" / "live-1"
@@ -154,7 +145,6 @@ def test_a_responder_that_hangs_while_the_classifier_answers_ends_the_run(
     ]
 
     sent = gemini(PARKING)
-    limit.seconds = TURN_TIMEOUT_SECONDS
     resumed = eval_live(env, budget, run_dir, cases)
 
     assert resumed.exit_code == 0, resumed.output

@@ -6,7 +6,6 @@ from __future__ import annotations
 import inspect
 import json
 from collections.abc import Awaitable, Callable
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +15,6 @@ from pydantic_ai import ModelResponse, ToolCallPart
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from frontdesk.cli import live
 from frontdesk.cli.main import app
 from frontdesk.model_gateway.costs import Budget
 from tests.cli.live_chat_helpers import USAGE, quote_the_first_passage, runner
@@ -121,7 +119,8 @@ def one_error_line(result: Result, exit_code: int = 1) -> str:
 
 # What a request does before it is answered: given the role (classifier or responder) and the
 # number of the request among that role's, it may raise, or return a coroutine to keep the request
-# away (the turn limit then cuts it), or return nothing and let it be answered.
+# away (`tests.live_eval.turn_limit.hang`: the turn limit then cuts it), or return nothing and let
+# it be answered.
 Behave = Callable[[str, int], Awaitable[None] | None]
 
 
@@ -158,26 +157,6 @@ def install_provider(
         "frontdesk.composition.build_live_model", lambda route, *, gcp_project: model
     )
     return sent
-
-
-class TurnLimit:
-    """The limit of a turn in seconds, which a test can lengthen again."""
-
-    def __init__(self, seconds: float) -> None:
-        self.seconds = seconds
-
-
-def quick_turns(monkeypatch: pytest.MonkeyPatch, seconds: float = 0.3) -> TurnLimit:
-    """Shorten the limit of a turn (45 seconds), so that a request kept away is cut at once. Long
-    enough for the pipeline's own work (a database read), short enough to wait for."""
-    limit = TurnLimit(seconds)
-    real = live.build_runtime
-
-    def quick(*args: Any, **kwargs: Any) -> Any:
-        return replace(real(*args, **kwargs), timeout_seconds=limit.seconds)
-
-    monkeypatch.setattr("frontdesk.cli.live.build_runtime", quick)
-    return limit
 
 
 def failures_in(run_dir: Path) -> int:
