@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, date, datetime
@@ -9,7 +10,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic_ai import ModelResponse, ToolCallPart
+from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.models import Model
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.agent.prompts import prompt_version, read_prompt
@@ -21,6 +25,7 @@ from frontdesk.model_gateway.routes import UnapprovedRouteError
 from frontdesk.settings import EmbeddingBackend, Settings
 from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.pack import BusinessPack, Profile
+from tests.conversation.helpers import first_prompt
 
 Activate = Callable[..., sessionmaker[Session]]
 NO_DATABASE = "postgresql+psycopg://nobody:nobody@127.0.0.1:1/none"  # never connected to
@@ -263,6 +268,41 @@ def test_the_settings_reach_the_runtime(
         )
     )
     assert (loose.min_support_similarity, loose.capture_content) == (0.4, False)
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(("floor", "found"), [(0.0, True), (0.9, False)])
+async def test_the_floor_in_the_settings_reaches_the_passages_and_the_search_tool(
+    activate_pack: Activate, app_url: str, clinic_pack: BusinessPack, floor: float, found: bool
+) -> None:
+    """A question that shares nothing with the knowledge: without a floor the nearest passages are
+    preloaded and the tool returns them; with the floor in the settings there are none of either."""
+    question = "zebra quantum harmonica"
+    factory = activate_pack(clinic_pack)
+    runtime = build_turn_runtime(
+        _deployment(clinic_pack, factory, app_url=app_url, min_retrieval_similarity=floor)
+    )
+    prompts: list[str] = []
+    found_by_the_tool: list[str] = []
+
+    def responder(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        returns = [
+            part
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+            if isinstance(part, ToolReturnPart)
+        ]
+        if not returns:
+            prompts.append(first_prompt(messages))
+            return ModelResponse(parts=[ToolCallPart("search_information", {"question": question})])
+        found_by_the_tool.append(returns[-1].model_response_str())
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"action": "handoff"})])
+
+    with runtime.responder.override(model=FunctionModel(responder)):
+        await handle_message(question, ConversationState(turns=1), runtime)
+    assert ("<evidence" in prompts[0]) is found
+    assert bool(json.loads(found_by_the_tool[0])["evidence"]) is found
 
 
 @pytest.mark.db

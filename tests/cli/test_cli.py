@@ -507,20 +507,49 @@ def test_every_problem_of_a_turn_dataset_reaches_stderr_at_once(
     assert "case 'third'" not in result.stderr  # the valid case is not a problem
 
 
+# A question that shares no word with the clinic's documents: every chunk is equally far from it
+# (similarity 0), so the chunks rank by place and parking-en, the second document by key, comes
+# second. Without a floor the case therefore scores the first row; with a floor above every
+# similarity no candidate is left and it scores the second.
+UNRELATED_CASE = (
+    "- {id: only-this, question: zebra quantum harmonica, language: en, relevant: [parking-en]}\n"
+)
+UNFLOORED_ROW = "| only-this | en | 1.00 | 0.50 |"
+FLOORED_ROW = "| only-this | en | 0.00 | 0.00 |"
+
+
 def test_retrieval_evaluation_reads_the_given_cases_with_the_given_floor(
     tmp_path: Path, businesses_dir: Path, database: tuple[str, str]
 ) -> None:
     env = str(_env(tmp_path, "clinic", businesses_dir / "demo-clinic", database))
     _run("knowledge", "bootstrap-demo", "--env-file", env)
     cases = tmp_path / "retrieval.yaml"
-    cases.write_text(
-        "- {id: only-this, question: zebra quantum harmonica, language: en, "
-        "relevant: [parking-en]}\n",
-        encoding="utf-8",
-    )
+    cases.write_text(UNRELATED_CASE, encoding="utf-8")
     args = ["eval", "retrieval", "--env-file", env, "--cases", str(cases), "--k", "3"]
     without_floor = _run(*args)
-    assert "| only-this | en |" in without_floor
+    assert UNFLOORED_ROW in without_floor
     with_floor = _run(*args, "--min-similarity", "0.9")
-    # Nothing in the clinic's documents is that close to the question: no candidate is left.
-    assert "| only-this | en | 0.00 | 0.00 |" in with_floor
+    assert FLOORED_ROW in with_floor
+
+
+def test_the_floor_in_the_env_file_is_the_default_of_the_retrieval_evaluation(
+    tmp_path: Path, businesses_dir: Path, database: tuple[str, str]
+) -> None:
+    pack_dir = businesses_dir / "demo-clinic"
+    plain = _env(tmp_path, "plain", pack_dir, database)
+    floored = _env(tmp_path, "floored", pack_dir, database)
+    floored.write_text(
+        floored.read_text(encoding="utf-8") + "FRONTDESK_MIN_RETRIEVAL_SIMILARITY=0.9\n",
+        encoding="utf-8",
+    )
+    _run("knowledge", "bootstrap-demo", "--env-file", str(plain))
+    cases = tmp_path / "retrieval.yaml"
+    cases.write_text(UNRELATED_CASE, encoding="utf-8")
+
+    def evaluate(env: Path, *flags: str) -> str:
+        args = ["eval", "retrieval", "--env-file", str(env), "--cases", str(cases), "--k", "3"]
+        return _run(*args, *flags)
+
+    assert UNFLOORED_ROW in evaluate(plain)
+    assert FLOORED_ROW in evaluate(floored)  # no flag: the setting is the floor
+    assert UNFLOORED_ROW in evaluate(floored, "--min-similarity", "0")  # an explicit 0 overrides it
