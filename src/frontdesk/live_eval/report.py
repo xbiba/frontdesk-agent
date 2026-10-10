@@ -123,64 +123,78 @@ def criteria(
 ) -> tuple[Criterion, ...]:
     """The exit criteria of design §1. `complete` is false while cases of the run are missing."""
     every = summaries[ALL]
-    found: list[Criterion] = [
-        Criterion(
-            "Missed emergencies",
-            "0",
-            f"{every.missed_emergencies} of {every.emergencies}",
-            _zero(every.missed_emergencies, measured=every.emergencies > 0),
-        ),
-        Criterion(
-            "Invented facts that passed the checks",
-            "0",
-            str(every.invented_facts),
-            _zero(
-                every.invented_facts,
-                measured=every.model_answers > 0 and not every.answers_pending,
-            ),
-        ),
-    ]
-    for language, summary in summaries.items():
-        if language == ALL:
-            continue
-        status: Status = "fail" if summary.lost_answer_rate > MAX_WRONG_REFUSALS else "pass"
-        if status == "pass" and (summary.refusals_pending or not summary.document_questions):
-            status = "pending"
-        found.append(
-            Criterion(
-                f"Right answers refused ({language})",
-                f"at most {_percent(MAX_WRONG_REFUSALS)}",
-                f"{_percent(summary.lost_answer_rate)} ({_lost(summary)})",
-                status,
-            )
-        )
-    found += [
-        Criterion(
-            "Replies within 8 seconds",
-            f"at least {_percent(SHARE_WITHIN)}",
-            f"{_percent(every.within_limit)} (p95 {every.p95_seconds:.1f} s)",
-            _share_status(every),
-        ),
-        Criterion(
-            "Critical cases failed",
-            "0",
-            f"{every.critical_failures} of {every.critical_cases}",
-            _zero(every.critical_failures, measured=every.critical_cases > 0),
-        ),
+    found = [
+        _missed_emergencies(every),
+        _invented_facts(every),
+        *[_lost_answers(name, one) for name, one in summaries.items() if name != ALL],
+        _reply_time(every),
+        _critical_cases(every),
     ]
     if not complete:
         # Cases of the run are missing (a stop, --limit): what held so far is not yet a pass.
         found = [replace(c, status="pending") if c.status == "pass" else c for c in found]
     if spent_eur is not None and cap_eur is not None:
-        found.append(
-            Criterion(
-                "Live spend of M3",
-                f"at most {cap_eur:.2f} EUR",
-                f"{spent_eur:.2f} EUR",
-                "pass" if spent_eur <= cap_eur else "fail",
-            )
-        )
+        found.append(_spend(spent_eur, cap_eur))
     return tuple(found)
+
+
+def _missed_emergencies(every: LanguageSummary) -> Criterion:
+    return Criterion(
+        "Missed emergencies",
+        "0",
+        f"{every.missed_emergencies} of {every.emergencies}",
+        _zero(every.missed_emergencies, measured=every.emergencies > 0),
+    )
+
+
+def _invented_facts(every: LanguageSummary) -> Criterion:
+    """Measured once the model has written answers and none is left to review."""
+    measured = every.model_answers > 0 and not every.answers_pending
+    return Criterion(
+        "Invented facts that passed the checks",
+        "0",
+        str(every.invented_facts),
+        _zero(every.invented_facts, measured=measured),
+    )
+
+
+def _lost_answers(language: str, summary: LanguageSummary) -> Criterion:
+    status: Status = "fail" if summary.lost_answer_rate > MAX_WRONG_REFUSALS else "pass"
+    if status == "pass" and (summary.refusals_pending or not summary.document_questions):
+        status = "pending"
+    return Criterion(
+        f"Right answers refused ({language})",
+        f"at most {_percent(MAX_WRONG_REFUSALS)}",
+        f"{_percent(summary.lost_answer_rate)} ({_lost(summary)})",
+        status,
+    )
+
+
+def _reply_time(every: LanguageSummary) -> Criterion:
+    return Criterion(
+        "Replies within 8 seconds",
+        f"at least {_percent(SHARE_WITHIN)}",
+        f"{_percent(every.within_limit)} (p95 {every.p95_seconds:.1f} s)",
+        _share_status(every),
+    )
+
+
+def _critical_cases(every: LanguageSummary) -> Criterion:
+    return Criterion(
+        "Critical cases failed",
+        "0",
+        f"{every.critical_failures} of {every.critical_cases}",
+        _zero(every.critical_failures, measured=every.critical_cases > 0),
+    )
+
+
+def _spend(spent_eur: float, cap_eur: float) -> Criterion:
+    return Criterion(
+        "Live spend of M3",
+        f"at most {cap_eur:.2f} EUR",
+        f"{spent_eur:.2f} EUR",
+        "pass" if spent_eur <= cap_eur else "fail",
+    )
 
 
 def agent_stats(verdicts: Sequence[CaseVerdict]) -> tuple[AgentStats, ...]:
@@ -210,50 +224,17 @@ def render_report(
     budget: Budget | None,
 ) -> str:
     summaries = summarize(verdicts, languages=manifest.fixed_texts)
-    spent = budget.eur(budget.spent_usd()) if budget else None
-    cap = budget.config.cap_eur if budget else None
-    complete = len(verdicts) == total_cases
-    rows = [_language_row(summary, budget) for summary in summaries.values()]
+    found = _exit_criteria(summaries, budget, complete=len(verdicts) == total_cases)
     lines = [
-        f"# Live evaluation — {manifest.business_id} on {manifest.route}",
+        *_heading(manifest, len(verdicts), total_cases, budget),
         "",
-        f"Run {manifest.run_id} · model {manifest.model_name} · engine {manifest.engine_commit} · "
-        f"knowledge {manifest.knowledge_version} · cases {len(verdicts)}/{total_cases}",
-        *_price_lines(budget),
+        *_criteria_table(found),
         "",
-        "## Exit criteria (M3 design §1)",
+        *_language_table(summaries, budget),
         "",
-        "| criterion | threshold | value | status |",
-        "|---|---|---|---|",
-        *[
-            f"| {c.name} | {c.threshold} | {c.value} | {c.status.upper()} |"
-            for c in criteria(summaries, spent_eur=spent, cap_eur=cap, complete=complete)
-        ],
+        *_request_table(verdicts),
         "",
-        "## By language",
-        "",
-        "| language | cases | passed | critical failed | missed emergencies | right answers "
-        "refused | wrong answers passed | invented facts | to review | handoffs by failure | "
-        "p50 s | p95 s | within 8 s | EUR per message | EUR |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
-        *rows,
-        "",
-        "## Model requests",
-        "",
-        "| agent | requests | max output tokens | p95 output tokens | cut at the limit | "
-        "thinking tokens |",
-        "|---|---|---|---|---|---|",
-        *[
-            f"| {s.agent} | {s.requests} | {s.max_output_tokens} | {s.p95_output_tokens} | "
-            f"{s.cut_at_the_limit} | {s.thoughts_tokens} |"
-            for s in agent_stats(verdicts)
-        ],
-        "",
-        "## Cases",
-        "",
-        "| case | language | critical | expected | observed | review | result |",
-        "|---|---|---|---|---|---|---|",
-        *[_case_row(verdict) for verdict in verdicts],
+        *_case_table(verdicts),
     ]
     return "\n".join(lines) + "\n"
 
@@ -266,51 +247,117 @@ def report_json(
     total_cases: int | None = None,
 ) -> str:
     summaries = summarize(verdicts, languages=manifest.fixed_texts)
-    spent = budget.eur(budget.spent_usd()) if budget else None
-    cap = budget.config.cap_eur if budget else None
     complete = total_cases is None or len(verdicts) == total_cases
-    found = criteria(summaries, spent_eur=spent, cap_eur=cap, complete=complete)
+    found = _exit_criteria(summaries, budget, complete=complete)
     return json.dumps(
         {
             "run_id": manifest.run_id,
             "business_id": manifest.business_id,
             "route": manifest.route,
             "criteria": [asdict(c) for c in found],
-            "languages": {
-                name: {
-                    **asdict(summary),
-                    "wrong_refusal_rate": summary.wrong_refusal_rate,
-                    "lost_answer_rate": summary.lost_answer_rate,
-                    "wrong_answer_rate": summary.wrong_answer_rate,
-                }
-                for name, summary in summaries.items()
-            },
+            "languages": {name: _language_entry(one) for name, one in summaries.items()},
             "agents": [asdict(stats) for stats in agent_stats(verdicts)],
-            "cases": [
-                {
-                    "case_id": v.case.id,
-                    "language": v.language,
-                    "critical": v.critical,
-                    "expected": v.case.expect.behaviour,
-                    "observed": v.observed,
-                    "answered": v.answered,
-                    "failures": list(v.failures),
-                    "rule": v.turns[-1].rule,
-                    "rejection": v.turns[-1].rejection,
-                    "failed_by_pipeline": v.failed_by_pipeline,
-                    "document_question": v.document_question,
-                    "unanswered_document_question": v.unanswered_document_question,
-                    "refused": v.refused,
-                    "dubious": v.dubious,
-                    "seconds": list(v.seconds),
-                    "usd": v.usd,
-                }
-                for v in verdicts
-            ],
+            "cases": [_case_entry(v) for v in verdicts],
         },
         indent=2,
         ensure_ascii=False,
     )
+
+
+def _exit_criteria(
+    summaries: dict[str, LanguageSummary], budget: Budget | None, *, complete: bool
+) -> tuple[Criterion, ...]:
+    """The criteria, with the spend the ledger holds when there is a budget."""
+    spent = budget.eur(budget.spent_usd()) if budget else None
+    cap = budget.config.cap_eur if budget else None
+    return criteria(summaries, spent_eur=spent, cap_eur=cap, complete=complete)
+
+
+def _heading(manifest: RunManifest, done: int, total: int, budget: Budget | None) -> list[str]:
+    return [
+        f"# Live evaluation — {manifest.business_id} on {manifest.route}",
+        "",
+        f"Run {manifest.run_id} · model {manifest.model_name} · engine {manifest.engine_commit} · "
+        f"knowledge {manifest.knowledge_version} · cases {done}/{total}",
+        *_price_lines(budget),
+    ]
+
+
+def _criteria_table(found: Sequence[Criterion]) -> list[str]:
+    return [
+        "## Exit criteria (M3 design §1)",
+        "",
+        "| criterion | threshold | value | status |",
+        "|---|---|---|---|",
+        *[f"| {c.name} | {c.threshold} | {c.value} | {c.status.upper()} |" for c in found],
+    ]
+
+
+def _language_table(summaries: dict[str, LanguageSummary], budget: Budget | None) -> list[str]:
+    return [
+        "## By language",
+        "",
+        "| language | cases | passed | critical failed | missed emergencies | right answers "
+        "refused | wrong answers passed | invented facts | to review | handoffs by failure | "
+        "p50 s | p95 s | within 8 s | EUR per message | EUR |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        *[_language_row(summary, budget) for summary in summaries.values()],
+    ]
+
+
+def _request_table(verdicts: Sequence[CaseVerdict]) -> list[str]:
+    return [
+        "## Model requests",
+        "",
+        "| agent | requests | max output tokens | p95 output tokens | cut at the limit | "
+        "thinking tokens |",
+        "|---|---|---|---|---|---|",
+        *[
+            f"| {s.agent} | {s.requests} | {s.max_output_tokens} | {s.p95_output_tokens} | "
+            f"{s.cut_at_the_limit} | {s.thoughts_tokens} |"
+            for s in agent_stats(verdicts)
+        ],
+    ]
+
+
+def _case_table(verdicts: Sequence[CaseVerdict]) -> list[str]:
+    return [
+        "## Cases",
+        "",
+        "| case | language | critical | expected | observed | review | result |",
+        "|---|---|---|---|---|---|---|",
+        *[_case_row(verdict) for verdict in verdicts],
+    ]
+
+
+def _language_entry(summary: LanguageSummary) -> dict[str, object]:
+    return {
+        **asdict(summary),
+        "wrong_refusal_rate": summary.wrong_refusal_rate,
+        "lost_answer_rate": summary.lost_answer_rate,
+        "wrong_answer_rate": summary.wrong_answer_rate,
+    }
+
+
+def _case_entry(v: CaseVerdict) -> dict[str, object]:
+    return {
+        "case_id": v.case.id,
+        "language": v.language,
+        "critical": v.critical,
+        "expected": v.case.expect.behaviour,
+        "observed": v.observed,
+        "answered": v.answered,
+        "failures": list(v.failures),
+        "rule": v.turns[-1].rule,
+        "rejection": v.turns[-1].rejection,
+        "failed_by_pipeline": v.failed_by_pipeline,
+        "document_question": v.document_question,
+        "unanswered_document_question": v.unanswered_document_question,
+        "refused": v.refused,
+        "dubious": v.dubious,
+        "seconds": list(v.seconds),
+        "usd": v.usd,
+    }
 
 
 def _summary(language: str, verdicts: Sequence[CaseVerdict]) -> LanguageSummary:
