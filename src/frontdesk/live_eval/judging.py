@@ -1,0 +1,292 @@
+"""Judging a live run against the expected answers (M3 design §1, §4.4).
+
+Each recorded case gets the checks of the offline evaluation. Two kinds of case go to a person:
+a refused case, where a check stopped the model's answer and the bot handed off instead, and a
+dubious one, where an answer written from the documents holds a number, a link or a negation that
+the expected answer does not. The person's labels say whether a refusal was wrong (a right answer
+refused) and whether an answer was wrong (and whether it invented a fact). Until then those cases
+are pending, and so are the criteria that depend on them.
+
+An answer can also come ahead of a notice: a clinical message with an administrative question gets
+the answer to that question, then the clinical notice and the contact (`turn._route`). That reply
+reads as the notice, yet the answer in front of it is the model's text from the documents and can
+invent a fact as much as any other, so it is judged and reviewed as an answer (`answered_prefix`).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Final, Literal
+
+import yaml
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+
+from frontdesk.agent.answer_check import links_in, negations_in, numbers_in
+from frontdesk.agent.vocab import Category, Intent
+from frontdesk.conversation.behaviour import Behaviour, observed_behaviour
+from frontdesk.conversation.evaluation import TurnCase, check_conversation
+from frontdesk.conversation.turn import TurnOutcome, TurnResult, TurnTrace
+from frontdesk.live_eval.records import TurnRecord, completed_cases
+from frontdesk.tenancy.pack import FixedTextKey, Language
+
+# Failures that mean the reply the person got differs from the expected answer.
+_CONTRADICTIONS: Final = ("missing text:", "unexpected text:", "behaviour:")
+# The replies that can carry an answer ahead of them.
+_NOTICES: Final = frozenset({Behaviour.CLINICAL, Behaviour.HANDOFF})
+FixedTexts = Mapping[Language, Mapping[FixedTextKey, str]]
+
+
+class LabelsError(ValueError):
+    """A labels file cannot be read, or one of its labels is invalid."""
+
+
+class Label(BaseModel):
+    """A reviewer's judgment of one case."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    refusal: Literal["right", "wrong"] | None = None
+    answer: Literal["right", "wrong"] | None = None
+    invented_fact: bool = False  # a price, time, contact, number or negation nobody approved
+    note: str | None = None
+
+    @model_validator(mode="after")
+    def _an_invented_fact_is_a_wrong_answer(self) -> Label:
+        if self.invented_fact and self.answer != "wrong":
+            raise ValueError("invented_fact needs answer: wrong")
+        return self
+
+
+@dataclass(frozen=True)
+class CaseVerdict:
+    case: TurnCase
+    turns: tuple[TurnRecord, ...]
+    failures: tuple[str, ...]
+    observed: Behaviour
+    refused: bool
+    dubious: bool
+    # The last reply is a notice with an answer from the documents ahead of it.
+    answered_prefix: bool
+    label: Label | None
+
+    @property
+    def language(self) -> str:
+        return self.turns[-1].language
+
+    @property
+    def passed(self) -> bool:
+        return not self.failures
+
+    @property
+    def critical(self) -> bool:
+        return self.case.expect.is_critical
+
+    @property
+    def expects_emergency(self) -> bool:
+        return self.case.expect.behaviour is Behaviour.EMERGENCY
+
+    @property
+    def missed_emergency(self) -> bool:
+        return self.expects_emergency and self.observed is not Behaviour.EMERGENCY
+
+    @property
+    def document_question(self) -> bool:
+        return self.case.expect.answer_in_documents
+
+    @property
+    def wrong_refusal(self) -> bool:
+        """A right answer refused: the reviewer says the check should have let it through."""
+        return self.refused and self.label is not None and self.label.refusal == "wrong"
+
+    @property
+    def answered(self) -> bool:
+        """The person got an answer: the reply is one, or an answer from the documents comes
+        ahead of a notice."""
+        return self.observed is Behaviour.ANSWER or self.answered_prefix
+
+    @property
+    def wrong_answer(self) -> bool:
+        """A wrong answer that reached the person: it contradicts the expected answer, or the
+        reviewer says it is wrong."""
+        contradicts = any(failure.startswith(_CONTRADICTIONS) for failure in self.failures)
+        labelled = self.label is not None and self.label.answer == "wrong"
+        return self.answered and (contradicts or labelled)
+
+    @property
+    def invented_fact(self) -> bool:
+        return self.answered and self.label is not None and self.label.invented_fact
+
+    @property
+    def refusal_pending(self) -> bool:
+        return self.refused and (self.label is None or self.label.refusal is None)
+
+    @property
+    def answer_pending(self) -> bool:
+        return self.dubious and (self.label is None or self.label.answer is None)
+
+    @property
+    def failed_by_pipeline(self) -> bool:
+        return any("handoff by failure:" in failure for failure in self.failures)
+
+    @property
+    def seconds(self) -> tuple[float, ...]:
+        return tuple(turn.seconds for turn in self.turns)
+
+    @property
+    def usd(self) -> float:
+        return sum(turn.usd for turn in self.turns)
+
+
+def judge(
+    cases: Sequence[TurnCase],
+    records: Sequence[TurnRecord],
+    fixed_texts: FixedTexts,
+    labels: Mapping[str, Label],
+) -> tuple[CaseVerdict, ...]:
+    """A verdict for each case that has all its turns recorded, in the order of the cases."""
+    complete = completed_cases(records)
+
+    def texts(language: Language) -> Mapping[FixedTextKey, str]:
+        return fixed_texts[language]
+
+    return tuple(
+        _verdict(case, complete[case.id], texts, labels.get(case.id))
+        for case in cases
+        if case.id in complete
+    )
+
+
+def as_result(record: TurnRecord) -> TurnResult:
+    """A recorded turn as the pipeline returned it, for the same checks as offline."""
+    trace = TurnTrace(
+        rule=record.rule,
+        category=Category(record.category) if record.category else None,
+        intent=Intent(record.intent) if record.intent else None,
+        sources=record.sources,
+        check_reasons=record.check_reasons,
+        rejection=record.rejection,
+    )
+    return TurnResult(record.reply, TurnOutcome(record.outcome), record.language, trace)
+
+
+def load_labels(path: Path, cases: Sequence[TurnCase]) -> dict[str, Label]:
+    """The labels of a run; no file means no label yet. Every problem is reported at once."""
+    if not path.exists():
+        return {}
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except OSError as error:
+        raise LabelsError(f"{path}: cannot be read ({error.strerror or error})") from error
+    except UnicodeDecodeError as error:
+        raise LabelsError(f"{path}: not valid UTF-8 text (save the file as UTF-8)") from error
+    except yaml.YAMLError as error:
+        raise LabelsError(f"{path}: invalid YAML{_where(error)}") from error
+    if raw is None:  # an empty file, or only comments: nothing reviewed yet
+        return {}
+    if not isinstance(raw, dict):
+        raise LabelsError(f"{path}: expected a mapping of case id to label")
+    known = {case.id for case in cases}
+    labels: dict[str, Label] = {}
+    problems: list[str] = []
+    for case_id, item in raw.items():
+        if case_id not in known:
+            problems.append(f"{path}: '{case_id}' is not a case of this run")
+            continue
+        try:
+            # A case with nothing under it is an empty label; anything else must be a mapping.
+            labels[str(case_id)] = Label.model_validate({} if item is None else item)
+        except ValidationError as error:
+            reasons = "; ".join(problem["msg"] for problem in error.errors(include_url=False))
+            problems.append(f"{path}: case '{case_id}': {reasons}")
+    if problems:
+        raise LabelsError("\n".join(problems))
+    return labels
+
+
+def _where(error: yaml.YAMLError) -> str:
+    """` at line L, column C: reason` for an error PyYAML placed in the text, else nothing."""
+    if isinstance(error, yaml.MarkedYAMLError) and error.problem_mark is not None:
+        mark = error.problem_mark
+        return f" at line {mark.line + 1}, column {mark.column + 1}: {error.problem}"
+    return ""
+
+
+def _verdict(
+    case: TurnCase,
+    turns: tuple[TurnRecord, ...],
+    texts: Callable[[Language], Mapping[FixedTextKey, str]],
+    label: Label | None,
+) -> CaseVerdict:
+    results = [as_result(turn) for turn in turns]
+    last = results[-1]
+    fixed = texts(last.language)
+    observed = observed_behaviour(last, fixed)
+    expects_answer = case.expect.behaviour is Behaviour.ANSWER
+    refused = expects_answer and observed is Behaviour.HANDOFF and turns[-1].draft is not None
+    given = _answer_given(case, turns[-1], observed, fixed)
+    return CaseVerdict(
+        case=case,
+        turns=turns,
+        failures=check_conversation(case, results, texts),
+        observed=observed,
+        refused=refused,
+        dubious=bool(given) and _adds_facts(case, given, turns[-1].language, fixed),
+        answered_prefix=observed is not Behaviour.ANSWER and bool(given),
+        label=label,
+    )
+
+
+def _answer_given(
+    case: TurnCase, last: TurnRecord, observed: Behaviour, fixed: Mapping[FixedTextKey, str]
+) -> str:
+    """The answer the model wrote from the documents for the person, without the pack's own texts
+    (a disclosure, a notice, the contact); empty when the reply holds none.
+
+    Two replies hold one: an answer to a question the documents answer, and a notice with text of
+    its own ahead of it. That text is the model's unless every source of the turn is a record: then
+    code composed it from the approved data (prices, hours), and nothing in it can be invented.
+    Text no source explains counts as an answer, so a missing source cannot hide one from review.
+    """
+    written = _without_fixed_texts(last.reply, fixed)
+    if observed is Behaviour.ANSWER:
+        return written if case.expect.answer_in_documents else ""
+    if observed in _NOTICES and not _from_records(last.sources):
+        return written
+    return ""
+
+
+def _from_records(sources: Sequence[str]) -> bool:
+    """Every source is a record ("kind:key"), none a document (a bare key): the same convention as
+    `Expectation.answer_in_documents`."""
+    return bool(sources) and all(":" in source for source in sources)
+
+
+def _without_fixed_texts(reply: str, fixed: Mapping[FixedTextKey, str]) -> str:
+    """The reply with the pack's fixed texts taken out, longest first: some hold others (the
+    personal-data text holds the handoff text), and what is left of one is not the model's."""
+    for text in sorted(fixed.values(), key=len, reverse=True):
+        if text:
+            reply = reply.replace(text, " ")
+    return " ".join(reply.split())
+
+
+def _adds_facts(
+    case: TurnCase, answer: str, language: Language, fixed: Mapping[FixedTextKey, str]
+) -> bool:
+    """The answer holds a number, a link or a negation that the expected answer lacks."""
+    expected = _expected_answer(case, fixed)
+    return bool(
+        numbers_in(answer) - numbers_in(expected)
+        or links_in(answer) - links_in(expected)
+        or negations_in(answer, language) - negations_in(expected, language)
+    )
+
+
+def _expected_answer(case: TurnCase, fixed: Mapping[FixedTextKey, str]) -> str:
+    """What the case expects the answer to say: its `contains` lines, less the ones that are part
+    of a fixed text. A case that expects a notice after the answer lists the notice too, and its
+    "non" or "not" would hide the same word in the answer."""
+    own = tuple(fixed.values())
+    return " ".join(line for line in case.expect.contains if not any(line in text for text in own))
