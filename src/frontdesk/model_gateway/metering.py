@@ -17,10 +17,17 @@ settles every attempt on its own:
 
 A 429 that outlives the attempts, a budget with no room, and a ledger that cannot be read or written
 each stop the run for good, so that it can resume later: after a stop no further request is sent.
+Each stop keeps its cause (`stop_detail`), so that the command line can say it. A run may also ask
+for a breaker: when a request ends in failure and the last few attempts of its agent have all failed,
+in whatever way, the run stops too. Each agent (the classifier, the responder) counts its own, so
+that one that fails alone is not hidden by the other answering. Without the breaker an outage would
+use up the cap on reservations, because every attempt that was sent and brought nothing back is
+recorded at its reserve.
 Counted this way the ledger is an upper bound of what the provider billed, with two exceptions of one
 request each that no code can close: a process killed between a provider's answer and its ledger
 line loses that line, and so does the first request whose line a ledger that has become unwritable
-refuses (the run stops there). The runner reads the calls of each turn with `drain`.
+refuses (the run stops there). `check_ledger` finds a ledger that is unwritable from the start before
+the first paid request. The runner reads the calls of each turn with `drain`.
 """
 
 from __future__ import annotations
@@ -66,6 +73,16 @@ UNBILLED: Final = (ModelHTTPError, *NOT_SENT)
 RETRY_STATUSES: Final = frozenset({429, 500, 502, 503, 504})
 RETRY_WAITS: Final = (2.0, 4.0, 8.0)
 MAX_ATTEMPTS: Final = len(RETRY_WAITS) + 1
+# Why a run stops (`Meter.stop_reason`); a command maps each to an exit code.
+STOP_BUDGET: Final = "budget"
+STOP_RATE_LIMITED: Final = "rate_limited"
+STOP_LEDGER: Final = "ledger"
+STOP_UNAVAILABLE: Final = "unavailable"
+# A run that asks for the breaker (`Meter(breaker=...)`) stops once a request has ended in failure
+# with this many attempts in a row failed (M3 design §6).
+BREAKER_ATTEMPTS: Final = 3
+# The kind of the line `check_ledger` appends: it costs nothing, so it is no paid call.
+PREFLIGHT_KIND: Final = "preflight"
 
 
 class RunStoppedError(RuntimeError):
@@ -99,9 +116,12 @@ class Meter:
         *,
         route_id: str,
         run_id: str,
+        breaker: int | None = None,
         clock: Callable[[], float] = time.perf_counter,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
+        if breaker is not None and breaker < 1:
+            raise ValueError("the breaker needs at least one failed attempt to trip")
         self._budget = budget
         self._price = budget.price(route_id)
         if self._price.unit != "tokens_1m":
@@ -113,9 +133,12 @@ class Meter:
         self._run_id = run_id
         self.clock = clock
         self.sleep = sleep
+        self._breaker = breaker
         self._calls: list[CallRecord] = []
         self._stop_reason: str | None = None
+        self._stop_detail: str | None = None
         self._held = 0.0
+        self._failures: dict[str, int] = {}
 
     @property
     def stop_reason(self) -> str | None:
@@ -123,14 +146,32 @@ class Meter:
 
         "budget": the budget has no room for the next request, or cannot bound what it would cost.
         "rate_limited": a 429 outlived the attempts. "ledger": the spend ledger cannot be read or
-        written, so what a request costs can no longer be counted. After any of them no further
-        request is sent.
+        written, so what a request costs can no longer be counted. "unavailable": the breaker
+        tripped. After any of them no further request is sent.
         """
         return self._stop_reason
 
-    def _stop(self, reason: str) -> None:
+    @property
+    def stop_detail(self) -> str | None:
+        """The cause of `stop_reason` in a sentence: which limit, which file, how the last request
+        ended. It is the cause of the first stop, like the reason."""
+        return self._stop_detail
+
+    @property
+    def consecutive_failures(self) -> dict[str, int]:
+        """For each agent that has made an attempt, the attempts in a row, up to now, that were not
+        answered with usage: what the breaker counts."""
+        return dict(self._failures)
+
+    def _stop(self, reason: str, detail: str) -> None:
         if self._stop_reason is None:
-            self._stop_reason = reason
+            self._stop_reason, self._stop_detail = reason, detail
+
+    def _ledger_detail(self, error: BudgetError | OSError, action: str) -> str:
+        """What went wrong with the ledger, with its name: a BudgetError names it already."""
+        if isinstance(error, OSError):
+            return f"{self._budget.ledger_path}: cannot be {action} ({error.strerror or error})"
+        return str(error)
 
     @property
     def held_usd(self) -> float:
@@ -170,10 +211,9 @@ class Meter:
         return cap
 
     def _refuse(self, why: str) -> NoReturn:
-        self._stop("budget")
-        raise UnboundedRequestError(
-            f"the request {why}: its cost cannot be bounded, so it is not sent"
-        )
+        message = f"the request {why}: its cost cannot be bounded, so it is not sent"
+        self._stop(STOP_BUDGET, message)
+        raise UnboundedRequestError(message)
 
     def reserve(self, max_tokens: int) -> float:
         """Refuse a request when the run has stopped or the budget has no room for it and for the
@@ -187,11 +227,11 @@ class Meter:
         most = self._price.cost(input_units=MAX_INPUT_TOKENS_PER_REQUEST, output_units=max_tokens)
         try:
             self._budget.ensure_room(self._held + most)
-        except BudgetExhaustedError:
-            self._stop("budget")
+        except BudgetExhaustedError as error:
+            self._stop(STOP_BUDGET, str(error))
             raise
-        except (BudgetError, OSError):  # a ledger that cannot be read: nothing can be counted
-            self._stop("ledger")
+        except (BudgetError, OSError) as error:  # a ledger that cannot be read: nothing is counted
+            self._stop(STOP_LEDGER, self._ledger_detail(error, "read"))
             raise
         self._held += most
         return most
@@ -201,12 +241,38 @@ class Meter:
         left) gives its hold back."""
         self._held = max(0.0, self._held - reserved)
 
+    def failed(self, role: str, reserved: float) -> None:
+        """An attempt of `role` that cost nothing (the provider answered with an error status, or
+        the request never left): it gives its hold back, and it is one more failure in a row."""
+        self.release(reserved)
+        self._failures[role] = self._failures.get(role, 0) + 1
+
     def _append(self, kind: str, usd: float) -> None:
         try:
             self._budget.record(run_id=self._run_id, route_id=self._route_id, kind=kind, usd=usd)
-        except (BudgetError, OSError):  # a ledger that cannot be written: the next one is unpaid
-            self._stop("ledger")
+        except (BudgetError, OSError) as error:
+            # A ledger that cannot be written: the next request would be paid and uncounted.
+            self._stop(STOP_LEDGER, self._ledger_detail(error, "appended to"))
             raise
+
+    def check_ledger(self) -> None:
+        """Prove that the ledger can be read and appended to, before the first paid request: read
+        it, so that a damaged one is found, then append a line of zero dollars, as a paid request
+        will. It costs nothing and sends no request. A ledger that fails stops the run, and the
+        BudgetError names the file and the reason."""
+        try:
+            self._budget.spent_usd()
+        except BudgetError as error:
+            self._stop(STOP_LEDGER, str(error))
+            raise
+        except OSError as error:
+            detail = self._ledger_detail(error, "read")
+            self._stop(STOP_LEDGER, detail)
+            raise BudgetError(detail) from error
+        try:
+            self._append(PREFLIGHT_KIND, 0.0)
+        except OSError as error:  # `_append` has stopped the run; a BudgetError passes as it is
+            raise BudgetError(self._ledger_detail(error, "appended to")) from error
 
     def record(
         self, role: str, response: ModelResponse, seconds: float, *, reserved: float
@@ -218,6 +284,7 @@ class Meter:
             self.unconfirmed(role, reserved, seconds)
             return
         usd = self._price.cost(input_units=usage.input_tokens, output_units=usage.output_tokens)
+        self._failures[role] = 0  # answered with usage: whatever this agent failed is behind it
         try:
             self._append("chat", usd)
         finally:
@@ -237,7 +304,8 @@ class Meter:
 
     def unconfirmed(self, role: str, usd: float, seconds: float) -> None:
         """A request that was sent but brought back no usage, recorded at its reserve `usd`, which
-        is also the hold it gives back."""
+        is also the hold it gives back. It is one more failure in a row for `role`."""
+        self._failures[role] = self._failures.get(role, 0) + 1
         try:
             self._append("chat-unconfirmed", usd)
         finally:
@@ -256,7 +324,25 @@ class Meter:
         )
 
     def rate_limited(self) -> None:
-        self._stop("rate_limited")
+        self._stop(
+            STOP_RATE_LIMITED, "Google answered 429 (rate limited) at the last attempt of a request"
+        )
+
+    def request_ended(self, role: str, error: BaseException | None) -> None:
+        """A request of `role` ended, with `error` or with an answer. When the breaker is on and
+        the attempts in a row that failed (an answer without usage is one) have reached its limit
+        for `role`, the run stops: the provider is not answering it, and each further attempt that
+        is sent without an answer would be recorded at its reserve. The retries of the request that
+        just ended were not cut short: a request that fails three times and then answers has no
+        failure left in the count."""
+        count = self._failures.get(role, 0)
+        if self._breaker is None or count < self._breaker:
+            return
+        how = "was answered without usage" if error is None else _ending(error)
+        attempts = f"{count} attempt{'s' if count != 1 else ''}"
+        self._stop(
+            STOP_UNAVAILABLE, f"{attempts} of the {role} in a row failed; the last request {how}"
+        )
 
 
 def _request_bytes(messages: list[ModelMessage], parameters: ModelRequestParameters) -> int:
@@ -265,6 +351,16 @@ def _request_bytes(messages: list[ModelMessage], parameters: ModelRequestParamet
     return len(ModelMessagesTypeAdapter.dump_json(messages)) + len(
         to_json(parameters, fallback=str)
     )
+
+
+def _ending(error: BaseException) -> str:
+    """How a request ended, without a word of what the provider wrote: a status or a type. A
+    request cancelled while it was away timed out: the turn's time limit cut it off."""
+    if isinstance(error, ModelHTTPError):
+        return f"ended with HTTP {error.status_code}"
+    if isinstance(error, asyncio.CancelledError):
+        return "timed out"
+    return f"ended with {type(error).__name__}"
 
 
 def _worth_retrying(error: Exception) -> bool:
@@ -287,8 +383,24 @@ class MeteredModel(WrapperModel):
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
         """The request in up to `MAX_ATTEMPTS` attempts. The last attempt ends it with what it
-        ended with, which is what the runner's stop logic reads (a 429, a refusal by the budget)."""
+        ended with, which is what the runner's stop logic reads (a 429, a refusal by the budget).
+        However it ends, the meter is told, for the breaker."""
         cap = self._meter.admit(messages, model_request_parameters, model_settings)
+        try:
+            response = await self._attempts(messages, model_settings, model_request_parameters, cap)
+        except BaseException as error:
+            self._meter.request_ended(self._role, error)
+            raise
+        self._meter.request_ended(self._role, None)
+        return response
+
+    async def _attempts(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+        cap: int,
+    ) -> ModelResponse:
         for attempt in range(MAX_ATTEMPTS):
             try:
                 return await self._attempt(messages, model_settings, model_request_parameters, cap)
@@ -317,7 +429,7 @@ class MeteredModel(WrapperModel):
             response = await super().request(messages, model_settings, model_request_parameters)
         except UNBILLED:
             # An error status, or a request that never left: the provider billed nothing.
-            self._meter.release(reserved)
+            self._meter.failed(self._role, reserved)
             raise
         except BaseException:
             # Sent, but no usage came back: the provider may have billed it. If the ledger cannot

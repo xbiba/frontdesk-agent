@@ -78,9 +78,10 @@ def test_a_conversation_never_reaches_a_route_approved_only_for_evaluation(
 def test_only_the_route_table_declares_evaluation_data() -> None:
     """Besides the route table, only a command that sends synthetic text may call it evaluation
     data. A module that starts to do so widens this list in its own task, on purpose. The live
-    chat does: a person types test messages into it, and it says so before the first prompt."""
+    chat does: a person types test messages into it, and it says so before the first prompt. So
+    does the live evaluation, which runs the business's labelled test messages."""
     declaring = declaring_modules(SOURCE)
-    assert declaring == ["cli/live_chat.py", "model_gateway/routes.py"]
+    assert declaring == ["cli/live.py", "cli/live_chat.py", "model_gateway/routes.py"]
 
 
 @pytest.mark.parametrize("source", NAMES_EVALUATION_DATA)

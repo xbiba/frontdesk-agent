@@ -16,7 +16,7 @@ import httpx2
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 
-from frontdesk.cli.live_chat import database_location
+from frontdesk.cli.runtime import database_location
 from tests.cli.live_chat_helpers import (
     PARKING,
     PRICE,
@@ -81,7 +81,7 @@ def test_a_turn_that_ends_in_error_says_why_before_its_hand_off(
     assert "Fisioterapia" not in result.stdout  # the hand-off, not an answer
     assert QUESTION not in result.stderr  # the type of the error, never the message
     assert sent == ["classifier"] * 4
-    assert not budget.ledger_path.exists()
+    assert budget.spent_usd() == 0.0  # nothing was paid: the ledger holds the proof only
     assert (TURN_LOGGER.handlers, TURN_LOGGER.level) == ([], logging.NOTSET)  # given back
 
 
@@ -178,7 +178,8 @@ def test_a_turn_cut_short_by_the_stop_shows_what_it_had_cost_before_the_stop(
     ]
     assert "bot>" not in result.output  # the hand-off the cut-short turn fell back to is not shown
     assert sent == ["classifier"]
-    [entry] = ledger(budget)
+    proof, entry = ledger(budget)
+    assert proof["kind"] == "preflight"
     assert entry["usd"] == pytest.approx(0.013)
 
 
@@ -214,6 +215,32 @@ def test_a_ledger_that_breaks_between_turns_is_named_in_an_error_and_not_a_bare_
     assert sent == ["classifier"]  # the second request was refused
     with budget.exclusive():
         pass
+
+
+@pytest.mark.db
+def test_a_chat_goes_on_after_requests_that_keep_failing_it_has_no_breaker(
+    tmp_path: Path,
+    businesses_dir: Path,
+    database: tuple[str, str],
+    gemini: Install,
+) -> None:
+    # A run of cases stops after three failed attempts in a row (`Meter(breaker=...)`); a person
+    # chatting does not: the next message may find the model back.
+    calls: list[str] = []
+
+    def three_refusals_then_fine() -> BaseException | None:
+        calls.append("request")
+        return _refused_by_google(403)() if len(calls) <= 3 else None
+
+    sent = gemini(PRICE, failing={"classifier": three_refusals_then_fine})
+    env = bootstrapped(tmp_path, businesses_dir, database)
+
+    result = live(env, write_budget(tmp_path), input=f"{QUESTION}\n" * 4 + "exit\n")
+
+    assert result.exit_code == 0, result.output
+    assert result.stderr.splitlines() == ["model error: ModelHTTPError"] * 3
+    assert sent == ["classifier"] * 4
+    assert result.stdout.count("30 EUR") == 1  # the fourth question was answered
 
 
 # --- A database or a ledger that cannot be reached or read -------------------------------------------

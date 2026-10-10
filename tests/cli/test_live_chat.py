@@ -21,8 +21,7 @@ from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from frontdesk.cli import live_chat
-from frontdesk.cli import main as cli_main
+from frontdesk.cli import runtime as cli_runtime
 from frontdesk.cli.main import app
 from frontdesk.conversation.turn import TurnRuntime
 from frontdesk.knowledge.embedders import HashEmbedder
@@ -242,14 +241,16 @@ def test_a_session_shows_the_banner_each_reply_and_what_it_cost(
         "cost: 0.0104 EUR \N{MIDDLE DOT} session 0.0104 EUR \N{MIDDLE DOT} left 7.99 EUR",
         "cost: 0.0104 EUR \N{MIDDLE DOT} session 0.0208 EUR \N{MIDDLE DOT} left 7.98 EUR",
     ]
-    # One ledger line per paid request, all under the one run of this session.
-    earlier, *paid = ledger(budget)
+    # The session proves the ledger first (a line of zero dollars), then one line per paid
+    # request, all under the one run of this session.
+    earlier, proof, *paid = ledger(budget)
     assert earlier["run"] == "earlier"
+    assert (proof["route"], proof["kind"], proof["usd"]) == (ROUTE, "preflight", 0.0)
     assert len(paid) == 2
     for entry in paid:
         assert (entry["route"], entry["kind"]) == (ROUTE, "chat")
         assert entry["usd"] == pytest.approx(0.013)
-    assert len({entry["run"] for entry in paid}) == 1
+    assert len({entry["run"] for entry in [proof, *paid]}) == 1
     assert RUN_ID.fullmatch(paid[0]["run"])
     assert sent == ["classifier", "classifier"]
 
@@ -304,7 +305,7 @@ def test_both_agents_are_metered_under_their_own_roles(
     assert "Klinika Demo has six free parking spaces behind the building." in result.stdout
     assert roles == ["classifier", "responder"]
     assert sent == ["classifier", "responder"]
-    assert [entry["kind"] for entry in ledger(budget)] == ["chat", "chat"]
+    assert [entry["kind"] for entry in ledger(budget)] == ["preflight", "chat", "chat"]
     assert "cost: 0.0208 EUR \N{MIDDLE DOT} session 0.0208 EUR" in result.stdout
 
 
@@ -350,7 +351,8 @@ def test_a_budget_with_no_room_stops_the_session_before_any_reply(
         "stopped: budget",
     ]
     assert sent == []  # nothing was sent
-    assert not budget.ledger_path.exists()  # nothing was spent
+    assert [entry["kind"] for entry in ledger(budget)] == ["preflight"]  # the proof, no spend
+    assert budget.spent_usd() == 0.0  # nothing was spent
     with budget.exclusive():  # and the budget was given back
         pass
 
@@ -380,7 +382,7 @@ def test_the_session_ends_when_the_budget_runs_out_in_the_middle(
         "stopped: budget",
     ]
     assert sent == ["classifier"]  # the third line was never read
-    assert len(ledger(budget)) == 1
+    assert [entry["kind"] for entry in ledger(budget)] == ["preflight", "chat"]
 
 
 @pytest.mark.db
@@ -413,7 +415,8 @@ def test_an_attempt_that_may_have_been_billed_is_a_ledger_line_and_part_of_the_c
     assert len(attempts) == 2  # the timeout was retried
     # The first attempt was sent and may have been billed in full: it counts at its reserve (32,000
     # tokens in, a cap of 600 out: 0.038 USD). The second counts what Google reported (0.013).
-    first, second = ledger(budget)
+    proof, first, second = ledger(budget)
+    assert proof["kind"] == "preflight"
     assert (first["kind"], first["usd"]) == ("chat-unconfirmed", pytest.approx(0.038))
     assert (second["kind"], second["usd"]) == ("chat", pytest.approx(0.013))
     assert "cost: 0.0510 EUR \N{MIDDLE DOT} session 0.0510 EUR \N{MIDDLE DOT} left 9.95 EUR" in (
@@ -525,8 +528,9 @@ def test_the_chat_writes_no_transcript_and_the_ledger_holds_amounts_only(
     assert result.exit_code == 0, result.output
     created = {path.name for path in tmp_path.iterdir()} - before
     assert created == {"spend.jsonl", "spend.jsonl.lock"}
-    [entry] = ledger(budget)
-    assert set(entry) == {"at", "run", "route", "kind", "usd"}
+    proof, entry = ledger(budget)  # the zero-dollar proof, then the one paid request
+    for line in (proof, entry):
+        assert set(line) == {"at", "run", "route", "kind", "usd"}
     assert "fisioterapia" not in budget.ledger_path.read_text(encoding="utf-8").lower()
 
 
@@ -538,15 +542,15 @@ def test_the_runtime_is_built_for_evaluation_data_only_when_live(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     built: list[tuple[dict[str, Any], TurnRuntime]] = []
-    real = cli_main.build_turn_runtime
+    real = cli_runtime.build_turn_runtime
 
     def spy(deployment: Any, **options: Any) -> TurnRuntime:
         runtime = real(deployment, **options)
         built.append((options, runtime))
         return runtime
 
-    monkeypatch.setattr(live_chat, "build_turn_runtime", spy)
-    monkeypatch.setattr(cli_main, "build_turn_runtime", spy)
+    # Both commands build their pipeline through the one shared builder.
+    monkeypatch.setattr(cli_runtime, "build_turn_runtime", spy)
     live_env = bootstrapped(tmp_path, businesses_dir, database)
     offline_env = env_file(
         tmp_path, businesses_dir / "demo-clinic", database, name="offline", route="offline-demo"
