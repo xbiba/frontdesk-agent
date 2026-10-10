@@ -80,7 +80,7 @@ async def test_without_a_breaker_a_run_that_keeps_failing_goes_on(tmp_path: Path
     await _fails(agent)
     await _fails(agent)
     assert rig.meter.stop_reason is None
-    assert rig.meter.consecutive_failures == 8
+    assert rig.meter.consecutive_failures == {"classifier": 8}
 
 
 # --- Failures of any kind ---------------------------------------------------------------------------
@@ -107,7 +107,7 @@ async def test_a_request_that_keeps_failing_ends_the_run_after_all_its_retries(
     assert rig.sleeps.waits == [2.0, 4.0, 8.0]
     assert len(ledger(rig.budget)) == billed
     assert rig.meter.stop_reason == reason
-    assert rig.meter.consecutive_failures == 4
+    assert rig.meter.consecutive_failures == {"classifier": 4}
     assert rig.meter.held_usd == 0.0
 
 
@@ -142,7 +142,7 @@ async def test_an_answer_without_usage_counts_as_a_failed_attempt(tmp_path: Path
     assert rig.meter.stop_reason is None
     await _request(agent)  # this one is answered too, and it is the third
     assert rig.meter.stop_reason == UNAVAILABLE
-    assert rig.meter.consecutive_failures == 3
+    assert rig.meter.consecutive_failures == {"classifier": 3}
     assert [kind for kind, _ in ledger(rig.budget)] == ["chat-unconfirmed"] * 3
 
 
@@ -181,7 +181,7 @@ async def test_a_request_that_fails_three_times_and_then_answers_is_not_an_outag
     assert model.requests == 4
     assert rig.sleeps.waits == [2.0, 4.0, 8.0]
     assert rig.meter.stop_reason is None
-    assert rig.meter.consecutive_failures == 0
+    assert rig.meter.consecutive_failures == {"classifier": 0}
 
 
 async def test_an_answer_between_the_failures_starts_the_count_again(tmp_path: Path) -> None:
@@ -196,17 +196,57 @@ async def test_an_answer_between_the_failures_starts_the_count_again(tmp_path: P
         else:
             await _fails(agent)
         assert rig.meter.stop_reason is None
-    assert rig.meter.consecutive_failures == 1  # the last one only
+    assert rig.meter.consecutive_failures == {"classifier": 1}  # the last one only
 
 
-async def test_the_count_runs_across_roles_and_requests(tmp_path: Path) -> None:
+async def test_each_role_counts_its_own_failures_in_a_row(tmp_path: Path) -> None:
+    # Review m3: one count for both roles let a role that fails alone go on for ever while the other
+    # one answered. Each role has its own, and the first to reach three stops the run.
     rig = _rig(tmp_path)
     classifier = Agent(rig.meter.wrap(ScriptedModel(status(400), status(400)), "classifier"))
-    responder = Agent(rig.meter.wrap(ScriptedModel(status(400)), "responder"))
+    responder = Agent(rig.meter.wrap(ScriptedModel(*[status(400)] * 3), "responder"))
     await _fails(classifier)
     await _fails(classifier)
-    assert rig.meter.stop_reason is None
-    await _fails(responder)  # a different agent on the same meter: the third in a row
+    await _fails(responder)
+    await _fails(responder)
+    assert rig.meter.stop_reason is None  # four failures in all, but two in a row for each role
+    assert rig.meter.consecutive_failures == {"classifier": 2, "responder": 2}
+    await _fails(responder)  # the responder's third in a row
+    assert rig.meter.stop_reason == UNAVAILABLE
+    assert rig.meter.stop_detail == (
+        "3 attempts of the responder in a row failed; the last request ended with HTTP 400"
+    )
+
+
+async def test_a_role_that_answers_resets_only_its_own_count(tmp_path: Path) -> None:
+    # Probe P5: the responder hangs while the classifier answers every time. The classifier's
+    # answers must not hide the responder's failures.
+    rig = _rig(tmp_path)
+    classifier = Agent(rig.meter.wrap(ScriptedModel(*[answer()] * 3), "classifier"))
+    responder = Agent(rig.meter.wrap(ScriptedModel(*[status(400)] * 3), "responder"))
+    for number in range(1, 4):
+        await _request(classifier)
+        assert rig.meter.stop_reason is None, f"stopped before the responder's failure {number}"
+        await _fails(responder)
+    assert rig.meter.stop_reason == UNAVAILABLE
+    assert rig.meter.consecutive_failures == {"classifier": 0, "responder": 3}
+
+
+async def test_a_role_that_answers_after_its_failures_is_clear_whatever_the_other_does(
+    tmp_path: Path,
+) -> None:
+    rig = _rig(tmp_path)
+    classifier = Agent(
+        rig.meter.wrap(ScriptedModel(status(400), status(400), answer()), "classifier")
+    )
+    responder = Agent(rig.meter.wrap(ScriptedModel(*[status(400)] * 4), "responder"))
+    await _fails(classifier)
+    await _fails(responder)
+    await _fails(classifier)
+    await _fails(responder)
+    await _request(classifier)  # its own answer clears the classifier's count only
+    assert rig.meter.consecutive_failures == {"classifier": 0, "responder": 2}
+    await _fails(responder)  # the responder's third, though the classifier answered since
     assert rig.meter.stop_reason == UNAVAILABLE
 
 
@@ -241,7 +281,7 @@ async def test_the_first_cause_of_a_stop_is_kept(
     monkeypatch.setattr(Budget, "record", cannot_write)
     with pytest.raises(httpx2.ReadError):
         await _request(agent)
-    assert rig.meter.consecutive_failures == 3
+    assert rig.meter.consecutive_failures == {"classifier": 3}
     assert rig.meter.stop_reason == "ledger"
 
 
@@ -256,7 +296,7 @@ async def test_a_request_the_budget_refused_was_never_an_attempt(tmp_path: Path)
         with pytest.raises(RunStoppedError, match="budget"):
             await _request(agent)
     assert model.requests == 0
-    assert rig.meter.consecutive_failures == 0
+    assert rig.meter.consecutive_failures == {}  # no role made an attempt
     assert rig.meter.stop_reason == "budget"
 
 
@@ -276,7 +316,7 @@ async def test_the_stop_says_how_many_attempts_failed_and_how_the_last_request_e
     assert rig.meter.stop_reason == UNAVAILABLE
     plural = "s" if attempts > 1 else ""
     assert rig.meter.stop_detail == (
-        f"{attempts} attempt{plural} in a row failed; the last request {how}"
+        f"{attempts} attempt{plural} of the classifier in a row failed; the last request {how}"
     )
 
 
@@ -286,8 +326,8 @@ async def test_the_stop_never_repeats_what_the_provider_wrote(tmp_path: Path) ->
 
     rig = _rig(tmp_path, breaker=1)
     await _fails(Agent(rig.meter.wrap(ScriptedModel(leaky), "classifier")))
-    assert (
-        rig.meter.stop_detail == "1 attempt in a row failed; the last request ended with HTTP 400"
+    assert rig.meter.stop_detail == (
+        "1 attempt of the classifier in a row failed; the last request ended with HTTP 400"
     )
 
 
@@ -295,5 +335,5 @@ async def test_a_usage_less_answer_is_described_as_such(tmp_path: Path) -> None:
     rig = _rig(tmp_path, breaker=1)
     await _request(Agent(rig.meter.wrap(ScriptedModel(silent), "classifier")))
     assert rig.meter.stop_detail == (
-        "1 attempt in a row failed; the last request was answered without usage"
+        "1 attempt of the classifier in a row failed; the last request was answered without usage"
     )

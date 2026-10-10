@@ -18,9 +18,11 @@ settles every attempt on its own:
 A 429 that outlives the attempts, a budget with no room, and a ledger that cannot be read or written
 each stop the run for good, so that it can resume later: after a stop no further request is sent.
 Each stop keeps its cause (`stop_detail`), so that the command line can say it. A run may also ask
-for a breaker: when a request ends in failure and the last few attempts have all failed, in whatever
-way, the run stops too. Without it an outage would use up the cap on reservations, because every
-attempt that was sent and brought nothing back is recorded at its reserve.
+for a breaker: when a request ends in failure and the last few attempts of its agent have all failed,
+in whatever way, the run stops too. Each agent (the classifier, the responder) counts its own, so
+that one that fails alone is not hidden by the other answering. Without the breaker an outage would
+use up the cap on reservations, because every attempt that was sent and brought nothing back is
+recorded at its reserve.
 Counted this way the ledger is an upper bound of what the provider billed, with two exceptions of one
 request each that no code can close: a process killed between a provider's answer and its ledger
 line loses that line, and so does the first request whose line a ledger that has become unwritable
@@ -136,7 +138,7 @@ class Meter:
         self._stop_reason: str | None = None
         self._stop_detail: str | None = None
         self._held = 0.0
-        self._failures = 0
+        self._failures: dict[str, int] = {}
 
     @property
     def stop_reason(self) -> str | None:
@@ -156,9 +158,10 @@ class Meter:
         return self._stop_detail
 
     @property
-    def consecutive_failures(self) -> int:
-        """The attempts in a row, up to now, that were not answered with usage."""
-        return self._failures
+    def consecutive_failures(self) -> dict[str, int]:
+        """For each agent that has made an attempt, the attempts in a row, up to now, that were not
+        answered with usage: what the breaker counts."""
+        return dict(self._failures)
 
     def _stop(self, reason: str, detail: str) -> None:
         if self._stop_reason is None:
@@ -238,11 +241,11 @@ class Meter:
         left) gives its hold back."""
         self._held = max(0.0, self._held - reserved)
 
-    def failed(self, reserved: float) -> None:
-        """An attempt that cost nothing (the provider answered with an error status, or the request
-        never left): it gives its hold back, and it is one more failure in a row."""
+    def failed(self, role: str, reserved: float) -> None:
+        """An attempt of `role` that cost nothing (the provider answered with an error status, or
+        the request never left): it gives its hold back, and it is one more failure in a row."""
         self.release(reserved)
-        self._failures += 1
+        self._failures[role] = self._failures.get(role, 0) + 1
 
     def _append(self, kind: str, usd: float) -> None:
         try:
@@ -281,7 +284,7 @@ class Meter:
             self.unconfirmed(role, reserved, seconds)
             return
         usd = self._price.cost(input_units=usage.input_tokens, output_units=usage.output_tokens)
-        self._failures = 0  # answered with usage: whatever failed before is behind the run
+        self._failures[role] = 0  # answered with usage: whatever this agent failed is behind it
         try:
             self._append("chat", usd)
         finally:
@@ -301,8 +304,8 @@ class Meter:
 
     def unconfirmed(self, role: str, usd: float, seconds: float) -> None:
         """A request that was sent but brought back no usage, recorded at its reserve `usd`, which
-        is also the hold it gives back. It is one more failure in a row."""
-        self._failures += 1
+        is also the hold it gives back. It is one more failure in a row for `role`."""
+        self._failures[role] = self._failures.get(role, 0) + 1
         try:
             self._append("chat-unconfirmed", usd)
         finally:
@@ -325,17 +328,21 @@ class Meter:
             STOP_RATE_LIMITED, "Google answered 429 (rate limited) at the last attempt of a request"
         )
 
-    def request_ended(self, error: BaseException | None) -> None:
-        """A request ended, with `error` or with an answer. When the breaker is on and the attempts
-        in a row that failed (an answer without usage is one) have reached its limit, the run stops:
-        the provider is not answering, and each further attempt that is sent without an answer
-        would be recorded at its reserve. The retries of the request that just ended were not cut
-        short: a request that fails three times and then answers has no failure left in the count."""
-        if self._breaker is None or self._failures < self._breaker:
+    def request_ended(self, role: str, error: BaseException | None) -> None:
+        """A request of `role` ended, with `error` or with an answer. When the breaker is on and
+        the attempts in a row that failed (an answer without usage is one) have reached its limit
+        for `role`, the run stops: the provider is not answering it, and each further attempt that
+        is sent without an answer would be recorded at its reserve. The retries of the request that
+        just ended were not cut short: a request that fails three times and then answers has no
+        failure left in the count."""
+        count = self._failures.get(role, 0)
+        if self._breaker is None or count < self._breaker:
             return
-        how = "was answered without usage" if error is None else f"ended with {_describe(error)}"
-        attempts = f"{self._failures} attempt{'s' if self._failures != 1 else ''}"
-        self._stop(STOP_UNAVAILABLE, f"{attempts} in a row failed; the last request {how}")
+        how = "was answered without usage" if error is None else _ending(error)
+        attempts = f"{count} attempt{'s' if count != 1 else ''}"
+        self._stop(
+            STOP_UNAVAILABLE, f"{attempts} of the {role} in a row failed; the last request {how}"
+        )
 
 
 def _request_bytes(messages: list[ModelMessage], parameters: ModelRequestParameters) -> int:
@@ -346,11 +353,11 @@ def _request_bytes(messages: list[ModelMessage], parameters: ModelRequestParamet
     )
 
 
-def _describe(error: BaseException) -> str:
+def _ending(error: BaseException) -> str:
     """How a request ended, without a word of what the provider wrote: a status or a type."""
     if isinstance(error, ModelHTTPError):
-        return f"HTTP {error.status_code}"
-    return type(error).__name__
+        return f"ended with HTTP {error.status_code}"
+    return f"ended with {type(error).__name__}"
 
 
 def _worth_retrying(error: Exception) -> bool:
@@ -379,9 +386,9 @@ class MeteredModel(WrapperModel):
         try:
             response = await self._attempts(messages, model_settings, model_request_parameters, cap)
         except BaseException as error:
-            self._meter.request_ended(error)
+            self._meter.request_ended(self._role, error)
             raise
-        self._meter.request_ended(None)
+        self._meter.request_ended(self._role, None)
         return response
 
     async def _attempts(
@@ -419,7 +426,7 @@ class MeteredModel(WrapperModel):
             response = await super().request(messages, model_settings, model_request_parameters)
         except UNBILLED:
             # An error status, or a request that never left: the provider billed nothing.
-            self._meter.failed(reserved)
+            self._meter.failed(self._role, reserved)
             raise
         except BaseException:
             # Sent, but no usage came back: the provider may have billed it. If the ledger cannot

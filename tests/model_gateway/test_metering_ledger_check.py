@@ -58,7 +58,7 @@ def test_the_check_is_not_a_request_and_not_a_call_of_the_run(tmp_path: Path) ->
     assert meter.drain() == ()  # no call to report
     assert meter.held_usd == 0.0
     assert meter.stop_reason is None
-    assert meter.consecutive_failures == 0
+    assert meter.consecutive_failures == {}
 
 
 def test_each_check_adds_its_own_line(tmp_path: Path) -> None:

@@ -353,8 +353,8 @@ def test_a_provider_that_keeps_answering_504_ends_the_run_with_exit_5_at_no_cost
 
     assert stopped.exit_code == 5
     assert stopped.stderr.splitlines() == [
-        "stopped: the model keeps failing (4 attempts in a row failed; the last request ended "
-        "with HTTP 504): run the same command later to resume"
+        "stopped: the model keeps failing (4 attempts of the classifier in a row failed; the last "
+        "request ended with HTTP 504): run the same command later to resume"
     ]
     assert "cases recorded: 0/3" in stopped.stdout
     assert sent == ["classifier"] * 4  # one request and its retries, not one case more
@@ -400,8 +400,8 @@ def test_three_failed_requests_in_a_row_end_the_run_whatever_their_kind(
 
     assert stopped.exit_code == 5
     assert stopped.stderr.splitlines() == [
-        "stopped: the model keeps failing (3 attempts in a row failed; the last request ended "
-        "with HTTP 403): run the same command later to resume",
+        "stopped: the model keeps failing (3 attempts of the classifier in a row failed; the last "
+        "request ended with HTTP 403): run the same command later to resume",
         "2 cases ended in a failure just before the stop and are not recorded: "
         "the same command runs them again (price-1, price-2)",
     ]

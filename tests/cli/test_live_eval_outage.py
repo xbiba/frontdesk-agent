@@ -18,7 +18,7 @@ import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 
 from frontdesk.conversation.turn import TURN_TIMEOUT_SECONDS
-from tests.cli.live_chat_helpers import PRICE, Install, bootstrapped
+from tests.cli.live_chat_helpers import PARKING, PRICE, Install, bootstrapped
 from tests.cli.live_eval_helpers import (
     eval_live,
     failures_in,
@@ -27,6 +27,7 @@ from tests.cli.live_eval_helpers import (
     recorded_cases,
     rules_of,
     write_cases,
+    write_parking_cases,
 )
 from tests.model_gateway.budget_helpers import write_budget
 
@@ -116,6 +117,45 @@ def test_resets_then_timeouts_leave_no_failed_case_in_the_evidence_after_the_res
 
     assert resumed.exit_code == 0, resumed.output
     assert recorded_cases(run_dir) == [f"price-{number}" for number in range(1, 5)]
+    assert set(rules_of(run_dir)) == {"pass"}
+    assert failures_in(run_dir) == 0
+
+
+def test_a_responder_that_hangs_while_the_classifier_answers_ends_the_run(
+    tmp_path: Path,
+    businesses_dir: Path,
+    database: tuple[str, str],
+    gemini: Install,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Probe P5: the classifier answers every request, so a count shared by both agents never
+    # reaches three. Each agent has its own, and the responder's failures in a row end the run.
+    sent = install_provider(
+        monkeypatch, PARKING, lambda role, number: _hang() if role == "responder" else None
+    )
+    limit = quick_turns(monkeypatch)
+    env = bootstrapped(tmp_path, businesses_dir, database)
+    budget, cases = write_budget(tmp_path, usd_per_eur=1.0), write_parking_cases(tmp_path, 6)
+    run_dir = tmp_path / "runs" / "live-1"
+
+    stopped = eval_live(env, budget, run_dir, cases)
+
+    assert stopped.exit_code == 5
+    assert sent == ["classifier", "responder"] * 3
+    assert recorded_cases(run_dir) == []
+    assert stopped.stderr.splitlines() == [
+        "stopped: the model keeps failing (3 attempts of the responder in a row failed; the last "
+        "request ended with CancelledError): run the same command later to resume",
+        "2 cases ended in a failure just before the stop and are not recorded: "
+        "the same command runs them again (parking-1, parking-2)",
+    ]
+
+    sent = gemini(PARKING)
+    limit.seconds = TURN_TIMEOUT_SECONDS
+    resumed = eval_live(env, budget, run_dir, cases)
+
+    assert resumed.exit_code == 0, resumed.output
+    assert recorded_cases(run_dir) == [f"parking-{number}" for number in range(1, 7)]
     assert set(rules_of(run_dir)) == {"pass"}
     assert failures_in(run_dir) == 0
 

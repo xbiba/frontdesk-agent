@@ -43,6 +43,22 @@ def write_cases(directory: Path, count: int = 2, *, name: str = "turns.yaml") ->
     return path
 
 
+def write_parking_cases(directory: Path, count: int = 2) -> Path:
+    """`count` questions that the documents answer. With the fake Gemini each costs two requests,
+    the classifier's and the responder's, which quotes the parking document."""
+    path = directory / "parking.yaml"
+    path.write_text(
+        "".join(
+            f"- id: parking-{number}\n"
+            '  message: "Is there parking near the clinic?"\n'
+            "  expect: {behaviour: answer, contains: ['parking']}\n"
+            for number in range(1, count + 1)
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def write_mixed_cases(directory: Path) -> Path:
     """A price question (one request), an emergency (the rules decide: no request) and a tagged
     price question."""
