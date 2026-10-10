@@ -154,3 +154,20 @@ async def test_a_request_already_in_flight_is_still_settled_after_a_stop(tmp_pat
     await Agent(meter.wrap(FunctionModel(model), "classifier")).run("x", model_settings=CAP)
     assert budget.spent_usd() > 0
     assert [call.agent for call in meter.drain()] == ["classifier"]
+
+
+async def test_a_second_cause_does_not_replace_the_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A rate limit ends the run while a request is away; then that request's own line cannot be
+    # written. The reason a run reports is the one that stopped it first.
+    meter = Meter(write_budget(tmp_path), route_id=ROUTE, run_id="run-1")
+    monkeypatch.setattr(Budget, "record", _cannot_write)
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        meter.rate_limited()
+        return ModelResponse(parts=[TextPart("ok")])
+
+    with pytest.raises(OSError, match="Read-only"):
+        await Agent(meter.wrap(FunctionModel(model), "classifier")).run("x", model_settings=CAP)
+    assert meter.stop_reason == "rate_limited"

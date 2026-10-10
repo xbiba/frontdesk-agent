@@ -21,7 +21,7 @@ from google.auth.credentials import Credentials as AuthCredentials
 from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from pydantic_ai import Agent, models
-from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
+from pydantic_ai.exceptions import ContentFilterError, ModelAPIError, ModelHTTPError
 
 from frontdesk.model_gateway.costs import Budget
 from frontdesk.model_gateway.factory import build_live_model, live_model_settings
@@ -143,6 +143,15 @@ def _not_json() -> httpx2.Response:
     return httpx2.Response(200, content=b"<html>not json</html>")
 
 
+def _blocked() -> httpx2.Response:
+    # The provider read the prompt and refused it: it reports the prompt tokens it counted.
+    body = {
+        "promptFeedback": {"blockReason": "SAFETY"},
+        "usageMetadata": {"promptTokenCount": 40, "totalTokenCount": 40},
+    }
+    return httpx2.Response(200, json=body)
+
+
 USAGE = {
     "promptTokenCount": 1_000,
     "candidatesTokenCount": 100,
@@ -194,6 +203,10 @@ ROWS = {
     "400": Row((_status(400),), (), [], ModelHTTPError),
     "connection reset": Row((_reset,), _unconfirmed(1), [], httpx2.RemoteProtocolError),
     "200 that is not JSON": Row((_not_json,), _unconfirmed(1), [], ModelAPIError),
+    # Answered with usage, though the agent then refuses the empty answer: the 40 tokens are billed.
+    "prompt blocked by the provider": Row(
+        (_blocked,), (("chat", 40 * 1.0 / 1_000_000),), [], ContentFilterError
+    ),
     # The attempts that cost nothing do not hide the one that may have cost everything.
     "timeout then 429": Row(
         (_timeout, _status(429), _status(429), _status(429)),
