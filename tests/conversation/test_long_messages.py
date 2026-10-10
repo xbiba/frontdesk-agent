@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from frontdesk.agent.vocab import Category
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import MAX_MESSAGE_CHARS, TurnOutcome, TurnRuntime, handle_message
+from frontdesk.safety.normalize import normalize
 from frontdesk.tenancy.pack import BusinessPack, FixedTextKey, Language
 from tests.conversation.helpers import classifier_model, document_responder, make_runtime
 from tests.timing import LINEAR_TIME_LIMIT_SECONDS
@@ -111,4 +112,39 @@ async def test_a_very_long_message_is_checked_in_linear_time(
     assert time.perf_counter() - started < LINEAR_TIME_LIMIT_SECONDS
     assert result.outcome is TurnOutcome.HANDOFF
     assert result.trace.rule == rule
+    assert prompts == []
+
+
+# U+33AF folds into six characters ("rad", a division slash, "s2"): a letter and 1,999 of them are
+# at the limit as written and 11,995 characters once normalized, where the personal-data patterns
+# take time that grows with the square of a long word (security review of the M3 plan). The letter
+# matters: without one, the message is caught earlier as empty.
+EXPANDING = "\N{SQUARE RAD OVER S SQUARED}"
+
+
+async def test_a_message_that_normalizes_past_the_limit_meets_only_the_emergency_rules(
+    clinic_pack: BusinessPack,
+) -> None:
+    prompts: list[str] = []
+    runtime = _runtime(clinic_pack, prompts)
+    message = "x" + EXPANDING * 1999
+    assert len(message) == MAX_MESSAGE_CHARS < len(normalize(message))
+    started = time.perf_counter()
+    result, _ = await handle_message(message, ConversationState(turns=1), runtime)
+    assert time.perf_counter() - started < LINEAR_TIME_LIMIT_SECONDS
+    assert result.outcome is TurnOutcome.HANDOFF
+    assert result.trace.rule == "too_long"
+    assert prompts == []
+
+
+async def test_an_emergency_in_a_message_that_normalizes_past_the_limit_is_still_found(
+    clinic_pack: BusinessPack,
+) -> None:
+    prompts: list[str] = []
+    runtime = _runtime(clinic_pack, prompts)
+    message = EXPANDING * 1900 + " " + EMERGENCY["en"]
+    assert len(message) < MAX_MESSAGE_CHARS < len(normalize(message))
+    result, _ = await handle_message(message, ConversationState(turns=1), runtime)
+    assert result.trace.rule == "emergency"
+    assert result.trace.category is Category.EMERGENCY
     assert prompts == []

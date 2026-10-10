@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
-from frontdesk.safety.normalize import normalize
+from frontdesk.safety.normalize import fold, normalize
 
 
 class Verdict(StrEnum):
@@ -303,10 +303,13 @@ _BIRTH: Final = _any(
 
 def personal_fields(text: str) -> frozenset[PersonalField]:
     normalized = normalize(text)
+    # The phone and email patterns read the raw text folded: an address with a fullwidth at sign
+    # and a number with zero-width spaces between its digits are what they look like (P57).
+    folded = fold(text)
     found: set[PersonalField] = set()
-    if _PHONE.search(_NOT_PHONE.sub(" ", text)):
+    if _PHONE.search(_NOT_PHONE.sub(" ", folded)):
         found.add(PersonalField.PHONE)
-    if _EMAIL.search(text):
+    if _EMAIL.search(folded):
         found.add(PersonalField.EMAIL)
     if _NAME.search(normalized):
         found.add(PersonalField.NAME)
@@ -325,6 +328,17 @@ def emergency_rule(text: str) -> str | None:
     checked for an emergency with this alone.
     """
     return "emergency" if EMERGENCY.search(normalize(text)) else None
+
+
+def rule_text_length(text: str) -> int:
+    """The length of the longest form of `text` a rule reads: as written, folded (the phone and
+    email patterns) or normalized (the others).
+
+    A compatibility character can fold into several: U+33AF becomes six, so a message under the
+    length limit as written could reach the patterns six times as long. The limit applies to this
+    length (security review of the M3 plan).
+    """
+    return max(len(text), len(fold(text)), len(normalize(text)))
 
 
 def evaluate(text: str, *, expected: frozenset[PersonalField] = frozenset()) -> RuleResult:

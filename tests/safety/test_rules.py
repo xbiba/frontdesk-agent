@@ -11,6 +11,7 @@ from frontdesk.safety.rules import (
     contains_diagnostic_language,
     emergency_rule,
     evaluate,
+    personal_fields,
 )
 from tests.timing import LINEAR_TIME_LIMIT_SECONDS
 
@@ -247,3 +248,30 @@ def test_the_emergency_net_alone_takes_time_linear_in_the_length(text: str) -> N
     started = time.perf_counter()
     assert emergency_rule(text) is None
     assert time.perf_counter() - started < LINEAR_TIME_LIMIT_SECONDS
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "My che\N{SOFT HYPHEN}st hurts",
+        "mi fa male il pet\N{ZERO WIDTH SPACE}to",
+        "kam dhimbje ne gjo\N{WORD JOINER}ks",
+        "\N{ZERO WIDTH NO-BREAK SPACE}non riesco a respi\N{ZERO WIDTH NON-JOINER}rare",
+    ],
+)
+def test_invisible_characters_do_not_hide_an_emergency(message: str) -> None:
+    assert evaluate(message).verdict is Verdict.EMERGENCY
+
+
+@pytest.mark.parametrize(
+    ("message", "field"),
+    [
+        ("scrivimi a mario\N{FULLWIDTH COMMERCIAL AT}example.com", PersonalField.EMAIL),
+        ("il mio numero è 333\N{ZERO WIDTH SPACE}123\N{ZERO WIDTH SPACE}4567", PersonalField.PHONE),
+        ("my number is \N{FULLWIDTH PLUS SIGN}355 69 123 4567", PersonalField.PHONE),
+    ],
+)
+def test_fullwidth_and_invisible_characters_do_not_hide_personal_data(
+    message: str, field: PersonalField
+) -> None:
+    assert field in personal_fields(message)
