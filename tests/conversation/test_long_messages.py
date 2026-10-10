@@ -148,3 +148,16 @@ async def test_an_emergency_in_a_message_that_normalizes_past_the_limit_is_still
     assert result.trace.rule == "emergency"
     assert result.trace.category is Category.EMERGENCY
     assert prompts == []
+
+
+async def test_a_message_that_folds_into_one_long_word_meets_only_the_emergency_rules(
+    clinic_pack: BusinessPack,
+) -> None:
+    # U+3316 folds into six letters yet normalizes to nothing: the folded text is the long one.
+    prompts: list[str] = []
+    runtime = _runtime(clinic_pack, prompts)
+    message = "x" + "\N{SQUARE KIROMEETORU}" * 1999
+    assert len(message) == MAX_MESSAGE_CHARS > len(normalize(message))
+    result, _ = await handle_message(message, ConversationState(turns=1), runtime)
+    assert result.trace.rule == "too_long"
+    assert prompts == []
