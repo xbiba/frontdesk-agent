@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
-from frontdesk.safety.normalize import normalize
+from frontdesk.safety.normalize import fold, normalize, space_invisible
 
 
 class Verdict(StrEnum):
@@ -301,18 +301,64 @@ _BIRTH: Final = _any(
 )
 
 
+def _normal_forms(text: str) -> tuple[str, ...]:
+    """The normalized forms of `text` that the word patterns read.
+
+    An invisible (format) character inside a word hides nothing once removed, which is how
+    `normalize` reads it. As the only separator between two words, removed, it would join them
+    ("chest", a zero-width space and "pain" would read "chestpain"), so the text is also read with
+    each such character as a space. A pattern that finds its phrase in either form has found it.
+    The second form is left out when it equals the first, and not even computed when the text has
+    no format character (nearly every message), which keeps the cost of a long text as it was.
+    """
+    removed = normalize(text)
+    spaced_text = space_invisible(text)
+    if spaced_text == text:
+        return (removed,)
+    spaced = normalize(spaced_text)
+    return (removed,) if spaced == removed else (removed, spaced)
+
+
+def _folded_forms(text: str) -> tuple[str, ...]:
+    """The folded forms of `text` that the phone pattern reads; the first is the email pattern's.
+
+    Folded with the invisible characters removed, the digits of a number they split are joined
+    ("333", a zero-width space, "123"). But a number whose only boundary with the word beside it
+    is an invisible character is glued to that word, and the pattern refuses digits that follow a
+    letter ("call", a zero-width space, "12345678"). So the text is also folded with each such
+    character read as a space, and a number found in either form is found. The email pattern has no
+    boundary to lose and reads the first form alone. The second form is left out when it equals
+    the first, and not even computed when the text has no format character.
+    """
+    removed = fold(text)
+    spaced_text = space_invisible(text)
+    if spaced_text == text:
+        return (removed,)
+    spaced = fold(spaced_text)
+    return (removed,) if spaced == removed else (removed, spaced)
+
+
+def _in_any_form(pattern: re.Pattern[str], forms: tuple[str, ...]) -> bool:
+    return any(pattern.search(form) for form in forms)
+
+
 def personal_fields(text: str) -> frozenset[PersonalField]:
-    normalized = normalize(text)
+    forms = _normal_forms(text)
+    # The phone and email patterns read the raw text folded: an address with a fullwidth at sign
+    # and a number with zero-width spaces between its digits are what they look like (P57). The
+    # phone pattern reads two folds (`_folded_forms`) and the text as written, where a symbol that
+    # folds into a letter, such as a circled "a", is not one yet; the email pattern reads the first.
+    folds = _folded_forms(text)
     found: set[PersonalField] = set()
-    if _PHONE.search(_NOT_PHONE.sub(" ", text)):
+    if any(_PHONE.search(_NOT_PHONE.sub(" ", form)) for form in (text, *folds)):
         found.add(PersonalField.PHONE)
-    if _EMAIL.search(text):
+    if _EMAIL.search(folds[0]):
         found.add(PersonalField.EMAIL)
-    if _NAME.search(normalized):
+    if _in_any_form(_NAME, forms):
         found.add(PersonalField.NAME)
-    if _IDENTITY.search(normalized):
+    if _in_any_form(_IDENTITY, forms):
         found.add(PersonalField.IDENTITY_DOCUMENT)
-    if _BIRTH.search(normalized):
+    if _in_any_form(_BIRTH, forms):
         found.add(PersonalField.BIRTH_DATE)
     return frozenset(found)
 
@@ -324,14 +370,29 @@ def emergency_rule(text: str) -> str | None:
     long word makes the email pattern quadratic), so a message too long for `evaluate` is still
     checked for an emergency with this alone.
     """
-    return "emergency" if EMERGENCY.search(normalize(text)) else None
+    return "emergency" if _in_any_form(EMERGENCY, _normal_forms(text)) else None
+
+
+def rule_text_length(text: str) -> int:
+    """The length of the longest form of `text` a rule reads: as written, folded (the phone and
+    email patterns) or normalized (the others), each of the last two with invisible characters
+    removed and with them read as spaces, `len(fold(space_invisible(text)))` and
+    `len(normalize(space_invisible(text)))`.
+
+    A compatibility character can fold into several: U+33AF becomes six, so a message under the
+    length limit as written could reach the patterns six times as long. An invisible character
+    read as a space can add a character too: a unit of U+33AF and one is seven characters spaced
+    and six removed. The limit applies to this length (security review of the M3 plan).
+    """
+    forms = (text, *_folded_forms(text), *_normal_forms(text))
+    return max(len(form) for form in forms)
 
 
 def evaluate(text: str, *, expected: frozenset[PersonalField] = frozenset()) -> RuleResult:
-    normalized = normalize(text)
-    if EMERGENCY.search(normalized):
+    forms = _normal_forms(text)
+    if _in_any_form(EMERGENCY, forms):
         return RuleResult(Verdict.EMERGENCY, "emergency")
-    if CLINICAL_ADVICE.search(normalized):
+    if _in_any_form(CLINICAL_ADVICE, forms):
         return RuleResult(Verdict.CLINICAL_ADVICE, "clinical_advice")
     unexpected = personal_fields(text) - expected
     if unexpected:
@@ -340,9 +401,9 @@ def evaluate(text: str, *, expected: frozenset[PersonalField] = frozenset()) -> 
 
 
 def contains_clinical_terms(text: str) -> bool:
-    normalized = normalize(text)
-    return bool(CLINICAL_TERMS.search(normalized) or CLINICAL_ADVICE.search(normalized))
+    forms = _normal_forms(text)
+    return _in_any_form(CLINICAL_TERMS, forms) or _in_any_form(CLINICAL_ADVICE, forms)
 
 
 def contains_diagnostic_language(text: str) -> bool:
-    return DIAGNOSTIC_LANGUAGE.search(normalize(text)) is not None
+    return _in_any_form(DIAGNOSTIC_LANGUAGE, _normal_forms(text))

@@ -4,6 +4,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from frontdesk.safety.normalize import fold, normalize, space_invisible
 from frontdesk.safety.rules import (
     PersonalField,
     Verdict,
@@ -11,6 +12,8 @@ from frontdesk.safety.rules import (
     contains_diagnostic_language,
     emergency_rule,
     evaluate,
+    personal_fields,
+    rule_text_length,
 )
 from tests.timing import LINEAR_TIME_LIMIT_SECONDS
 
@@ -247,3 +250,156 @@ def test_the_emergency_net_alone_takes_time_linear_in_the_length(text: str) -> N
     started = time.perf_counter()
     assert emergency_rule(text) is None
     assert time.perf_counter() - started < LINEAR_TIME_LIMIT_SECONDS
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "My che\N{SOFT HYPHEN}st hurts",
+        "mi fa male il pet\N{ZERO WIDTH SPACE}to",
+        "kam dhimbje ne gjo\N{WORD JOINER}ks",
+        "\N{ZERO WIDTH NO-BREAK SPACE}non riesco a respi\N{ZERO WIDTH NON-JOINER}rare",
+    ],
+)
+def test_invisible_characters_do_not_hide_an_emergency(message: str) -> None:
+    assert evaluate(message).verdict is Verdict.EMERGENCY
+
+
+# A phone number whose only boundary with a word beside it is an invisible character. With the
+# character removed the digits are glued to the letters, and the pattern refuses digits that follow
+# a letter; read as it was written, each of the first four was found (review of the Task 2 change).
+GLUED_PHONE_NUMBERS = [
+    "Tel\N{LEFT-TO-RIGHT MARK}355691234567",
+    "call\N{ZERO WIDTH SPACE}12345678",
+    "12345678\N{ZERO WIDTH SPACE}now",
+    "12345678\N{SOFT HYPHEN}now",
+    "call\N{ZERO WIDTH SPACE}333\N{SOFT HYPHEN}123\N{SOFT HYPHEN}4567",
+]
+
+# A phone number beside a symbol that folding turns into a letter, a hyphen or an underscore. As
+# written the symbol is none of those, so each was found before folding (re-review of Task 2).
+PHONE_NUMBERS_BESIDE_FOLDING_SYMBOLS = [
+    "12345678\N{CIRCLED LATIN SMALL LETTER A}",
+    "\N{CIRCLED LATIN SMALL LETTER A}12345678",
+    "\N{SMALL HYPHEN-MINUS}12345678",
+    "12345678\N{FULLWIDTH LOW LINE}",
+]
+
+# A phone number and an address written with fullwidth or invisible characters, and the field the
+# rules find in each. The tests of trace redaction read the same messages.
+DISGUISED_PERSONAL_DATA: list[tuple[str, PersonalField]] = [
+    ("scrivimi a mario\N{FULLWIDTH COMMERCIAL AT}example.com", PersonalField.EMAIL),
+    ("il mio numero è 333\N{ZERO WIDTH SPACE}123\N{ZERO WIDTH SPACE}4567", PersonalField.PHONE),
+    ("my number is \N{FULLWIDTH PLUS SIGN}355 69 123 4567", PersonalField.PHONE),
+    *[(message, PersonalField.PHONE) for message in GLUED_PHONE_NUMBERS],
+    *[(message, PersonalField.PHONE) for message in PHONE_NUMBERS_BESIDE_FOLDING_SYMBOLS],
+    # Two invisible characters in a row are two spaces when read as spaces, which splits the
+    # number in two: only the fold with the invisible characters removed joins it.
+    ("my number is 1234\N{ZERO WIDTH SPACE}\N{SOFT HYPHEN}5678", PersonalField.PHONE),
+    # A soft hyphen in the domain splits it when read as a space: only the removed fold finds it.
+    ("write to mario@exa\N{SOFT HYPHEN}mple.com", PersonalField.EMAIL),
+]
+
+
+@pytest.mark.parametrize(("message", "field"), DISGUISED_PERSONAL_DATA)
+def test_fullwidth_and_invisible_characters_do_not_hide_personal_data(
+    message: str, field: PersonalField
+) -> None:
+    assert field in personal_fields(message)
+
+
+@pytest.mark.parametrize("message", GLUED_PHONE_NUMBERS)
+def test_a_phone_number_glued_to_a_word_by_an_invisible_character_is_still_found(
+    message: str,
+) -> None:
+    assert evaluate(message).verdict is Verdict.PERSONAL_DATA
+
+
+# An invisible character that is the only separator between two words has to count as a space, as it
+# did before such characters were removed to keep words whole (P34): "chest", a zero-width space
+# and "pain" are two words, while "che", a zero-width space and "st" are one.
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "dolore al\N{ZERO WIDTH SPACE}petto",
+        "nuk marr\N{ZERO WIDTH SPACE}frymë",
+        "chest\N{ZERO WIDTH SPACE}pain",
+        "he isn't\N{WORD JOINER}breathing",
+    ],
+)
+def test_an_invisible_character_between_two_words_does_not_hide_an_emergency(
+    message: str,
+) -> None:
+    assert evaluate(message).verdict is Verdict.EMERGENCY
+    assert emergency_rule(message) == "emergency"
+
+
+def test_an_invisible_character_between_two_words_does_not_hide_clinical_advice() -> None:
+    message = "Che\N{ZERO WIDTH SPACE}farmaco devo prendere per la schiena?"
+    assert evaluate(message).verdict is Verdict.CLINICAL_ADVICE
+
+
+def test_an_emergency_found_in_either_form_wins_over_advice_found_in_the_other() -> None:
+    # With the invisible character removed only the question is found; read as a space, the
+    # emergency is too, and an emergency still outranks the question.
+    message = "what do i have, chest\N{ZERO WIDTH SPACE}pain"
+    assert evaluate(message).verdict is Verdict.EMERGENCY
+
+
+@pytest.mark.parametrize(
+    ("message", "field"),
+    [
+        ("date of\N{ZERO WIDTH SPACE}birth", PersonalField.BIRTH_DATE),
+        ("mi\N{ZERO WIDTH SPACE}chiamo Mario", PersonalField.NAME),
+        ("il mio codice\N{ZERO WIDTH SPACE}fiscale", PersonalField.IDENTITY_DOCUMENT),
+    ],
+)
+def test_an_invisible_character_between_two_words_does_not_hide_a_personal_field(
+    message: str, field: PersonalField
+) -> None:
+    assert field in personal_fields(message)
+
+
+def test_an_invisible_character_between_two_words_does_not_hide_clinical_terms() -> None:
+    assert contains_clinical_terms("mal\N{ZERO WIDTH SPACE}di testa")
+    assert contains_clinical_terms("what\N{ZERO WIDTH SPACE}do i have")
+
+
+def test_an_invisible_character_between_two_words_does_not_hide_diagnostic_language() -> None:
+    assert contains_diagnostic_language("you may\N{ZERO WIDTH SPACE}have strained it")
+
+
+def test_the_text_length_counts_invisible_characters_read_as_spaces() -> None:
+    # A unit of U+33AF and a zero-width space is 6 characters with the invisible one removed and 7
+    # with it read as a space, so 333 of them are 666 characters as written, 1,998 folded or
+    # normalized with the invisible characters removed, and read as spaces 2,330 normalized and
+    # 2,331 folded (the fold keeps the space after the last unit): under the 2,000 of a turn in
+    # every form but the last two.
+    message = ("\N{SQUARE RAD OVER S SQUARED}" + "\N{ZERO WIDTH SPACE}") * 333
+    assert (len(message), len(fold(message)), len(normalize(message))) == (666, 1_998, 1_998)
+    assert len(normalize(space_invisible(message))) == 2_330
+    assert len(fold(space_invisible(message))) == 2_331
+    assert rule_text_length(message) == 2_331
+
+
+def test_the_text_length_counts_the_text_as_written() -> None:
+    # A letter and its accent are one character folded, and the accent is dropped normalized: of
+    # the 3,000 characters as written only 1,500 are left in any form the rules read. (A text of
+    # one letter and many invisible characters would not do: read as spaces, they stay as long.)
+    message = "e\N{COMBINING ACUTE ACCENT}" * 1_500
+    assert (len(fold(message)), len(normalize(message))) == (1_500, 1_500)
+    assert rule_text_length(message) == len(message) == 3_000
+
+
+def test_the_text_length_counts_the_fold_with_invisible_characters_read_as_spaces() -> None:
+    # The phone pattern reads that fold too. U+3316 is six letters folded, none of them one for
+    # `normalize`, so 333 units of it and a zero-width space are 666 characters as written, 1,998
+    # folded with the invisible characters removed, nothing normalized, and 2,331 folded with them
+    # read as spaces (7 characters a unit): the longest form is one that `normalize` never makes.
+    message = ("\N{SQUARE KIROMEETORU}" + "\N{ZERO WIDTH SPACE}") * 333
+    assert (len(message), len(fold(message)), len(normalize(message))) == (666, 1_998, 0)
+    assert len(normalize(space_invisible(message))) == 0
+    assert len(fold(space_invisible(message))) == 2_331
+    assert rule_text_length(message) == 2_331

@@ -31,6 +31,8 @@ from frontdesk.conversation.turn import (
 from frontdesk.knowledge.evidence import Evidence
 from frontdesk.observability.logs import MetadataOnlyFormatter
 from frontdesk.observability.tracing import ALLOWED_ATTRIBUTES, record_metadata, redact, turn_span
+from frontdesk.safety.normalize import fold
+from frontdesk.safety.rules import PersonalField, personal_fields
 from frontdesk.shop.attempts import MAX_ORDER_LOOKUPS
 from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.loader import load_pack
@@ -41,6 +43,7 @@ from tests.conversation.helpers import (
     document_responder,
     make_runtime,
 )
+from tests.safety.test_rules import DISGUISED_PERSONAL_DATA
 from tests.timing import LINEAR_TIME_LIMIT_SECONDS
 
 Activate = Callable[..., sessionmaker[Session]]
@@ -504,6 +507,116 @@ def test_digits_inside_an_address_do_not_make_it_a_phone_number() -> None:
     assert redact("write to 12345678@b.example") == "write to [email]"
 
 
+# The rules read a phone number or an address folded: invisible characters removed, compatibility
+# forms such as a fullwidth at sign turned into plain ones. Redaction has to read them the same
+# way, or the trace keeps what the rules found (a parser differential found in review).
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param(
+            "call +355\N{ZERO WIDTH SPACE}69\N{ZERO WIDTH SPACE}123\N{ZERO WIDTH SPACE}4567",
+            "call [phone]",
+            id="zero-width-spaces-between-digit-groups",
+        ),
+        pytest.param(
+            "call +" + "\N{ZERO WIDTH SPACE}".join("355691234567"),
+            "call [phone]",
+            id="zero-width-spaces-between-digits",
+        ),
+        pytest.param(
+            "call +355\N{WORD JOINER}69\N{WORD JOINER}123\N{WORD JOINER}4567",
+            "call [phone]",
+            id="word-joiners-between-digit-groups",
+        ),
+        pytest.param(
+            "call +" + "\N{WORD JOINER}".join("355691234567"),
+            "call [phone]",
+            id="word-joiners-between-digits",
+        ),
+        # Circled digits are not decimal digits for "\d" until they are folded into plain ones.
+        pytest.param(
+            "call " + "".join(chr(0x2460 + number) for number in range(8)),
+            "call [phone]",
+            id="circled-digits",
+        ),
+        pytest.param(
+            "write to mario\N{FULLWIDTH COMMERCIAL AT}example.com",
+            "write to [email]",
+            id="fullwidth-at-sign",
+        ),
+        # "\w" does not match a soft hyphen: it used to cut the address, so that "mar" of the
+        # local part stayed in the trace, or all of it when the soft hyphen was in the domain.
+        pytest.param(
+            "write to mar\N{SOFT HYPHEN}io@example.com",
+            "write to [email]",
+            id="soft-hyphen-in-the-local-part",
+        ),
+        pytest.param(
+            "write to mario@exa\N{SOFT HYPHEN}mple.com",
+            "write to [email]",
+            id="soft-hyphen-in-the-domain",
+        ),
+    ],
+)
+def test_redaction_masks_what_the_rules_read_through_invisible_and_fullwidth_characters(
+    text: str, expected: str
+) -> None:
+    masked = redact(text)
+    assert masked == expected
+    assert re.search(r"\d{8,}", fold(masked)) is None
+    assert "@" not in masked
+    assert "\N{FULLWIDTH COMMERCIAL AT}" not in masked
+
+
+MASKS = {PersonalField.PHONE: "[phone]", PersonalField.EMAIL: "[email]"}
+
+
+@pytest.mark.parametrize(
+    "message", [message for message, field in DISGUISED_PERSONAL_DATA if field in MASKS]
+)
+def test_redaction_masks_every_phone_and_email_the_rules_find(message: str) -> None:
+    found = [field for field in MASKS if field in personal_fields(message)]
+    assert found  # the rules do flag this message
+    masked = redact(message)
+    for field in found:
+        assert MASKS[field] in masked
+    assert re.search(r"\d{8,}", fold(masked)) is None
+
+
+# The same agreement for any mix of the pieces of a phone number or an address, some of them
+# disguised: digits, separators, invisible characters, fullwidth and circled forms.
+PERSONAL_DATA_PIECES = [
+    *"0135",
+    "00",
+    "\N{FULLWIDTH DIGIT FIVE}",
+    "\N{CIRCLED DIGIT ONE}",
+    *" -.()+",
+    "\N{FULLWIDTH PLUS SIGN}",
+    "\N{ZERO WIDTH SPACE}",
+    "\N{WORD JOINER}",
+    "\N{SOFT HYPHEN}",
+    "a",
+    "mario",
+    "@",
+    "\N{FULLWIDTH COMMERCIAL AT}",
+    ".com",
+    "x@y.z",
+]
+
+
+@given(st.lists(st.sampled_from(PERSONAL_DATA_PIECES), max_size=40).map("".join))
+@example("0000000\N{CIRCLED DIGIT ONE}")
+@example("mar\N{SOFT HYPHEN}io@exa\N{SOFT HYPHEN}mple.com")
+def test_nothing_the_rules_find_as_a_phone_or_an_address_survives_redaction(text: str) -> None:
+    fields = personal_fields(text)
+    masked = redact(text)
+    if PersonalField.EMAIL in fields:
+        assert "[email]" in masked
+    if PersonalField.PHONE in fields:
+        assert "[phone]" in masked or "[email]" in masked  # the digits may sit inside an address
+    assert not [field for field in MASKS if field in personal_fields(masked)]
+
+
 @pytest.mark.parametrize(
     "text",
     [
@@ -512,6 +625,8 @@ def test_digits_inside_an_address_do_not_make_it_a_phone_number() -> None:
         pytest.param("a@" * 50_000, id="many-at-signs"),
         pytest.param("a@b.co+" * 14_000, id="addresses-joined-by-plus"),
         pytest.param("1 " * 50_000, id="digits"),
+        # Redaction folds the text first: each of these characters becomes 18 (in short words).
+        pytest.param(chr(0xFDFA) * 100_000, id="characters-that-expand"),
     ],
 )
 def test_redaction_takes_time_linear_in_the_length(text: str) -> None:

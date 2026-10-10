@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from frontdesk.agent.vocab import Category
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import MAX_MESSAGE_CHARS, TurnOutcome, TurnRuntime, handle_message
+from frontdesk.safety.normalize import normalize
+from frontdesk.safety.rules import rule_text_length
 from frontdesk.tenancy.pack import BusinessPack, FixedTextKey, Language
 from tests.conversation.helpers import classifier_model, document_responder, make_runtime
 from tests.timing import LINEAR_TIME_LIMIT_SECONDS
@@ -110,5 +112,91 @@ async def test_a_very_long_message_is_checked_in_linear_time(
     result, _ = await handle_message(message, ConversationState(turns=1), runtime)
     assert time.perf_counter() - started < LINEAR_TIME_LIMIT_SECONDS
     assert result.outcome is TurnOutcome.HANDOFF
+    assert result.trace.rule == rule
+    assert prompts == []
+
+
+# U+33AF folds into six characters ("rad", a division slash, "s2"): a letter and 1,999 of them are
+# at the limit as written and 11,995 characters once normalized, where the personal-data patterns
+# take time that grows with the square of a long word (security review of the M3 plan). The letter
+# matters: without one, the message is caught earlier as empty.
+EXPANDING = "\N{SQUARE RAD OVER S SQUARED}"
+
+
+async def test_a_message_that_normalizes_past_the_limit_meets_only_the_emergency_rules(
+    clinic_pack: BusinessPack,
+) -> None:
+    prompts: list[str] = []
+    runtime = _runtime(clinic_pack, prompts)
+    message = "x" + EXPANDING * 1999
+    assert len(message) == MAX_MESSAGE_CHARS < len(normalize(message))
+    started = time.perf_counter()
+    result, _ = await handle_message(message, ConversationState(turns=1), runtime)
+    assert time.perf_counter() - started < LINEAR_TIME_LIMIT_SECONDS
+    assert result.outcome is TurnOutcome.HANDOFF
+    assert result.trace.rule == "too_long"
+    assert prompts == []
+
+
+async def test_an_emergency_in_a_message_that_normalizes_past_the_limit_is_still_found(
+    clinic_pack: BusinessPack,
+) -> None:
+    prompts: list[str] = []
+    runtime = _runtime(clinic_pack, prompts)
+    message = EXPANDING * 1900 + " " + EMERGENCY["en"]
+    assert len(message) < MAX_MESSAGE_CHARS < len(normalize(message))
+    result, _ = await handle_message(message, ConversationState(turns=1), runtime)
+    assert result.trace.rule == "emergency"
+    assert result.trace.category is Category.EMERGENCY
+    assert prompts == []
+
+
+async def test_a_message_that_folds_into_one_long_word_meets_only_the_emergency_rules(
+    clinic_pack: BusinessPack,
+) -> None:
+    # U+3316 folds into six letters yet normalizes to nothing: the folded text is the long one.
+    prompts: list[str] = []
+    runtime = _runtime(clinic_pack, prompts)
+    message = "x" + "\N{SQUARE KIROMEETORU}" * 1999
+    assert len(message) == MAX_MESSAGE_CHARS > len(normalize(message))
+    result, _ = await handle_message(message, ConversationState(turns=1), runtime)
+    assert result.trace.rule == "too_long"
+    assert prompts == []
+
+
+# Where the limit falls. A phone number ends each message: only the full rules find it (the
+# emergency rules alone, which a message over the limit meets, do not), so a message stopped for
+# personal data got through the length check, and one that was handed to reception did not.
+PHONE = "+355 69 123 4567"
+AT_THE_LIMIT_AND_ONE_OVER = [
+    pytest.param(0, "personal_data:phone", id="at-the-limit"),
+    pytest.param(1, "too_long", id="one-over"),
+]
+
+
+@pytest.mark.parametrize(("over", "rule"), AT_THE_LIMIT_AND_ONE_OVER)
+async def test_a_message_of_the_limit_as_written_meets_the_rules_and_one_more_does_not(
+    clinic_pack: BusinessPack, over: int, rule: str
+) -> None:
+    prompts: list[str] = []
+    runtime = _runtime(clinic_pack, prompts)
+    message = _long("it", PHONE, size=MAX_MESSAGE_CHARS + over)
+    assert len(message) == rule_text_length(message) == MAX_MESSAGE_CHARS + over
+    result, _ = await handle_message(message, ConversationState(turns=1), runtime)
+    assert result.trace.rule == rule
+    assert prompts == []
+
+
+@pytest.mark.parametrize(("over", "rule"), AT_THE_LIMIT_AND_ONE_OVER)
+async def test_a_message_whose_longest_form_is_the_limit_meets_the_rules_and_one_more_does_not(
+    clinic_pack: BusinessPack, over: int, rule: str
+) -> None:
+    # Each of the five U+33AF at the end is six characters folded, five more than as written.
+    prompts: list[str] = []
+    runtime = _runtime(clinic_pack, prompts)
+    message = _long("it", f"{PHONE} {EXPANDING * 5}", size=MAX_MESSAGE_CHARS - 25 + over)
+    assert len(message) < MAX_MESSAGE_CHARS
+    assert rule_text_length(message) == MAX_MESSAGE_CHARS + over
+    result, _ = await handle_message(message, ConversationState(turns=1), runtime)
     assert result.trace.rule == rule
     assert prompts == []

@@ -55,7 +55,7 @@ from frontdesk.knowledge.facts import Catalog, load_catalog
 from frontdesk.observability.logs import log_event
 from frontdesk.observability.tracing import record_content, record_metadata, turn_span
 from frontdesk.safety.language import detect_language
-from frontdesk.safety.rules import Verdict, emergency_rule, evaluate
+from frontdesk.safety.rules import Verdict, emergency_rule, evaluate, rule_text_length
 from frontdesk.shop.attempts import consume_order_lookup
 from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.pack import BusinessPack, FixedTextKey, Language, Profile
@@ -192,7 +192,8 @@ async def _decide(
     stripped = text.strip()
     if not any(char.isalnum() for char in stripped):
         return _fixed(pack, language, FixedTextKey.CLARIFICATION, TurnTrace(rule="empty"))
-    if len(stripped) > MAX_MESSAGE_CHARS:
+    # The length as written first, so a very long message is not folded only to be measured.
+    if len(stripped) > MAX_MESSAGE_CHARS or rule_text_length(stripped) > MAX_MESSAGE_CHARS:
         # Too long for the other rules (not linear in the length), but not for the emergency ones.
         found = emergency_rule(stripped)
         if found is None:
