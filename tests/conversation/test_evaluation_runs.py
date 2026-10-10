@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic_ai import ModelResponse, ToolCallPart
+from pydantic_ai.messages import ModelMessage
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.conversation.evaluation import (
@@ -91,7 +95,7 @@ async def test_a_failing_case_is_reported_and_does_not_stop_the_run(
     assert (failed.language, failed.outcome, failed.intent) == ("it", "replied", "price")
     assert (failed.suite, failed.tags) == ("data_access", ("manipulated",))
     assert report.by_suite() == {"data_access": (0, 1)}
-    assert "| wrong | it | replied | FAIL: outcome: replied; missing text: 99 EUR |" in (
+    assert "| wrong | it | replied | pass | FAIL: outcome: replied; missing text: 99 EUR |" in (
         render_turn_markdown(report)
     )
 
@@ -244,3 +248,89 @@ async def test_the_shop_injection_case_accepts_a_clarification_that_spells_the_o
     report = await run_turn_eval(runtime, [case], route=ROUTE)
     assert report.ok, render_turn_markdown(report)
     assert report.results[0].outcome == "asked"
+
+
+async def test_a_crash_on_an_earlier_turn_fails_the_conversation(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    calls: list[int] = []
+
+    def classifier(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        calls.append(len(calls))
+        if len(calls) == 1:
+            raise RuntimeError("the model connection dropped")
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, HOURS)])
+
+    runtime = make_runtime(
+        clinic_pack,
+        activate_pack(clinic_pack),
+        FunctionModel(classifier),
+        document_responder(),
+    )
+    case = _case(
+        id="crash-then-hours",
+        messages=["Quanto costa la fisioterapia?", "Quali sono gli orari?"],
+        expect={"outcome": "replied", "intent": "hours"},
+    )
+    report = await run_turn_eval(runtime, [case], route=ROUTE)
+    assert report.results[0].failures == ("turn 1: handoff by failure: error",)
+    assert report.results[0].rule == "pass"
+
+
+# What the classifier can get wrong without the message being at fault (review I-1), each with the
+# reason the real validator gives. The ids "returns-it" and "dr-other" are not the clinic's.
+CLASSIFIER_SLIPS = [
+    pytest.param(
+        {"category": "administrative", "intent": "price", "service_ids": ["returns-it"]},
+        "unknown_service_id",
+        id="unknown-service",
+    ),
+    pytest.param(
+        {"category": "administrative", "intent": "doctor_info", "doctor_ids": ["dr-other"]},
+        "unknown_doctor_id",
+        id="unknown-doctor",
+    ),
+    pytest.param(
+        {"category": "orientation", "intent": "service_info", "problem_category_id": "heart"},
+        "unknown_problem_category",
+        id="unknown-problem-category",
+    ),
+    pytest.param(
+        {"category": "administrative", "intent": "general_question"},
+        "missing_general_question",
+        id="no-question",
+    ),
+    pytest.param(
+        {"category": "administrative", "intent": "general_question", "general_question": "   "},
+        "empty_text",
+        id="blank-question",
+    ),
+]
+
+
+@pytest.mark.parametrize(("output", "reason"), CLASSIFIER_SLIPS)
+async def test_a_handoff_case_fails_when_the_classifier_slipped_and_the_report_says_why(
+    activate_pack: Activate, clinic_pack: BusinessPack, output: dict[str, Any], reason: str
+) -> None:
+    runtime = make_runtime(
+        clinic_pack, activate_pack(clinic_pack), classifier_model(output), document_responder()
+    )
+    case = _case(id="slip", message="Ho una domanda", expect={"outcome": "handoff"})
+    report = await run_turn_eval(runtime, [case], route=ROUTE)
+    assert not report.ok
+    assert report.results[0].failures == (f"handoff by failure: {reason}",)
+    assert report.results[0].rejection == reason
+    assert json.loads(turn_report_json(report))["results"][0]["rejection"] == reason
+
+
+async def test_a_handoff_case_passes_when_the_business_designed_the_handoff(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    # The clinic looks up no orders: handing the person to reception is the answer, not a slip.
+    runtime = make_runtime(
+        clinic_pack, activate_pack(clinic_pack), classifier_model(ORDER), document_responder()
+    )
+    case = _case(id="no-orders", message="Dov'è il mio ordine?", expect={"outcome": "handoff"})
+    report = await run_turn_eval(runtime, [case], route=ROUTE)
+    assert report.ok, render_turn_markdown(report)
+    assert report.results[0].rejection == "intent_not_allowed"
