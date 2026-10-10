@@ -18,6 +18,17 @@ def strip_invisible(text: str) -> str:
     return "".join(char for char in text if unicodedata.category(char) != "Cf")
 
 
+def space_invisible(text: str) -> str:
+    """`text` with each format character (Unicode category Cf) read as a space.
+
+    The other reading of an invisible character. Removed (`strip_invisible`), it keeps a word whole;
+    but when it is the only separator between two words ("chest", a zero-width space, "pain"),
+    removing it joins them into one word that no rule reads. `normalize` kept such words apart
+    until it began to remove these characters. The rules read both forms.
+    """
+    return "".join(" " if unicodedata.category(char) == "Cf" else char for char in text)
+
+
 def fold(text: str) -> str:
     """`text` as the patterns that read raw text see it: invisible characters removed, then
     compatibility forms folded (NFKC), so that a fullwidth at sign is an "@" (final review P57)."""

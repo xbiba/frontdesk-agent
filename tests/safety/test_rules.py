@@ -4,6 +4,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from frontdesk.safety.normalize import fold, normalize, space_invisible
 from frontdesk.safety.rules import (
     PersonalField,
     Verdict,
@@ -12,6 +13,7 @@ from frontdesk.safety.rules import (
     emergency_rule,
     evaluate,
     personal_fields,
+    rule_text_length,
 )
 from tests.timing import LINEAR_TIME_LIMIT_SECONDS
 
@@ -275,3 +277,70 @@ def test_fullwidth_and_invisible_characters_do_not_hide_personal_data(
     message: str, field: PersonalField
 ) -> None:
     assert field in personal_fields(message)
+
+
+# An invisible character that is the only separator between two words has to count as a space, as it
+# did before such characters were removed to keep words whole (P34): "chest", a zero-width space
+# and "pain" are two words, while "che", a zero-width space and "st" are one.
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "dolore al\N{ZERO WIDTH SPACE}petto",
+        "nuk marr\N{ZERO WIDTH SPACE}frymë",
+        "chest\N{ZERO WIDTH SPACE}pain",
+        "he isn't\N{WORD JOINER}breathing",
+    ],
+)
+def test_an_invisible_character_between_two_words_does_not_hide_an_emergency(
+    message: str,
+) -> None:
+    assert evaluate(message).verdict is Verdict.EMERGENCY
+    assert emergency_rule(message) == "emergency"
+
+
+def test_an_invisible_character_between_two_words_does_not_hide_clinical_advice() -> None:
+    message = "Che\N{ZERO WIDTH SPACE}farmaco devo prendere per la schiena?"
+    assert evaluate(message).verdict is Verdict.CLINICAL_ADVICE
+
+
+def test_an_emergency_found_in_either_form_wins_over_advice_found_in_the_other() -> None:
+    # With the invisible character removed only the question is found; read as a space, the
+    # emergency is too, and an emergency still outranks the question.
+    message = "what do i have, chest\N{ZERO WIDTH SPACE}pain"
+    assert evaluate(message).verdict is Verdict.EMERGENCY
+
+
+@pytest.mark.parametrize(
+    ("message", "field"),
+    [
+        ("date of\N{ZERO WIDTH SPACE}birth", PersonalField.BIRTH_DATE),
+        ("mi\N{ZERO WIDTH SPACE}chiamo Mario", PersonalField.NAME),
+        ("il mio codice\N{ZERO WIDTH SPACE}fiscale", PersonalField.IDENTITY_DOCUMENT),
+    ],
+)
+def test_an_invisible_character_between_two_words_does_not_hide_a_personal_field(
+    message: str, field: PersonalField
+) -> None:
+    assert field in personal_fields(message)
+
+
+def test_an_invisible_character_between_two_words_does_not_hide_clinical_terms() -> None:
+    assert contains_clinical_terms("mal\N{ZERO WIDTH SPACE}di testa")
+    assert contains_clinical_terms("what\N{ZERO WIDTH SPACE}do i have")
+
+
+def test_an_invisible_character_between_two_words_does_not_hide_diagnostic_language() -> None:
+    assert contains_diagnostic_language("you may\N{ZERO WIDTH SPACE}have strained it")
+
+
+def test_the_text_length_counts_invisible_characters_read_as_spaces() -> None:
+    # A unit of U+33AF and a zero-width space is 6 characters with the invisible one removed and 7
+    # with it read as a space, so 333 of them are 666 characters as written, 1,998 folded or
+    # normalized with the invisible characters removed, and 2,330 read as spaces: under the 2,000
+    # of a turn in every form but the last.
+    message = ("\N{SQUARE RAD OVER S SQUARED}" + "\N{ZERO WIDTH SPACE}") * 333
+    assert (len(message), len(fold(message)), len(normalize(message))) == (666, 1_998, 1_998)
+    assert len(normalize(space_invisible(message))) == 2_330
+    assert rule_text_length(message) == 2_330

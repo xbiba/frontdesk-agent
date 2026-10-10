@@ -1,9 +1,11 @@
 import re
+import unicodedata
 
+import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from frontdesk.safety.normalize import fold, normalize, strip_diacritics, tokens
+from frontdesk.safety.normalize import fold, normalize, space_invisible, strip_diacritics, tokens
 
 
 def test_albanian_and_italian_diacritics_are_removed() -> None:
@@ -63,3 +65,25 @@ def test_an_invisible_character_anywhere_changes_nothing(
 ) -> None:
     at = position % (len(text) + 1)
     assert normalize(text[:at] + invisible + text[at:]) == normalize(text)
+
+
+@pytest.mark.parametrize("invisible", INVISIBLE)
+def test_space_invisible_reads_each_invisible_character_as_a_space(invisible: str) -> None:
+    assert space_invisible(f"chest{invisible}pain") == "chest pain"
+
+
+def test_space_invisible_leaves_everything_else_as_it_is() -> None:
+    # Marks, blanks, punctuation and compatibility forms are not format characters.
+    letter_with_mark = "e\N{COMBINING ACUTE ACCENT}"
+    others = "\N{NO-BREAK SPACE}-\N{FULLWIDTH LATIN SMALL LETTER A}\N{LATIN SMALL LIGATURE FI}"
+    assert space_invisible(letter_with_mark + others) == letter_with_mark + others
+
+
+@given(st.text())
+def test_space_invisible_replaces_only_format_characters_one_for_one(text: str) -> None:
+    spaced = space_invisible(text)
+    assert len(spaced) == len(text)
+    assert all(
+        new == old or (new == " " and unicodedata.category(old) == "Cf")
+        for old, new in zip(text, spaced, strict=True)
+    )
