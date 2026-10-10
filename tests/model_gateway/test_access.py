@@ -48,7 +48,7 @@ def test_proxy_and_certificate_variables_are_named_in_either_case() -> None:
         "PATH": "/bin",
         "ALL_PROXY": " ",
     }
-    assert environment_overrides(environ) == ("HTTPS_PROXY", "SSL_CERT_FILE")
+    assert environment_overrides(environ) == ("https_proxy", "SSL_CERT_FILE")
     assert environment_overrides({"NO_PROXY": "localhost"}) == ()
 
 
@@ -96,8 +96,25 @@ async def test_each_failure_says_what_to_do(error: Exception, advice: str) -> No
 def test_every_variable_that_moves_a_request_or_its_billing_is_an_override(name: str) -> None:
     assert name in ENVIRONMENT_OVERRIDES
     assert environment_overrides({name: "x"}) == (name,)
-    assert environment_overrides({name.lower(): "x"}) == (name,)
+    assert environment_overrides({name.lower(): "x"}) == (name.lower(),)  # named as it is set
     assert environment_overrides({name: " \t"}) == ()  # set to nothing: nothing is overridden
+
+
+def test_a_variable_is_named_as_the_shell_sets_it_so_that_unsetting_the_name_works() -> None:
+    environ = {
+        "https_proxy": "http://p:3128",
+        "HTTPS_PROXY": "http://q:3128",
+        "Http_Proxy": "http://r:3128",
+        "SSL_CERT_FILE": "/ca.pem",
+        "PATH": "/bin",
+    }
+    named = environment_overrides(environ)
+    # Each once, sorted by name without regard to case (then as spelled).
+    assert named == ("HTTPS_PROXY", "https_proxy", "Http_Proxy", "SSL_CERT_FILE")
+    for name in named:
+        del environ[name]  # `unset NAME`, as the line advises
+    assert environment_overrides(environ) == ()
+    assert environ == {"PATH": "/bin"}
 
 
 def test_the_overrides_are_found_among_the_variables_of_a_real_environment() -> None:

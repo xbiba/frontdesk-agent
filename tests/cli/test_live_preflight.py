@@ -89,7 +89,8 @@ def test_every_variable_that_is_set_is_named_in_either_case(
 
     result = start(env, write_budget(tmp_path), tmp_path)
 
-    assert refused(result).endswith("unset HTTPS_PROXY, SSL_CERT_FILE")
+    # Each is named as it is set: `unset https_proxy` is what unsets it.
+    assert refused(result).endswith("unset https_proxy, SSL_CERT_FILE")
 
 
 @pytest.mark.db

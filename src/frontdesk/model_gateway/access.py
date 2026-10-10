@@ -43,9 +43,15 @@ class RouteAccessError(RuntimeError):
 
 
 def environment_overrides(environ: Mapping[str, str]) -> tuple[str, ...]:
-    """The proxy and certificate variables that are set, in either case, sorted."""
-    names = {name.upper() for name, value in environ.items() if value.strip()}
-    return tuple(sorted(names & set(ENVIRONMENT_OVERRIDES)))
+    """The proxy and certificate variables that are set, in either case, each named as it is set
+    (`https_proxy`, not `HTTPS_PROXY`), so that `unset NAME` is the advice that works. Sorted by
+    name without regard to case."""
+    found = [
+        name
+        for name, value in environ.items()
+        if name.upper() in ENVIRONMENT_OVERRIDES and value.strip()
+    ]
+    return tuple(sorted(found, key=lambda name: (name.upper(), name)))
 
 
 async def check_route_access(
