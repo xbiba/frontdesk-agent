@@ -30,6 +30,7 @@ from frontdesk.cli.live_common import (
     check_access,
     eur_left,
     refuse_environment_overrides,
+    refuse_retired,
     spent_usd,
 )
 from frontdesk.cli.runtime import build_runtime, fail
@@ -176,13 +177,15 @@ def run_live_chat(
 
 
 def _live_route(route_id: str, env_file: Path) -> ModelRoute:
-    """The route to chat on: one that evaluation data may reach and that calls a live model."""
+    """The route to chat on: one that evaluation data may reach, that calls a live model, and that
+    Google has not retired."""
     try:
         route = require_route(route_id, DataClass.EVALUATION)
     except UnapprovedRouteError as error:
         raise fail(f"{error} (--env-file {env_file})") from error
     if route.provider not in CHAT_PROVIDERS:
         raise fail(f"--live needs a live model route; FRONTDESK_MODEL_ROUTE is {route_id}")
+    refuse_retired(route)  # as an evaluation does: a retired model is refused from its day
     return route
 
 

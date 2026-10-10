@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -15,7 +17,7 @@ from click.testing import Result
 
 from frontdesk.model_gateway.access import ENVIRONMENT_OVERRIDES, RouteAccessError
 from frontdesk.model_gateway.costs import Budget, load_budget
-from frontdesk.model_gateway.routes import UnapprovedRouteError
+from frontdesk.model_gateway.routes import ROUTES, UnapprovedRouteError
 from tests.cli.conftest import AccessChecks
 from tests.cli.live_chat_helpers import (
     PRICE,
@@ -112,6 +114,68 @@ def test_a_dry_run_on_the_offline_route_goes_through_a_proxy_for_nothing_so_it_i
     assert result.exit_code == 0, result.output
     assert access_checks.calls == []  # nothing to prove: the route calls no model
     assert not budget.ledger_path.exists()  # and nothing to count
+
+
+# --- A model Google has retired ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("start", COMMANDS)
+def test_a_model_google_has_retired_stops_a_live_command_cold(
+    start: Start,
+    tmp_path: Path,
+    businesses_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    access_checks: AccessChecks,
+) -> None:
+    # Review m4: the chat had no retirement check. Both commands refuse from the day it retires.
+    today = datetime.now(UTC).date()
+    monkeypatch.setitem(ROUTES, ROUTE, replace(ROUTES[ROUTE], retires_on=today))
+    env = env_file(tmp_path, businesses_dir / "demo-clinic")  # no database: nothing was opened
+    budget = write_budget(tmp_path)
+
+    result = start(env, budget, tmp_path)
+
+    assert refused(result) == (
+        f"error: route '{ROUTE}': Google retired gemini-3.1-flash-lite on {today}"
+    )
+    assert access_checks.calls == []
+    assert not budget.ledger_path.exists()
+    assert not (tmp_path / LOCK).exists()  # it did not even take the budget
+    assert not (tmp_path / "run").exists()
+
+
+def test_a_route_that_answers_no_message_is_refused_as_such_even_when_it_is_retired(
+    tmp_path: Path, businesses_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    embedding = "vertex-ew1-gemini-embedding-001"
+    today = datetime.now(UTC).date()
+    monkeypatch.setitem(ROUTES, embedding, replace(ROUTES[embedding], retires_on=today))
+    env = env_file(tmp_path, businesses_dir / "demo-clinic", route=embedding, project=None)
+
+    result = live(env, write_budget(tmp_path), input="Ciao\n")
+
+    assert refused(result) == (
+        f"error: --live needs a live model route; FRONTDESK_MODEL_ROUTE is {embedding}"
+    )
+
+
+@pytest.mark.db
+def test_a_model_that_retires_tomorrow_still_chats(
+    tmp_path: Path,
+    businesses_dir: Path,
+    database: tuple[str, str],
+    gemini: Install,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tomorrow = datetime.now(UTC).date() + timedelta(days=1)
+    monkeypatch.setitem(ROUTES, ROUTE, replace(ROUTES[ROUTE], retires_on=tomorrow))
+    gemini(PRICE)
+    env = bootstrapped(tmp_path, businesses_dir, database)
+
+    result = live(env, write_budget(tmp_path), input="exit\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Live: gemini-3.1-flash-lite" in result.stdout
 
 
 # --- The free request that proves the route ---------------------------------------------------------

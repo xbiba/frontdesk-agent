@@ -29,6 +29,7 @@ from frontdesk.cli.live_common import (
     check_access,
     eur_left,
     refuse_environment_overrides,
+    refuse_retired,
     spent_usd,
 )
 from frontdesk.cli.runtime import build_runtime, fail
@@ -126,8 +127,7 @@ def evaluation_route(route_id: str) -> ModelRoute:
             pinned_location(route)
     except UnapprovedRouteError as error:
         raise fail(str(error)) from error
-    if route.retires_on is not None and route.retires_on <= datetime.now(UTC).date():
-        raise fail(f"route '{route_id}': Google retired {route.model_name} on {route.retires_on}")
+    refuse_retired(route)
     return route
 
 

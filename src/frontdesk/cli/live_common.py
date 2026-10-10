@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Mapping
+from datetime import UTC, datetime
 
 from frontdesk.cli.runtime import fail
 from frontdesk.model_gateway.access import (
@@ -30,6 +31,14 @@ def refuse_environment_overrides(environ: Mapping[str, str] | None = None) -> No
         raise fail(
             "a live run does not go through proxies, other certificates or another billing "
             "project: unset " + ", ".join(overrides)
+        )
+
+
+def refuse_retired(route: ModelRoute) -> None:
+    """Refuse a route whose model Google has retired: from the day it retires, not the day after."""
+    if route.retires_on is not None and route.retires_on <= datetime.now(UTC).date():
+        raise fail(
+            f"route '{route.route_id}': Google retired {route.model_name} on {route.retires_on}"
         )
 
 
