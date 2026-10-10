@@ -198,21 +198,13 @@ def load_labels(path: Path, cases: Sequence[TurnCase]) -> dict[str, Label]:
     """The labels of a run; no file means no label yet. Every problem is reported at once."""
     if not path.exists():
         return {}
-    try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except OSError as error:
-        raise LabelsError(f"{path}: cannot be read ({error.strerror or error})") from error
-    except UnicodeDecodeError as error:
-        raise LabelsError(f"{path}: not valid UTF-8 text (save the file as UTF-8)") from error
-    except yaml.YAMLError as error:
-        raise LabelsError(f"{path}: invalid YAML{_where(error)}") from error
+    raw, problems = _read_labels(path)
     if raw is None:  # an empty file, or only comments: nothing reviewed yet
         return {}
     if not isinstance(raw, dict):
         raise LabelsError(f"{path}: expected a mapping of case id to label")
     known = {case.id for case in cases}
     labels: dict[str, Label] = {}
-    problems: list[str] = []
     for case_id, item in raw.items():
         if case_id not in known:
             problems.append(f"{path}: '{case_id}' is not a case of this run")
@@ -226,6 +218,48 @@ def load_labels(path: Path, cases: Sequence[TurnCase]) -> dict[str, Label]:
     if problems:
         raise LabelsError("\n".join(problems))
     return labels
+
+
+def _read_labels(path: Path) -> tuple[object, list[str]]:
+    """The parsed file, and the problems found in it already: a case or a field given twice, which
+    PyYAML would keep the last of without a word."""
+    try:
+        text = path.read_text(encoding="utf-8")
+        return yaml.safe_load(text), _repeats(path, yaml.compose(text, Loader=yaml.SafeLoader))
+    except OSError as error:
+        raise LabelsError(f"{path}: cannot be read ({error.strerror or error})") from error
+    except UnicodeDecodeError as error:
+        raise LabelsError(f"{path}: not valid UTF-8 text (save the file as UTF-8)") from error
+    except yaml.YAMLError as error:
+        raise LabelsError(f"{path}: invalid YAML{_where(error)}") from error
+
+
+def _repeats(path: Path, root: yaml.Node | None) -> list[str]:
+    """Every case of the file, and every field of a case, that is given more than once."""
+    if not isinstance(root, yaml.MappingNode):
+        return []
+    found = _repeated_keys(path, root, "case")
+    for key, value in root.value:
+        if isinstance(value, yaml.MappingNode) and isinstance(key, yaml.ScalarNode):
+            found += _repeated_keys(path, value, f"case '{key.value}': field")
+    return found
+
+
+def _repeated_keys(path: Path, mapping: yaml.MappingNode, what: str) -> list[str]:
+    first: dict[str, int] = {}
+    found: list[str] = []
+    for key, _ in mapping.value:
+        if not isinstance(key, yaml.ScalarNode):
+            continue
+        line = key.start_mark.line + 1
+        if key.value in first:
+            found.append(
+                f"{path}: line {line}: {what} '{key.value}' is given twice "
+                f"(first at line {first[key.value]})"
+            )
+        else:
+            first[key.value] = line
+    return found
 
 
 def _where(error: yaml.YAMLError) -> str:
