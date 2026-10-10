@@ -265,6 +265,29 @@ async def test_whatever_stops_the_run_drops_the_cases_held(
 
 
 @db
+async def test_a_run_that_is_cancelled_loses_the_cases_held_and_runs_them_again(
+    activate_pack: Activate, clinic_pack: BusinessPack, tmp_path: Path
+) -> None:
+    # Ctrl-C reaches the run as a cancellation: what was held back goes with it, like the case that
+    # was away, and the same command runs both again.
+    def cancelled() -> None:
+        raise asyncio.CancelledError
+
+    cases = _single_turn_cases("a", "b")
+    rig = Rig(
+        clinic_pack, activate_pack(clinic_pack), tmp_path, on_request={1: _reset, 2: cancelled}
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await rig.start(cases)
+    assert read_turns(rig.files) == ()
+
+    resumed = await rig.start(cases)
+    assert (resumed.done, resumed.stopped) == (2, None)
+    assert _rules(read_turns(rig.files)) == [("a", 1, "pass"), ("b", 1, "pass")]
+
+
+@db
 async def test_a_case_the_model_got_wrong_is_no_outage_and_is_recorded_at_once(
     activate_pack: Activate, clinic_pack: BusinessPack, tmp_path: Path
 ) -> None:
