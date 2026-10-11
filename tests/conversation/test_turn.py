@@ -211,10 +211,6 @@ async def test_empty_emoji_and_long_messages_skip_the_models(
             },
             "text_has_clinical_terms",
         ),
-        (
-            {"category": "orientation", "intent": "service_info", "problem_category_id": "heart"},
-            "unknown_problem_category",
-        ),
         ({"category": "administrative", "intent": "order_status"}, "intent_not_allowed"),
         (
             {"category": "administrative", "intent": "price", "order_reference": "ORD-10427"},

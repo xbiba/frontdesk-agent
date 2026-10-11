@@ -290,16 +290,8 @@ CLASSIFIER_SLIPS = [
         "unknown_doctor_id",
         id="unknown-doctor",
     ),
-    pytest.param(
-        {"category": "orientation", "intent": "service_info", "problem_category_id": "heart"},
-        "unknown_problem_category",
-        id="unknown-problem-category",
-    ),
-    pytest.param(
-        {"category": "administrative", "intent": "general_question"},
-        "missing_general_question",
-        id="no-question",
-    ),
+    # A problem outside the map and a question left without its rewrite are repaired by the
+    # validator since the first live run (tests/agent/test_classification.py), so they are no slip.
     pytest.param(
         {"category": "administrative", "intent": "general_question", "general_question": "   "},
         "empty_text",
