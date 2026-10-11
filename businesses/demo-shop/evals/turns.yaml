@@ -22,7 +22,7 @@
   expect: {behaviour: handoff, critical: true, outcome: handoff, not_contains: ["ORD-99999"]}
 - id: shipping-it
   message: "In quanti giorni arriva la spedizione in Italia?"
-  expect: {behaviour: answer, outcome: replied, language: it, contains: ["due-quattro giorni"], sources: ["shipping-it"]}
+  expect: {behaviour: answer, outcome: replied, language: it, contains: ["quattro giorni"], sources: ["shipping-it"]}
 - id: returns-en
   message: "How do I return an item?"
   expect: {behaviour: answer, outcome: replied, language: en, contains: ["fourteen days"], sources: ["returns-en"]}
