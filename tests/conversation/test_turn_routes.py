@@ -24,7 +24,6 @@ from frontdesk.agent.classifier import CLASSIFIER_LIMITS
 from frontdesk.agent.prompts import load_prompt
 from frontdesk.agent.responder import RESPONDER_LIMITS
 from frontdesk.agent.vocab import Category, ClarifyField, Intent
-from frontdesk.conversation.compose import closing
 from frontdesk.conversation.preload import fact_evidence
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import RESPONDER_CLARIFY_FIELDS, TurnOutcome, handle_message
@@ -432,7 +431,7 @@ async def test_address_hours_and_contacts_are_written_from_the_location_record(
     )
     result, _ = await handle_message("Dove siete?", ConversationState(turns=1), runtime)
     assert result.outcome is TurnOutcome.REPLIED
-    assert result.text == f"{lines}\n\n{closing('it')}"
+    assert result.text == lines
     assert result.trace.sources == ("location:main",)
     assert prompts == []
 
@@ -448,7 +447,7 @@ async def test_a_doctor_is_written_from_the_record_and_becomes_the_topic(
         "Cosa fa il dottor Arben?", ConversationState(turns=1), runtime
     )
     assert result.outcome is TurnOutcome.REPLIED
-    assert result.text == f"Dr. Arben Demo: Visita ortopedica\n\n{closing('it')}"
+    assert result.text == "Dr. Arben Demo: Visita ortopedica"
     assert result.trace.sources == ("doctor:dr-arben-demo",)
     assert (state.topic_doctor_ids, state.topic_service_ids) == (("dr-arben-demo",), ())
 
@@ -523,7 +522,7 @@ async def test_the_shop_writes_its_hours_from_the_record(
     )
     result, _ = await handle_message("Quando siete aperti?", ConversationState(turns=1), runtime)
     assert result.outcome is TurnOutcome.REPLIED
-    assert result.text == f"Orari: mar-sab 10:00-19:30\n\n{closing('it')}"
+    assert result.text == "Orari: mar-sab 10:00-19:30"
 
 
 async def test_the_shop_answers_a_returns_question_from_its_documents(
@@ -608,7 +607,8 @@ async def test_a_price_question_says_which_service_has_no_price(
     assert result.trace.sources == ("price:physiotherapy",)
 
 
-async def test_a_price_question_with_every_record_keeps_the_closing_question(
+# A pack without a next step adds no closing: the generic question read as a bot.
+async def test_a_price_question_with_every_record_ends_with_the_records(
     activate_pack: Activate, clinic_pack: BusinessPack
 ) -> None:
     args = {
@@ -623,9 +623,7 @@ async def test_a_price_question_with_every_record_keeps_the_closing_question(
         "Quanto costano fisioterapia e visita ortopedica?", ConversationState(turns=1), runtime
     )
     assert result.outcome is TurnOutcome.REPLIED
-    assert result.text == (
-        f"Fisioterapia: 30 EUR (a seduta)\nVisita ortopedica: 40 EUR\n\n{closing('it')}"
-    )
+    assert result.text == "Fisioterapia: 30 EUR (a seduta)\nVisita ortopedica: 40 EUR"
 
 
 @pytest.mark.parametrize(

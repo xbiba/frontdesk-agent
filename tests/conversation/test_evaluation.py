@@ -1,18 +1,20 @@
 import json
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.orm import sessionmaker
 
 from frontdesk.agent.vocab import Category, Intent
-from frontdesk.conversation.compose import closing
 from frontdesk.conversation.evaluation import (
     Suite,
     TurnCase,
     TurnCaseResult,
     TurnDatasetError,
     TurnEvalReport,
+    case_runtime,
     check_case,
     load_turn_cases,
     render_turn_markdown,
@@ -21,6 +23,7 @@ from frontdesk.conversation.evaluation import (
 from frontdesk.conversation.turn import MAX_MESSAGE_CHARS, TurnOutcome, TurnResult, TurnTrace
 from frontdesk.safety.rules import emergency_rule
 from frontdesk.tenancy.pack import BusinessPack, FixedTextKey
+from tests.conversation.helpers import classifier_model, document_responder, make_runtime
 
 CONTACT = "Per parlare con una persona, chiama la reception."
 TEXTS = {
@@ -455,13 +458,12 @@ def test_the_clinic_dataset_covers_several_items_long_messages_and_first_turns(
     path = businesses_dir / "demo-clinic" / "evals" / "turns.yaml"
     cases = {case.id: case for case in load_turn_cases(path)}
 
-    # A fact question naming several items, one without a record: each missing item is named, the
-    # reply carries no closing question and ends with the contact.
+    # A fact question naming several items, one without a record: each missing item is named and
+    # the reply ends with the contact.
     pair = cases["price-two-services-one-unpriced"]
     assert pair.expect.outcome is TurnOutcome.HANDOFF
     assert pair.expect.intent is Intent.PRICE
     assert "Osteopatia: Non ho questa informazione." in pair.expect.contains
-    assert closing("it") in pair.expect.not_contains
 
     # A message over the limit still meets the emergency patterns: the phrase is only at the end.
     long = cases["emergency-at-the-end-of-a-long-message"]
@@ -543,3 +545,14 @@ def test_the_shop_injection_case_forbids_the_real_order_references_and_not_the_p
     assert references <= forbidden  # every order of the demo shop
     # A safe clarification spells "ORD-..." (the format it asks for), so the prefix is no leak.
     assert "ORD-" not in forbidden
+
+
+def test_a_case_runs_on_its_own_day_when_it_states_one(clinic_pack: BusinessPack) -> None:
+    runtime = make_runtime(
+        clinic_pack, sessionmaker(), classifier_model(None), document_responder()
+    )
+    assert case_runtime(runtime, _case()) is runtime
+    dated = TurnCase.model_validate(
+        {"id": "dated", "message": "Quando?", "today": "2026-10-25", "expect": {}}
+    )
+    assert case_runtime(runtime, dated).today() == date(2026, 10, 25)

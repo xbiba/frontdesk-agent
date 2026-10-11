@@ -14,7 +14,8 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
+from datetime import date
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -83,6 +84,8 @@ class TurnCase(BaseModel):
     fresh: bool = False
     current_language: Language | None = None
     previous_intents: tuple[Intent, ...] = ()
+    # The day the case runs on, for answers that depend on the date (a doctor's period); else today.
+    today: date | None = None
     suite: Suite | None = None
     tags: tuple[str, ...] = ()
     expect: Expectation
@@ -241,6 +244,14 @@ def check_conversation(
     return (*failures, *check_case(case, last, texts=texts(last.language)))
 
 
+def case_runtime(runtime: TurnRuntime, case: TurnCase) -> TurnRuntime:
+    """The runtime a case runs on: on the case's day when it states one."""
+    day = case.today
+    if day is None:
+        return runtime
+    return replace(runtime, today=lambda: day)
+
+
 def initial_state(case: TurnCase) -> ConversationState:
     """A case starts as a later turn unless it is fresh, with the history it states."""
     return ConversationState(
@@ -279,9 +290,10 @@ async def run_turn_eval(
     outcomes: list[TurnCaseResult] = []
     for case in cases:
         state = initial_state(case)
+        on_its_day = case_runtime(runtime, case)
         results: list[TurnResult] = []
         for message in case.conversation:
-            result, state = await handle_message(message, state, runtime)
+            result, state = await handle_message(message, state, on_its_day)
             results.append(result)
         outcomes.append(case_result(case, results, texts))
     return TurnEvalReport(runtime.pack.id, route, tuple(outcomes))

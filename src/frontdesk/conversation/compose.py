@@ -45,18 +45,10 @@ _ORIENTATION: Final[dict[str, str]] = {
 # An orientation reply always offers a person as well, because the health boundary relies on it.
 # The offer is a question and promises nothing; answering "reception" is the `human` intent, which
 # gets the contact. The Albanian wording still needs a native speaker's review.
-_CLOSINGS: Final[dict[str, dict[str, str]]] = {
-    "default": {
-        "sq": "Mund t'ju ndihmoj me diçka tjetër?",
-        # Neither "tu" nor "Lei": the closing fits every pack's register (Clinica MCU uses Lei).
-        "it": "C'è altro in cui posso essere utile?",
-        "en": "Can I help with anything else?",
-    },
-    "orientation": {
-        "sq": "Doni të dini çmimet ose oraret, apo preferoni të flisni me recepsionin?",
-        "it": "Vuoi sapere prezzi o orari, o preferisci parlare con la reception?",
-        "en": "Would you like prices or opening hours, or would you rather talk to reception?",
-    },
+_ORIENTATION_QUESTION: Final[dict[str, str]] = {
+    "sq": "Doni të dini çmimet ose oraret, apo preferoni të flisni me recepsionin?",
+    "it": "Vuoi sapere prezzi o orari, o preferisci parlare con la reception?",
+    "en": "Would you like prices or opening hours, or would you rather talk to reception?",
 }
 _CLARIFY: Final[dict[ClarifyField, dict[str, str]]] = {
     ClarifyField.SERVICE: {
@@ -79,25 +71,26 @@ _EXAMPLES: Final[dict[str, str]] = {"sq": "Për shembull", "it": "Per esempio", 
 MAX_EXAMPLES: Final = 5
 
 
-def closing(language: Language) -> str:
-    return _CLOSINGS["default"][language]
-
-
 def compose_facts(
     fields: ValidatedFields,
     facts: Sequence[Evidence],
     *,
     with_closing: bool = True,
+    next_step: str | None = None,
     missing: Sequence[str] = (),
 ) -> str | None:
+    """The records' lines, then the closing paragraph: orientation's question, or else the pack's
+    next step when the turn has one. No generic closing question: it read as a bot (Albi's review
+    of the first MCU run, 2026-10-11)."""
     lines = _fact_lines(fields, facts)
     if not lines:
         return None
-    lines = [*lines, *missing]
+    text = "\n".join([*lines, *missing])
     if not with_closing:
-        return "\n".join(lines)
-    kind = "orientation" if fields.category is Category.ORIENTATION else "default"
-    return "\n".join(lines) + "\n\n" + _CLOSINGS[kind][fields.language]
+        return text
+    if fields.category is Category.ORIENTATION:
+        return f"{text}\n\n{_ORIENTATION_QUESTION[fields.language]}"
+    return f"{text}\n\n{next_step}" if next_step else text
 
 
 def clarify_question(field: ClarifyField, language: Language, catalog: Catalog) -> str:

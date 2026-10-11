@@ -12,7 +12,6 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.agent.vocab import ClarifyField
-from frontdesk.conversation.compose import closing
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, handle_message
 from frontdesk.tenancy.pack import BusinessPack, FixedTextKey
@@ -57,8 +56,7 @@ async def test_prices_are_written_from_the_record_without_the_responder(
     )
     assert result.outcome is TurnOutcome.REPLIED
     assert result.text == (
-        f"{_text(clinic_pack, 'it', FixedTextKey.DISCLOSURE)}\n\n"
-        f"Fisioterapia: 30 EUR (a seduta)\n\n{closing('it')}"
+        f"{_text(clinic_pack, 'it', FixedTextKey.DISCLOSURE)}\n\nFisioterapia: 30 EUR (a seduta)"
     )
     assert result.trace.sources == ("price:physiotherapy",)
     assert prompts == []

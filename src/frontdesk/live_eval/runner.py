@@ -29,7 +29,7 @@ from datetime import UTC, datetime
 from typing import Final
 
 from frontdesk.conversation.behaviour import FAILURE_RULES
-from frontdesk.conversation.evaluation import TurnCase, initial_state
+from frontdesk.conversation.evaluation import TurnCase, case_runtime, initial_state
 from frontdesk.conversation.turn import RejectedDraft, TurnResult, TurnRuntime, handle_message
 from frontdesk.live_eval.records import (
     CallRow,
@@ -148,6 +148,7 @@ async def _run_case(
     """The turns of one case, or None when the meter stopped the run in the middle of it."""
     attempt = uuid.uuid4().hex[:12]
     state = initial_state(case)
+    runtime = case_runtime(runtime, case)
     records: list[TurnRecord] = []
     if meter is not None:
         meter.drain()

@@ -42,7 +42,6 @@ from frontdesk.agent.vocab import ADMINISTRATIVE_INTENTS, Category, ClarifyField
 from frontdesk.conversation.compose import (
     FACT_INTENTS,
     clarify_question,
-    closing,
     compose_facts,
     unanswered,
 )
@@ -187,7 +186,7 @@ async def handle_message(
         )
         record_content(span, enabled=runtime.capture_content, message=text, reply=result.text)
     _log_turn(result, runtime.pack.id)
-    return result, _next_state(state, result)
+    return result, _next_state(state, result, runtime.pack)
 
 
 async def _run_turn(text: str, state: ConversationState, runtime: TurnRuntime) -> TurnResult:
@@ -313,15 +312,28 @@ async def _answer(
 ) -> TurnResult:
     pack = runtime.pack
     language = fields.language
+    next_step = _next_step(pack, fields, state) if with_closing else None
     if fields.intent is Intent.ORDER_STATUS:
-        return await _order_reply(fields, state, catalog, runtime, trace, with_closing=with_closing)
+        return await _order_reply(
+            fields, state, catalog, runtime, trace, with_closing=with_closing, next_step=next_step
+        )
     if fields.category is Category.ORIENTATION or fields.intent in FACT_INTENTS:
         missing = _missing_field(fields)
         if missing is not None:
             return _clarify(catalog, language, missing, trace)
         facts = await asyncio.to_thread(_facts, fields, runtime)
-        return _facts_reply(pack, fields, facts, catalog, trace, with_closing=with_closing)
-    return await _document_answer(fields, catalog, runtime, trace, with_closing=with_closing)
+        return _facts_reply(
+            pack, fields, facts, catalog, trace, with_closing=with_closing, next_step=next_step
+        )
+    return await _document_answer(fields, catalog, runtime, trace, next_step=next_step)
+
+
+def _next_step(pack: BusinessPack, fields: ValidatedFields, state: ConversationState) -> str | None:
+    """The pack's next step (how to book) for this answer: once per conversation, and never after
+    the contact itself, which the step would only repeat."""
+    if state.next_step_shown or fields.intent is Intent.CONTACT:
+        return None
+    return pack.fixed_texts[fields.language].get(FixedTextKey.NEXT_STEP)
 
 
 async def _order_reply(
@@ -332,6 +344,7 @@ async def _order_reply(
     trace: TurnTrace,
     *,
     with_closing: bool,
+    next_step: str | None,
 ) -> TurnResult:
     pack = runtime.pack
     language = fields.language
@@ -348,7 +361,9 @@ async def _order_reply(
         return _handoff(pack, language, FixedTextKey.HANDOFF, exhausted)
     found = runtime.orders.lookup(reference, postal_code, language=language, now=now)
     facts = [found] if found is not None else []
-    return _facts_reply(pack, fields, facts, catalog, trace, with_closing=with_closing)
+    return _facts_reply(
+        pack, fields, facts, catalog, trace, with_closing=with_closing, next_step=next_step
+    )
 
 
 def _order_details(fields: ValidatedFields) -> tuple[str, str] | None:
@@ -383,6 +398,7 @@ def _facts_reply(
     trace: TurnTrace,
     *,
     with_closing: bool,
+    next_step: str | None,
 ) -> TurnResult:
     language = fields.language
     listed = [item for item in facts if item.kind is not EvidenceKind.LIVE]
@@ -397,7 +413,9 @@ def _facts_reply(
         f"{_asked_name(catalog, fields, item)}: {no_information}"
         for item in unanswered(fields, facts)
     ]
-    text = compose_facts(fields, facts, with_closing=with_closing and not absent, missing=absent)
+    text = compose_facts(
+        fields, facts, with_closing=with_closing and not absent, next_step=next_step, missing=absent
+    )
     if text is None:
         return _handoff(pack, language, FixedTextKey.NO_INFORMATION, checked)
     if absent:
@@ -418,7 +436,7 @@ async def _document_answer(
     runtime: TurnRuntime,
     trace: TurnTrace,
     *,
-    with_closing: bool,
+    next_step: str | None,
 ) -> TurnResult:
     pack = runtime.pack
     language = fields.language
@@ -428,7 +446,9 @@ async def _document_answer(
     )
     try:
         run = await runtime.responder.run(
-            render_turn_prompt(fields, preload), deps=deps, usage_limits=RESPONDER_LIMITS
+            render_turn_prompt(fields, preload, today=runtime.today()),
+            deps=deps,
+            usage_limits=RESPONDER_LIMITS,
         )
     except AgentRunError as error:
         log_event(logger, "responder.failed", business_id=pack.id, reason=type(error).__name__)
@@ -461,7 +481,8 @@ async def _document_answer(
         # The passage sends the person to the business: the system writes the contact from the
         # pack, as it writes every contact; the model was told never to (live review, 2026-10-11).
         text = f"{text}\n\n{_fixed_text(pack, language, FixedTextKey.HANDOFF)}"
-    text = f"{text}\n\n{closing(language)}" if with_closing else text
+    elif next_step:
+        text = f"{text}\n\n{next_step}"
     return TurnResult(text, TurnOutcome.REPLIED, language, checked)
 
 
@@ -561,8 +582,11 @@ def _log_turn(result: TurnResult, business_id: str) -> None:
     )
 
 
-def _next_state(state: ConversationState, result: TurnResult) -> ConversationState:
+def _next_state(
+    state: ConversationState, result: TurnResult, pack: BusinessPack
+) -> ConversationState:
     trace = result.trace
+    step = pack.fixed_texts[result.language].get(FixedTextKey.NEXT_STEP)
     return state.advanced(
         language=result.language,
         intent=trace.intent,
@@ -570,6 +594,7 @@ def _next_state(state: ConversationState, result: TurnResult) -> ConversationSta
         service_ids=trace.service_ids,
         doctor_ids=trace.doctor_ids,
         clarify=trace.clarify,
+        next_step_shown=step is not None and step in result.text,
     )
 
 
