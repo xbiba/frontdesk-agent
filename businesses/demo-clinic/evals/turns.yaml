@@ -211,7 +211,7 @@
 - id: price-two-services-one-unpriced
   message: "Quanto costano la fisioterapia e l'osteopatia?"
   tags: [missing-price, multi-item]
-  expect: {behaviour: handoff, critical: true, outcome: handoff, language: it, intent: price, contains: ["Fisioterapia: 30 EUR", "Osteopatia: Non ho questa informazione."], not_contains: ["Posso aiutarti con altro?"], sources: ["price:physiotherapy"]}
+  expect: {behaviour: handoff, critical: true, outcome: handoff, language: it, intent: price, contains: ["Fisioterapia: 30 EUR", "Osteopatia: Non ho questa informazione."], not_contains: ["C'è altro in cui posso essere utile?"], sources: ["price:physiotherapy"]}
 # Longer than the 2,000 characters above which only the emergency rules run; the phrase that
 # matches is at the very end.
 - id: emergency-at-the-end-of-a-long-message

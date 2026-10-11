@@ -19,6 +19,7 @@ Rules:
 - Questions about what a service is, how it works or how to prepare for it are general_question, with the service in service_ids.
 - A service named in any language or spelling ("osteopatia", "fizioterapi") goes in service_ids with its ID.
 - Payment methods, insurance, documents to bring and similar practical information are general_question, not price.
+- When a doctor is at the clinic, on which days or dates, is general_question, with the doctor in doctor_ids.
 - Follow-ups such as "how much is it?" or "and on Saturday?" refer to the topic and the previous intents you are given: reuse them.
 - When the assistant has just asked for a service or a doctor, an answer that names one keeps the previous intent.
 - "operator", "a person", "reception" and similar mean intent human.

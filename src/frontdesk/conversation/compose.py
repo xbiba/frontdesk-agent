@@ -48,7 +48,8 @@ _ORIENTATION: Final[dict[str, str]] = {
 _CLOSINGS: Final[dict[str, dict[str, str]]] = {
     "default": {
         "sq": "Mund t'ju ndihmoj me diçka tjetër?",
-        "it": "Posso aiutarti con altro?",
+        # Neither "tu" nor "Lei": the closing fits every pack's register (Clinica MCU uses Lei).
+        "it": "C'è altro in cui posso essere utile?",
         "en": "Can I help with anything else?",
     },
     "orientation": {
