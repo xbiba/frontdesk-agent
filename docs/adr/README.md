@@ -8,7 +8,7 @@ Each record uses the same headings: Status, Context, Options considered, Decisio
 | [0002](0002-pydantic-ai-agent-layer.md) | Pydantic AI as the agent layer | Accepted |
 | [0003](0003-google-calendar-for-bookings.md) | Google Calendar for bookings | Accepted |
 | [0004](0004-model-on-vertex-ai-eu.md) | A model on Vertex AI in the EU, chosen by evaluation (today Gemini 3.1 Flash-Lite) | Accepted, amended in M3 |
-| [0005](0005-embeddings-chosen-by-evaluation.md) | Embeddings and reranking chosen by evaluation | Proposed |
+| [0005](0005-embeddings-chosen-by-evaluation.md) | Embeddings and reranking chosen by evaluation | Accepted |
 | [0006](0006-deterministic-rules-and-declared-health-boundary.md) | Deterministic rules and a declared health-data boundary | Accepted |
 | [0007](0007-public-code-private-business-configuration.md) | Public code, private business configuration | Accepted |
 | [0008](0008-one-deployment-per-business.md) | One deployment per business | Accepted |
