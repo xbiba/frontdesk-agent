@@ -159,9 +159,11 @@ def _repaired(
     """What the model was seen to leave out or write wrong, repaired where that is safe (the first
     live run, 2026-10-11): a service written by its name instead of its ID; a health problem that
     fits no category of the map, which gets the clinical notice; a general question left without
-    its rewrite, for which the person's own words stand in, held to the same filter."""
+    its rewrite, for which the person's own words stand in, held to the same filter, unless they
+    describe symptoms, which get the clinical notice. A business without services has no service
+    for the model to name."""
     update: dict[str, object] = {}
-    named = _service_ids_by_name(output.service_ids, catalog)
+    named = _service_ids_by_name(output.service_ids, catalog) if catalog.services else ()
     if named != tuple(output.service_ids):
         update["service_ids"] = list(named)
     if (
@@ -175,7 +177,10 @@ def _repaired(
             "problem_category_id": None,
         }
     if output.intent is Intent.GENERAL_QUESTION and not output.general_question and message.strip():
-        update["general_question"] = message.strip()
+        if contains_clinical_terms(message):
+            update |= {"category": Category.CLINICAL, "intent": Intent.OTHER}
+        else:
+            update["general_question"] = message.strip()
     return output.model_copy(update=update) if update else output
 
 
