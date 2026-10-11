@@ -23,6 +23,12 @@ The model is the one the M3 live evaluations choose on Vertex AI in the EU; toda
 - Claude on Vertex AI (`vertex-eu-opus`) has no server-side refusal fallback, an Anthropic API feature; a refusal, from any route, becomes the fixed reply plus handoff.
 - The retirement date of the pinned version is part of its route; a version change is an engine change with its test.
 - The results of the M3 evaluations are recorded in [`docs/evals`](../evals/README.md).
+- Measured on the demo packs after the tuning of M3 (2026-10-11, [results](../evals/2026-10-m3-live-demo.md)):
+  - right answers refused: 0% in en, it and sq, on 1 to 3 document questions per language (the MCU run measures it on at least 10);
+  - p95 time per reply: 0.9 to 2.2 s;
+  - cost: about 0.00025 EUR per message;
+  - M3 spend so far: 0.09 EUR of 10.
+  The output caps (classifier 600, responder 1,200) are kept; the largest seen was 58 and 118 tokens, with no reply cut. The MCU run is recorded in the private configuration repository.
 
 ## Exit plan
 Routes are data in `frontdesk.model_gateway.routes`; a new route is one entry plus its evaluation results, a Haiku route one entry with provider `anthropic-vertex`. A new Vertex AI location also needs an entry in `VERTEX_HOSTS` (`frontdesk.model_gateway.factory`), which pins the host it calls.
