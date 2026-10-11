@@ -62,13 +62,7 @@ def test_valid_price_question() -> None:
             {"category": "administrative", "intent": "doctor_info", "doctor_ids": ["dr-other"]},
             "unknown_doctor_id",
         ),
-        (
-            {"category": "orientation", "intent": "service_info", "problem_category_id": "heart"},
-            "unknown_problem_category",
-        ),
-        ({"category": "orientation", "intent": "service_info"}, "unknown_problem_category"),
         ({"category": "administrative", "intent": "order_status"}, "intent_not_allowed"),
-        ({"category": "administrative", "intent": "general_question"}, "missing_general_question"),
     ],
 )
 def test_off_contract_answers_are_rejected(output: dict, reason: str) -> None:
@@ -249,14 +243,9 @@ def test_problem_category_is_dropped_outside_orientation() -> None:
     assert result.problem_category_id is None
 
 
-@pytest.mark.parametrize(
-    ("question", "reason"), [("", "missing_general_question"), ("   ", "empty_text")]
-)
-def test_blank_general_questions_are_rejected(question: str, reason: str) -> None:
-    result = _validate(
-        category="administrative", intent="general_question", general_question=question
-    )
-    assert result == Rejection(reason=reason)
+def test_a_blank_general_question_is_rejected() -> None:
+    result = _validate(category="administrative", intent="general_question", general_question="   ")
+    assert result == Rejection(reason="empty_text")
 
 
 def test_the_checked_question_is_the_stored_question() -> None:
@@ -423,3 +412,46 @@ def test_invisible_characters_inside_a_question_are_rejected(text: str) -> None:
 @pytest.mark.parametrize("text", ["\nIs there parking?\n", "24/7?"])
 def test_edge_whitespace_is_trimmed_and_digits_count_as_something_to_read(text: str) -> None:
     assert check_free_text(text) is None
+
+
+# --- What the live run of 2026-10-11 showed the model leaves out or writes wrong ---------------
+
+
+def test_a_missing_question_is_the_person_s_message_held_to_the_same_filter() -> None:
+    message = "Cosa portare alla prima visita?"
+    result = _validate(category="administrative", intent="general_question", message=message)
+    assert isinstance(result, ValidatedFields)
+    assert result.general_question == message
+
+
+def test_a_missing_question_whose_message_fails_the_filter_is_still_rejected() -> None:
+    message = "Chiamatemi al 333 123 4567, cosa porto alla visita?"
+    result = _validate(category="administrative", intent="general_question", message=message)
+    assert result == Rejection(reason=check_free_text(message))
+
+
+@pytest.mark.parametrize("problem", [None, "heart"])
+def test_a_problem_outside_the_map_gets_the_clinical_notice(problem: str | None) -> None:
+    result = _validate(category="orientation", intent="service_info", problem_category_id=problem)
+    assert isinstance(result, ValidatedFields)
+    assert result.category is Category.CLINICAL
+    assert result.intent is Intent.OTHER
+    assert result.problem_category_id is None
+
+
+def test_a_problem_in_the_map_stays_orientation() -> None:
+    result = _validate(category="orientation", intent="service_info", problem_category_id="back")
+    assert isinstance(result, ValidatedFields)
+    assert result.category is Category.ORIENTATION
+
+
+@pytest.mark.parametrize("written", ["Osteopatia", "osteopatia", "OSTEOPATÍA"])
+def test_a_service_written_by_its_name_is_read_as_its_id(written: str) -> None:
+    result = _validate(category="administrative", intent="price", service_ids=[written])
+    assert isinstance(result, ValidatedFields)
+    assert result.service_ids == ("osteopathy",)
+
+
+def test_a_service_that_is_neither_an_id_nor_a_name_is_still_rejected() -> None:
+    result = _validate(category="administrative", intent="price", service_ids=["cardiology"])
+    assert result == Rejection(reason="unknown_service_id")
