@@ -455,3 +455,24 @@ def test_a_service_written_by_its_name_is_read_as_its_id(written: str) -> None:
 def test_a_service_that_is_neither_an_id_nor_a_name_is_still_rejected() -> None:
     result = _validate(category="administrative", intent="price", service_ids=["cardiology"])
     assert result == Rejection(reason="unknown_service_id")
+
+
+def test_a_missing_question_that_describes_symptoms_gets_the_clinical_notice() -> None:
+    message = "Ho mal di schiena, da chi devo andare?"
+    result = _validate(category="administrative", intent="general_question", message=message)
+    assert isinstance(result, ValidatedFields)
+    assert (result.category, result.intent) == (Category.CLINICAL, Intent.OTHER)
+    assert result.general_question is None
+
+
+def test_a_business_without_services_ignores_the_service_the_model_names() -> None:
+    result = _validate(
+        SHOP_CATALOG,
+        SHOP,
+        category="administrative",
+        intent="general_question",
+        service_ids=["physiotherapy"],
+        general_question="How much is physiotherapy?",
+    )
+    assert isinstance(result, ValidatedFields)
+    assert result.service_ids == ()
