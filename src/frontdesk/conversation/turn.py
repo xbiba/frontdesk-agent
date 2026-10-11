@@ -456,8 +456,24 @@ async def _document_answer(
         return _handoff(pack, language, FixedTextKey.NO_INFORMATION, checked, draft=refused)
     if output.action is AnswerAction.CLARIFY:
         return _responder_clarify(pack, catalog, language, output.clarify, checked, draft=draft)
-    text = f"{check.text}\n\n{closing(language)}" if with_closing else check.text
+    text = check.text
+    if _names_a_contact(check.cited, pack):
+        # The passage sends the person to the business: the system writes the contact from the
+        # pack, as it writes every contact; the model was told never to (live review, 2026-10-11).
+        text = f"{text}\n\n{_fixed_text(pack, language, FixedTextKey.HANDOFF)}"
+    text = f"{text}\n\n{closing(language)}" if with_closing else text
     return TurnResult(text, TurnOutcome.REPLIED, language, checked)
+
+
+def _names_a_contact(cited: Sequence[Evidence], pack: BusinessPack) -> bool:
+    """Some cited passage holds the business's phone or email."""
+    phone = "".join(char for char in pack.location.phone if char.isdigit())
+    email = pack.location.email.strip().casefold()
+    for item in cited:
+        digits = "".join(char for char in item.content if char.isdigit())
+        if (email and email in item.content.casefold()) or (len(phone) >= 6 and phone in digits):
+            return True
+    return False
 
 
 def _responder_clarify(
