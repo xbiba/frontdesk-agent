@@ -83,7 +83,9 @@ class CaseVerdict:
 
     @property
     def language(self) -> str:
-        return self.turns[-1].language
+        """The language the case states, else the one detected: a misdetected reply must not move a
+        question to another language's figures."""
+        return self.case.expect.language or self.turns[-1].language
 
     @property
     def passed(self) -> bool:

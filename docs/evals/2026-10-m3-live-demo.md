@@ -2,7 +2,8 @@
 
 - Date: 2026-10-11.
 - Route: `vertex-eu-gemini-flash-lite`, Gemini 3.1 Flash-Lite on the Vertex AI `eu` multi-region, minimal thinking.
-- Engine: 72b0f98, after the tuning of M3 Task 14.
+- Engine: after the tuning of M3 Task 14. The clinic and document runs used 6de6a59; the shop and MCU-case runs used 72b0f98, which adds the business contact to document answers.
+- The rate of right answers refused rests on few document questions on the demo packs, 1 to 3 per language. It shows the checks did not refuse those answers. It is not yet a measure: the MCU run measures it on at least 10 questions per language.
 - Review: an independent reviewer agent (Opus) labelled every answer the model wrote, each label with its reason. The labels, the runs and the spend ledger are kept in the private configuration repository (`runs/`).
 - Live spend of M3 when these runs were made: 0.09 EUR of the 10 EUR cap.
 

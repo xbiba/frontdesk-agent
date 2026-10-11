@@ -98,3 +98,11 @@ def test_an_automatic_failure_and_the_reviewer_s_wrong_are_both_given() -> None:
     labels = {"parking-en": Label(answer="wrong", note="it says nothing of parking")}
     [verdict] = judge([PARKING], [_answered("We have a garden.")], FIXED_TEXTS, labels)
     assert verdict.reasons == ("missing text: free parking spaces", "reviewer: wrong answer")
+
+
+def test_a_case_counts_under_the_language_it_states_not_the_one_detected() -> None:
+    # Final review of M3: a misdetected language moved a refused question to another language's
+    # rate, so one language could read PASS while it failed.
+    stated = case("q", "Ku ndodhet parkimi?", behaviour="answer", language="sq", sources=["p"])
+    [verdict] = judge([stated], [record("q", "Sì.", language="it")], FIXED_TEXTS, {})
+    assert verdict.language == "sq"

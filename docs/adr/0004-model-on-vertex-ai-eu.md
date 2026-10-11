@@ -24,7 +24,7 @@ The model is the one the M3 live evaluations choose on Vertex AI in the EU; toda
 - The retirement date of the pinned version is part of its route; a version change is an engine change with its test.
 - The results of the M3 evaluations are recorded in [`docs/evals`](../evals/README.md).
 - Measured on the demo packs after the tuning of M3 (2026-10-11, [results](../evals/2026-10-m3-live-demo.md)):
-  - right answers refused: 0% in en, it and sq;
+  - right answers refused: 0% in en, it and sq, on 1 to 3 document questions per language (the MCU run measures it on at least 10);
   - p95 time per reply: 0.9 to 2.2 s;
   - cost: about 0.00025 EUR per message;
   - M3 spend so far: 0.09 EUR of 10.
