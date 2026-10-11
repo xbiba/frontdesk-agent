@@ -30,6 +30,11 @@ _REFERENCE_IN_TEXT: Final = re.compile(r"\bORD[-\s]?([0-9]{4,8})\b", re.IGNORECA
 _NUMBER_IN_TEXT: Final = re.compile(r"(?<![\w-])([0-9]{4,6})(?![\w-])")
 # Dates with dots or slashes (10.10.2026, 2026/10/10) are blanked before the number search: their
 # year is not a postal code. Hyphenated dates are kept out by `_NUMBER_IN_TEXT` itself.
+# Words that ask *when* (sq, it, en), read in the normalized message. A doctor question that asks when
+# is about dates, which the documents hold, not about the doctor's record (live MCU run, 2026-10-11).
+_ASKS_WHEN: Final = re.compile(
+    r"\b(?:kur|deri kur|data|datat|dite|ditet|quando|fino a|date|giorni|giorno|when|until|dates|days)\b"
+)
 _DATE_IN_TEXT: Final = re.compile(r"(?<![\w./-])[0-9]{1,4}[./][0-9]{1,2}[./][0-9]{1,4}(?![\w/-])")
 
 
@@ -176,6 +181,10 @@ def _repaired(
             "intent": Intent.OTHER,
             "problem_category_id": None,
         }
+    if output.intent is Intent.DOCTOR_INFO and _ASKS_WHEN.search(normalize(message)):
+        update |= {"intent": Intent.GENERAL_QUESTION, "general_question": None}
+        output = output.model_copy(update=update)
+        update = {}
     if output.intent is Intent.GENERAL_QUESTION and not output.general_question and message.strip():
         if contains_clinical_terms(message):
             update |= {"category": Category.CLINICAL, "intent": Intent.OTHER}

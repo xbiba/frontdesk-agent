@@ -476,3 +476,38 @@ def test_a_business_without_services_ignores_the_service_the_model_names() -> No
     )
     assert isinstance(result, ValidatedFields)
     assert result.service_ids == ()
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Quando è in clinica il dottor Oliverio?",
+        "Kur është Dr. Oliverio në klinikë?",
+        "Until when is Dr. Oliverio here?",
+        "Which dates can I see Dr. Oliverio?",
+    ],
+)
+def test_a_doctor_question_that_asks_when_is_looked_up_in_the_documents(message: str) -> None:
+    # The live MCU run (2026-10-11): the model answered these as doctor_info, so the person got the
+    # doctor's services instead of his dates; the dates live in a document.
+    result = _validate(
+        category="administrative",
+        intent="doctor_info",
+        doctor_ids=["dr-arben-demo"],
+        message=message,
+    )
+    assert isinstance(result, ValidatedFields)
+    assert result.intent is Intent.GENERAL_QUESTION
+    assert result.general_question == message
+    assert result.doctor_ids == ("dr-arben-demo",)
+
+
+def test_a_doctor_question_that_does_not_ask_when_stays_doctor_info() -> None:
+    result = _validate(
+        category="administrative",
+        intent="doctor_info",
+        doctor_ids=["dr-arben-demo"],
+        message="Il dottor Demo che servizi fa?",
+    )
+    assert isinstance(result, ValidatedFields)
+    assert result.intent is Intent.DOCTOR_INFO
