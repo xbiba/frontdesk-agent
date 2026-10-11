@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, handle_message
 from frontdesk.tenancy.pack import BusinessPack, FixedTextKey
-from tests.conversation.helpers import TODAY, classifier_model, document_responder, make_runtime
+from tests.conversation.helpers import classifier_model, document_responder, make_runtime
 
 pytestmark = pytest.mark.db
 Activate = Callable[..., sessionmaker[Session]]
@@ -98,17 +98,3 @@ async def test_no_next_step_after_a_document_answer_that_gives_the_contact(
     result, _ = await handle_message("Come faccio un reso?", ConversationState(turns=1), runtime)
     assert result.text.endswith(pack.fixed_texts["it"][FixedTextKey.HANDOFF])  # type: ignore[index]
     assert STEP not in result.text
-
-
-async def test_the_responder_reads_the_periods_of_its_passages_against_today(
-    activate_pack: Activate, clinic_pack: BusinessPack
-) -> None:
-    prompts: list[str] = []
-    runtime = make_runtime(
-        clinic_pack,
-        activate_pack(clinic_pack),
-        classifier_model(PARKING),
-        document_responder(prompts),
-    )
-    await handle_message("C'è parcheggio?", ConversationState(turns=1), runtime)
-    assert f"today: {TODAY.isoformat()}" in prompts[0]

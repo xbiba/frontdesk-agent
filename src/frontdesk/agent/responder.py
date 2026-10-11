@@ -8,7 +8,6 @@ claim before anything is sent.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import date
 from enum import StrEnum
 from typing import Final
 
@@ -106,15 +105,10 @@ def build_responder(
     return agent
 
 
-def render_turn_prompt(
-    fields: ValidatedFields, preload: Sequence[Evidence], *, today: date | None = None
-) -> str:
+def render_turn_prompt(fields: ValidatedFields, preload: Sequence[Evidence]) -> str:
     lines = [
         f'<request category="{fields.category}" intent="{fields.intent}" language="{fields.language}">'
     ]
-    if today is not None:
-        # A passage's period reads against it: "until 2 November" once the period has begun.
-        lines.append(f"today: {today.isoformat()}")
     if fields.service_ids:
         lines.append("service_ids: " + ", ".join(fields.service_ids))
     if fields.doctor_ids:

@@ -446,9 +446,7 @@ async def _document_answer(
     )
     try:
         run = await runtime.responder.run(
-            render_turn_prompt(fields, preload, today=runtime.today()),
-            deps=deps,
-            usage_limits=RESPONDER_LIMITS,
+            render_turn_prompt(fields, preload), deps=deps, usage_limits=RESPONDER_LIMITS
         )
     except AgentRunError as error:
         log_event(logger, "responder.failed", business_id=pack.id, reason=type(error).__name__)
