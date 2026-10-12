@@ -69,7 +69,7 @@ def test_a_yes_is_one_of_its_words_and_no_negation(message: str, answer: bool) -
 
 def test_every_phrase_exists_in_every_language_and_the_entry_too() -> None:
     assert all(set(texts) == {"sq", "it", "en"} for texts in _PHRASES.values())
-    assert phrase("choose", "it") == "Quale preferisce? Può scrivere il numero o il giorno."
+    assert phrase("taken", "it") == "Questo orario non è più libero."
     assert (
         entry_description("+355691234567", "it") == "Telefono: +355691234567\nPrenotato dalla chat."
     )

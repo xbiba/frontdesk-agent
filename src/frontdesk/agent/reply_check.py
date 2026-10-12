@@ -25,6 +25,45 @@ _BOOKED: Final = re.compile(
 )
 
 
+# The times a reply names (Albi, 2026-10-12: the model writes the times, code checks them): a clock
+# time ("10:00", "9.30"), and the hours after a word that brings them, alone or in a list ("alle 9,
+# 10, 12 e 16", "at 9 and 10", "në orën 9").
+_HOUR: Final = r"(?:[01]?\d|2[0-3])(?:[:.][0-5]\d)?"
+_CLOCK: Final = re.compile(r"(?<![\d:.])([01]?\d|2[0-3])[:.]([0-5]\d)(?!\d)")
+_HOURS: Final = re.compile(
+    rf"\b(?:alle|ore|dalle|per le|at|from|until|or[eë]n|ora)\s+"
+    rf"({_HOUR}(?:\s*(?:,|e|ed|and|o|or|dhe|ose|/)\s*{_HOUR})*)\b",
+    re.IGNORECASE,
+)
+
+
+def times_named(reply: str) -> list[tuple[tuple[int, int], str]]:
+    """Each time the reply names, as "HH:MM", with where it stands in the reply."""
+    found: dict[tuple[int, int], str] = {}
+    for match in _CLOCK.finditer(reply):
+        found[match.span()] = f"{int(match[1]):02d}:{match[2]}"
+    for match in _HOURS.finditer(reply):
+        offset = match.start(1)
+        for item in re.finditer(_HOUR, match[1]):
+            span = (offset + item.start(), offset + item.end())
+            if any(start <= span[0] < end for start, end in found):
+                continue  # a clock time, already read
+            hour, _, minute = item[0].replace(".", ":").partition(":")
+            found[span] = f"{int(hour):02d}:{minute or '00'}"
+    return sorted(found.items())
+
+
+# The numbers of a numbered list ("1) venerdì 23: ...") count nothing: they are no fact.
+_LIST_MARK: Final = re.compile(r"(?m)^[ \t]*\d{1,2}[).][ \t]")
+
+
+def _without(text: str, spans: list[tuple[int, int]]) -> str:
+    chars = list(text)
+    for start, end in spans:
+        chars[start:end] = " " * (end - start)
+    return "".join(chars)
+
+
 @dataclass(frozen=True)
 class Problem:
     """Why a reply is sent back. `code` names the kind and goes to traces and logs, never a value of
@@ -34,13 +73,24 @@ class Problem:
     detail: str
 
 
-def reply_problems(reply: str, known: str, *, booked: bool) -> tuple[Problem, ...]:
+def reply_problems(
+    reply: str, known: str, *, booked: bool, times: frozenset[str] = frozenset()
+) -> tuple[Problem, ...]:
     """Why `reply` may not be sent; empty when it may. `known`: everything the agent was given,
-    which a number or a link must come from. `booked`: the booking tool made a booking."""
+    which a number or a link must come from. `booked`: the booking tool made a booking. `times`:
+    the free times the patient was shown ("10:00"); a time the reply names must be one of them or a
+    time of `known` (an opening hour), and is then no number to check."""
     problems = []
     if not reply.strip():
         problems.append(Problem("empty", "the reply is empty"))
-    new_numbers = sorted(numbers_in(reply) - numbers_in(known))
+    named = times_named(reply)
+    allowed = set(times) | {number for number in numbers_in(known) if ":" in number}
+    wrong = sorted({time for _, time in named if time not in allowed})
+    if wrong:
+        detail = f"times that no tool gave and no fact holds: {', '.join(wrong)}"
+        problems.append(Problem("times", detail))
+    rest = _LIST_MARK.sub(" ", _without(reply, [span for span, _ in named]))
+    new_numbers = sorted(numbers_in(rest) - numbers_in(known))
     if new_numbers:
         detail = f"numbers that are in no fact and no tool result: {', '.join(new_numbers)}"
         problems.append(Problem("numbers", detail))

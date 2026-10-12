@@ -16,21 +16,6 @@ _NAME: Final = re.compile(r"^[^\W\d_]+(?:[ '\u2019\-.]+[^\W\d_]+)*\.?$")
 _PHONE_SEPARATORS: Final = re.compile(r"[\s\-./()]")
 _PHONE: Final = re.compile(r"^\+?\d{8,15}$")
 _PHRASES: Final[dict[str, dict[str, str]]] = {
-    "choose": {
-        "sq": "Cilin preferoni? Mund të shkruani numrin ose ditën.",
-        "it": "Quale preferisce? Può scrivere il numero o il giorno.",
-        "en": "Which one would you like? You can write its number or the day.",
-    },
-    "none_wished": {
-        "sq": "Nuk ka orare të lira {when}.",
-        "it": "Non ci sono orari liberi {when}.",
-        "en": "There are no free times {when}.",
-    },
-    "no_more": {
-        "sq": "Nuk ka orare të tjera të lira në {days} ditët e ardhshme.",
-        "it": "Non ci sono altri orari liberi nei prossimi {days} giorni.",
-        "en": "There are no other free times in the next {days} days.",
-    },
     "ask_name": {
         "sq": "Mund të më shkruani emrin dhe mbiemrin tuaj?",
         "it": "Mi scrive il suo nome e cognome?",

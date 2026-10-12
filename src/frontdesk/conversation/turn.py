@@ -48,11 +48,11 @@ from frontdesk.conversation.compose import (
     compose_facts,
     unanswered,
 )
+from frontdesk.conversation.desk import Desk
 from frontdesk.conversation.preload import document_evidence, fact_evidence
 from frontdesk.conversation.reception import (
     RECEPTION_LIMITS,
     SENT_BACK,
-    Desk,
     ReceptionReply,
     ReplyKind,
     history_messages,

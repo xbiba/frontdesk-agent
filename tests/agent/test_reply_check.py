@@ -34,3 +34,23 @@ def test_a_reply_beyond_the_facts_is_refused(reply: str, problem: str) -> None:
 
 def test_a_booking_the_tool_made_may_be_announced() -> None:
     assert reply_problems("Prenotazione confermata.", KNOWN, booked=True) == ()
+
+
+SHOWN = frozenset({"09:00", "10:00", "12:00", "16:00"})
+TOOL = "- 2026-10-23 (venerdì 23 ottobre): 09:00, 10:00, 12:00, 16:00\nOrari: lun-ven 09:00-18:00"
+
+
+@pytest.mark.parametrize(
+    ("reply", "codes"),
+    [
+        pytest.param("Venerdì 23 ho posto alle 9, 10, 12 e 16: quale preferisce?", set(), id="ok"),
+        pytest.param("Alle 10:00 va bene?", set(), id="a-clock-time"),
+        pytest.param("Apriamo dalle 9 alle 18.", set(), id="opening-hours-from-the-facts"),
+        pytest.param("1) venerdì 23: alle 9 e alle 10\n2) venerdì 23: alle 16", set(), id="a-list"),
+        pytest.param("Venerdì 23 alle 9 o alle 11?", {"times"}, id="a-time-not-free"),
+        pytest.param("On Friday 23 at 9 and 13.", {"times"}, id="in-english"),
+    ],
+)
+def test_each_time_named_is_one_the_tools_gave(reply: str, codes: set[str]) -> None:
+    found = reply_problems(reply, TOOL, booked=False, times=SHOWN)
+    assert {problem.code for problem in found} == codes

@@ -32,7 +32,8 @@ from frontdesk.booking.google_calendar import SCOPE as CALENDAR_SCOPE
 from frontdesk.booking.google_calendar import WRITE_SCOPE as CALENDAR_WRITE_SCOPE
 from frontdesk.booking.google_calendar import GoogleCalendar, calendar_http_client
 from frontdesk.booking.scheduler import CalendarScheduler, Scheduler
-from frontdesk.conversation.reception import Desk, ReceptionReply, build_reception
+from frontdesk.conversation.desk import Desk
+from frontdesk.conversation.reception import ReceptionReply, build_reception
 from frontdesk.conversation.turn import TurnRuntime
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
 from frontdesk.knowledge.embedders import Embedder, build_embedder

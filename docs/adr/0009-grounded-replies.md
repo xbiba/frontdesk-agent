@@ -40,3 +40,14 @@ Albi's live chats of 2026-10-12 found the pipeline too rigid for a conversation:
 - The deterministic rules still answer first (ADR-0006): emergency, medical advice, and personal data, except the name and phone a held booking asks for.
 
 The pipeline stays for the demo packs and the offline evaluations of the engine. The voice, which rewrote the pipeline's replies, and the pipeline's own booking steps are removed. A deployment that books from the chat runs the agent.
+
+### The free times: code validates them, the model writes them (Albi, 2026-10-12)
+
+In Albi's live chat, "Solo questi?" about Friday 23 got "sì, solo questi" with 3 times, while cal.com had 7. The tool had cut the list to `max_options` (3) without saying so, and the model took the cut list for the whole day: a false negation, an invented fact. Since then:
+
+- `free_times` (`conversation/reception_booking.py`) gives every free time of each day it lists: all of a day asked for, or the first days when none is. It also says whether other days have free times. A time not listed for a day is not free.
+- The pipeline's fixed slot texts are gone from the agent. The model writes the times in its own words, by day: "Venerdì 23 ho posto alle 9, 10, 12, 13, 14, 15 e 16, quale preferisce?". A numbered list is used only across several days, and never with the date repeated on each line.
+- Code validates every time the reply names (`agent/reply_check.times_named`): a clock time, or the hours after "alle", "ore", "at", "orën" and the like, alone or in a list. Each must be a time the tools gave in the conversation, or a time of the facts (an opening hour). A reply that names another goes back to the model once (`sent_back:times`).
+- `hold_time` takes the day and the time of a time that was shown, and checks that the calendar still has it free.
+
+Still by code alone: the summary and the confirmation of a booking. Dates are checked as numbers only; a typed check, dates against the slots' dates, is a follow-up.

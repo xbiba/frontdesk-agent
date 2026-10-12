@@ -39,8 +39,9 @@ cal-arben:
     - {start: "2026-10-26 09:00", end: "2026-10-26 10:00"}
   busy: []
 """
-LIST = "1) venerdì 23 ottobre, 09:00\n2) venerdì 23 ottobre, 09:30\n3) lunedì 26 ottobre, 09:00"
-FRIDAY = "1) venerdì 23 ottobre, 09:00\n2) venerdì 23 ottobre, 09:30"
+# The agent writes the times in its own words; code checks each one against what the tools gave.
+LIST = "1) venerdì 23: alle 9 e alle 9:30\n2) lunedì 26: alle 9 e alle 9:30"
+FRIDAY = "Venerdì 23 ho posto alle 9 e alle 9:30: quale preferisce?"
 SUMMARY = (
     "Riepilogo: venerdì 23 ottobre, 09:30, Visita ortopedica con Dr. Arben Demo.\n"
     "Nome: Mario Rossi\nTelefono: +355691234567\n"
@@ -135,8 +136,8 @@ async def test_a_booking_the_agent_leads_is_made_by_the_tools(
             [("free_times", {})],
             _final(f"Ecco i primi orari liberi:\n{LIST}\nQuale preferisce?", "answer"),
             [("free_times", {"day": "2026-10-23"})],
-            _final(f"Venerdì 23 ottobre ho:\n{FRIDAY}\nQuale preferisce?", "answer"),
-            [("hold_time", {"number": 2})],
+            _final(FRIDAY),
+            [("hold_time", {"day": "2026-10-23", "time": "09:30"})],
             _final("Le tengo le 09:30. Mi scrive nome, cognome e telefono?", "answer"),
             [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
             _final(SUMMARY, "answer"),
@@ -146,8 +147,8 @@ async def test_a_booking_the_agent_leads_is_made_by_the_tools(
     )
     chat = Chat(base, script)
     assert (await chat.say("Vorrei prenotare")).text.endswith("Quale preferisce?")
-    assert FRIDAY in (await chat.say("venerdì che orari ci sono?")).text
-    await chat.say("il secondo")
+    assert (await chat.say("venerdì che orari ci sono?")).text == FRIDAY
+    await chat.say("alle 9:30")
     assert (await chat.say("Mario Rossi, +355 69 123 4567")).text == SUMMARY
     booked = await chat.say("sì, confermo")
     assert booked.outcome is TurnOutcome.REPLIED
@@ -171,7 +172,7 @@ async def test_without_the_patient_s_yes_nothing_is_booked(
         [
             [("free_times", {})],
             _final(f"{LIST}\nQuale preferisce?", "answer"),
-            [("hold_time", {"number": 1})],
+            [("hold_time", {"day": "2026-10-23", "time": "09:00"})],
             _final("Nome, cognome e telefono?", "answer"),
             [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
             _final(SUMMARY, "answer"),
@@ -254,7 +255,9 @@ async def test_the_agent_reads_the_clinic_s_facts(base: TurnRuntime) -> None:
 
 
 async def test_a_tool_never_holds_a_time_that_was_not_shown(base: TurnRuntime) -> None:
-    script = Script([[("hold_time", {"number": 1})], _final("Le mostro gli orari?", "answer")])
+    script = Script(
+        [[("hold_time", {"day": "2026-10-23", "time": "09:00"})], _final("Le mostro gli orari?")]
+    )
     await Chat(base, script).say("prendo il primo")
     assert script.tool_results() == ["No times were shown yet: call free_times first."]
     with business_session(base.session_factory, base.pack.id) as session:
@@ -280,7 +283,7 @@ async def test_only_the_name_and_phone_pass_while_a_time_is_held(base: TurnRunti
         [
             [("free_times", {})],
             _final(f"{LIST}\nQuale preferisce?", "answer"),
-            [("hold_time", {"number": 1})],
+            [("hold_time", {"day": "2026-10-23", "time": "09:00"})],
             _final("Nome, cognome e telefono?", "answer"),
         ]
     )
@@ -300,7 +303,7 @@ async def test_a_yes_that_does_not_answer_the_summary_books_nothing(
         [
             [("free_times", {})],
             _final(f"{LIST}\nQuale preferisce?", "answer"),
-            [("hold_time", {"number": 1})],
+            [("hold_time", {"day": "2026-10-23", "time": "09:00"})],
             _final("Nome, cognome e telefono?", "answer"),
             [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
             _final(SUMMARY, "answer"),
@@ -322,7 +325,7 @@ async def test_the_summary_is_shown_as_code_wrote_it(base: TurnRuntime) -> None:
         [
             [("free_times", {})],
             _final(f"{LIST}\nQuale preferisce?", "answer"),
-            [("hold_time", {"number": 2})],
+            [("hold_time", {"day": "2026-10-23", "time": "09:30"})],
             _final("Nome, cognome e telefono?", "answer"),
             [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
             _final("Perfetto Mario, confermiamo?", "answer"),
@@ -384,7 +387,7 @@ async def test_a_booking_made_before_the_model_fails_is_still_told(
         [
             [("free_times", {})],
             _final(f"{LIST}\nQuale preferisce?"),
-            [("hold_time", {"number": 1})],
+            [("hold_time", {"day": "2026-10-23", "time": "09:00"})],
             _final("Nome, cognome e telefono?"),
             [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
             _final(SUMMARY),
@@ -410,7 +413,7 @@ async def test_a_confirmation_in_other_words_is_shown_as_code_wrote_it(
         [
             [("free_times", {})],
             _final(f"{LIST}\nQuale preferisce?"),
-            [("hold_time", {"number": 1})],
+            [("hold_time", {"day": "2026-10-23", "time": "09:00"})],
             _final("Nome, cognome e telefono?"),
             [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
             _final(SUMMARY),
@@ -455,7 +458,7 @@ async def test_every_booking_step_names_the_calendar(base: TurnRuntime) -> None:
         [
             [("free_times", {})],
             _final(f"{LIST}\nQuale preferisce?"),
-            [("hold_time", {"number": 1})],
+            [("hold_time", {"day": "2026-10-23", "time": "09:00"})],
             _final("Nome, cognome e telefono?"),
         ]
     )
@@ -477,3 +480,61 @@ async def test_a_notice_answer_may_not_talk_about_the_problem(base: TurnRuntime)
     retry = script.calls[1][-1]
     assert isinstance(retry, ModelRequest)
     assert "health problem" in str(retry.parts[0])
+
+
+# --- Albi's chat of 2026-10-12: "solo questi?", the times in the agent's words -----------------------
+
+
+async def test_free_times_gives_every_time_of_each_day_and_whether_other_days_have_some(
+    base: TurnRuntime,
+) -> None:
+    script = Script(
+        [
+            [("free_times", {})],
+            _final(f"{LIST}\nQuale preferisce?"),
+            [("free_times", {"day": "2026-10-23"})],
+            _final(FRIDAY),
+        ]
+    )
+    chat = Chat(base, script)
+    await chat.say("Vorrei prenotare")
+    await chat.say("venerdì che orari ci sono?")
+    first, friday = script.tool_results()
+    assert "- 2026-10-23 (venerdì 23 ottobre): 09:00, 09:30" in first
+    assert "- 2026-10-26 (lunedì 26 ottobre): 09:00, 09:30" in first
+    assert "Every free time of each day below is listed" in first
+    assert "Other days with free times: none in the calendar's reach." in first
+    # A day asked for: all of it, and the other days are said to exist.
+    assert "- 2026-10-23 (venerdì 23 ottobre): 09:00, 09:30" in friday
+    assert "2026-10-26" not in friday.splitlines()[1]
+    assert "Other days with free times: yes, from 2026-10-26" in friday
+
+
+async def test_a_time_no_tool_gave_is_sent_back(base: TurnRuntime) -> None:
+    script = Script(
+        [
+            [("free_times", {"day": "2026-10-23"})],
+            _final("Venerdì 23 ho posto alle 9, alle 9:30 e alle 11."),  # 11:00 is not free
+            _final(FRIDAY),
+        ]
+    )
+    reply = await Chat(base, script).say("venerdì che orari ci sono?")
+    assert reply.text == FRIDAY
+    assert reply.trace.check_reasons == ("sent_back:times",)
+
+
+async def test_hold_time_needs_a_time_that_was_shown(base: TurnRuntime) -> None:
+    script = Script(
+        [
+            [("free_times", {"day": "2026-10-23"})],
+            _final(FRIDAY),
+            [("hold_time", {"day": "2026-10-23", "time": "11:00"})],
+            _final("Le mostro gli orari di venerdì?"),
+        ]
+    )
+    chat = Chat(base, script)
+    await chat.say("venerdì che orari ci sono?")
+    await chat.say("alle 11")
+    assert "is not among the times shown" in script.tool_results()[-1]
+    with business_session(base.session_factory, base.pack.id) as session:
+        assert list(session.scalars(select(BookingHold))) == []

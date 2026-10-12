@@ -12,44 +12,27 @@ answers instead.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
 from enum import StrEnum
 from typing import Final
-from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelRetry, RunContext, UsageLimits
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
-from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.agent.classification import check_free_text
 from frontdesk.agent.prompts import instructions_for
 from frontdesk.agent.reply_check import Problem, reply_problems
-from frontdesk.agent.vocab import ClarifyField, SlotPart
-from frontdesk.booking.flow import affirms, phrase, valid_name, valid_phone
-from frontdesk.booking.holds import attach, held
-from frontdesk.booking.reply import SlotWish, booking_target, slot_time
-from frontdesk.booking.scheduler import Scheduler
-from frontdesk.conversation.booking_turn import (
-    BookingContext,
-    StepReply,
-    cancel,
-    confirm,
-    country_code,
-    take,
-)
-from frontdesk.conversation.booking_turn import offer as booking_offer
+from frontdesk.agent.vocab import SlotPart
+from frontdesk.conversation import reception_booking as booking
+from frontdesk.conversation.desk import Desk
 from frontdesk.conversation.state import BookingStage, BookingStep, HistoryEntry
 from frontdesk.db.engine import business_session
-from frontdesk.knowledge.embedders import Embedder
 from frontdesk.knowledge.evidence import neutralized
-from frontdesk.knowledge.facts import Catalog
 from frontdesk.knowledge.retrieval import RetrievedChunk, chunk_evidence, hybrid_search
 from frontdesk.safety.rules import contains_clinical_terms
-from frontdesk.tenancy.pack import BusinessPack, Language, Profile
+from frontdesk.tenancy.pack import Profile
 
 RECEPTION_LIMITS: Final = UsageLimits(request_limit=6)
 # How a reply the check refused is named in the turn's check reasons, for the run's report.
@@ -79,59 +62,6 @@ class ReceptionReply(BaseModel):
         "they mean), handoff (you send them to reception), notice (you answered the practical part of "
         "a message that describes symptoms), clinical (they ask for medical advice) or emergency"
     )
-
-
-@dataclass
-class Desk:
-    """What the agent works with during one turn. The tools update `booking`, `seen`, `sources`
-    and `booked`; the turn reads them afterwards."""
-
-    pack: BusinessPack
-    catalog: Catalog
-    session_factory: sessionmaker[Session]
-    scheduler: Scheduler | None
-    embedder: Embedder
-    min_similarity: float
-    conversation_id: str
-    language: Language
-    now: datetime
-    message: str
-    first_turn: bool
-    turn: int  # the turns before this one: a summary shown now may be confirmed at turn + 1
-    facts: str
-    conversation: str  # the conversation so far, as text: a number in it may be repeated
-    booking: BookingStep | None
-    seen: list[str] = field(default_factory=list)  # what the tools returned this turn
-    sources: list[str] = field(default_factory=list)
-    booked: bool = False
-    summary: str | None = None  # the summary prepare_booking wrote this turn, shown as written
-    booked_text: str | None = None  # what confirm_booking said when it booked
-    rejected: list[str] = field(default_factory=list)  # the codes of the replies sent back
-
-    @property
-    def zone(self) -> ZoneInfo:
-        return ZoneInfo(self.pack.timezone)
-
-    @property
-    def today(self) -> date:
-        return self.now.astimezone(self.zone).date()
-
-    def context(self) -> BookingContext:
-        if self.scheduler is None:
-            raise ValueError("a booking needs the runtime's calendar")
-        return BookingContext(
-            pack=self.pack,
-            catalog=self.catalog,
-            scheduler=self.scheduler,
-            session_factory=self.session_factory,
-            conversation_id=self.conversation_id,
-            language=self.language,
-            now=self.now,
-        )
-
-    def said(self, text: str) -> str:
-        self.seen.append(text)
-        return text
 
 
 def history_messages(history: tuple[HistoryEntry, ...]) -> list[ModelMessage]:
@@ -165,11 +95,12 @@ def render_situation(desk: Desk) -> str:
 
 def _booking_state(desk: Desk, step: BookingStep) -> str:
     if step.stage is BookingStage.CHOOSE:
-        times = "; ".join(
-            f"{number}) {slot_time(start.astimezone(desk.zone), desk.language)}"
-            for number, start in enumerate(step.offered, start=1)
-        )
-        return f"times shown to the patient: {times}."
+        days: dict[str, list[str]] = {}
+        for start in step.offered:
+            local = start.astimezone(desk.zone)
+            days.setdefault(f"{local.date().isoformat()}", []).append(f"{local:%H:%M}")
+        listed = "; ".join(f"{day}: {', '.join(times)}" for day, times in days.items())
+        return f"the times last shown to the patient, by day: {listed}."
     if step.stage is BookingStage.CONFIRM:
         return "the summary was shown; a yes from the patient lets you call confirm_booking."
     return "a time is held; ask for the full name and phone number, then call prepare_booking."
@@ -222,8 +153,8 @@ def build_reception(
         doctor_id: str | None = None,
         service_id: str | None = None,
     ) -> str:
-        """The free times to book, read from the calendar. Show them to the patient as the numbered
-        list written here. Without arguments: the first free times.
+        """The free times to book, read from the calendar: every free time of each day it lists,
+        and whether other days have free times. Without arguments: the first days with free times.
 
         Args:
             day: One day the patient asks about, as YYYY-MM-DD.
@@ -233,16 +164,17 @@ def build_reception(
             doctor_id: The doctor's id from the facts, when the patient names one.
             service_id: The service's id from the facts, when the patient names one.
         """
-        return _free_times(ctx.deps, day, from_day, part, more, doctor_id, service_id)
+        return booking.free_times(ctx.deps, day, from_day, part, more, doctor_id, service_id)
 
     @agent.tool
-    def hold_time(ctx: RunContext[Desk], number: int) -> str:
-        """Hold the time the patient picked, by its number in the last list shown.
+    def hold_time(ctx: RunContext[Desk], day: str, time: str) -> str:
+        """Hold the time the patient picked, among the times free_times gave.
 
         Args:
-            number: The time's number in that list.
+            day: Its day, as YYYY-MM-DD.
+            time: Its time, as HH:MM.
         """
-        return _hold_time(ctx.deps, number)
+        return booking.hold_time(ctx.deps, day, time)
 
     @agent.tool
     def prepare_booking(ctx: RunContext[Desk], name: str, phone: str) -> str:
@@ -253,18 +185,18 @@ def build_reception(
             name: First and last name, as the patient wrote them.
             phone: The phone number, as the patient wrote it.
         """
-        return _prepare_booking(ctx.deps, name, phone)
+        return booking.prepare_booking(ctx.deps, name, phone)
 
     @agent.tool
     def confirm_booking(ctx: RunContext[Desk]) -> str:
         """Book the held time. Only after the patient said yes to the summary, in their last
         message."""
-        return _confirm_booking(ctx.deps)
+        return booking.confirm_booking(ctx.deps)
 
     @agent.tool
     def cancel_booking(ctx: RunContext[Desk]) -> str:
         """Let go of the held time, when the patient changes their mind. Nothing is booked."""
-        return _cancel_booking(ctx.deps)
+        return booking.cancel_booking(ctx.deps)
 
     @agent.output_validator
     def checked(ctx: RunContext[Desk], output: ReceptionReply) -> ReceptionReply:
@@ -277,7 +209,8 @@ def build_reception(
         ):
             return output  # the handoff text, or the introduction, says it all
         known = "\n".join([desk.facts, *desk.seen, desk.conversation, desk.message])
-        problems = list(reply_problems(output.text, known, booked=desk.booked))
+        times = booking.shown_times(desk)
+        problems = list(reply_problems(output.text, known, booked=desk.booked, times=times))
         if output.kind is ReplyKind.NOTICE and contains_clinical_terms(output.text):
             # Next to the medical notice, the answer is only the practical part (ADR-0006): a word
             # on the health problem there is the model talking health (security review, 2026-10-12).
@@ -327,134 +260,3 @@ def _search(desk: Desk, question: str) -> str:
     desk.sources += [item.source_ref.partition("#")[0] for item in passages]
     found = "\n\n".join(f"[{item.title}]\n{item.content}" for item in passages)
     return desk.said(found or "Nothing in the documents answers this.")
-
-
-def _free_times(
-    desk: Desk,
-    day: str | None,
-    from_day: str | None,
-    part: SlotPart | None,
-    more: bool,
-    doctor_id: str | None,
-    service_id: str | None,
-) -> str:
-    calendar = desk.pack.integrations.calendar
-    if desk.scheduler is None or calendar is None or not calendar.chat_booking:
-        return desk.said("Bookings are made by reception: give its phone number.")
-    target = booking_target(
-        desk.pack.bookable_doctors(),
-        [doctor_id] if doctor_id else [],
-        [service_id] if service_id else [],
-    )
-    if isinstance(target, ClarifyField):
-        return desk.said(f"Ask the patient which {target.value} they mean.")
-    if target is None:
-        return desk.said("That cannot be booked in the chat: give reception's phone number.")
-    wish = SlotWish(day=_day(desk, day), start_from=_day(desk, from_day), part=part)
-    earlier = desk.booking
-    same = earlier is not None and (earlier.doctor_id, earlier.service_id) == target
-    reply = booking_offer(
-        desk.context(),
-        *target,
-        wish=wish,
-        shown=earlier.shown if same and earlier is not None else (),
-        others=more and same,
-    )
-    desk.sources.append(f"calendar:{target[0]}")
-    desk.booking = reply.next
-    return desk.said(reply.text)
-
-
-def _day(desk: Desk, text: str | None) -> date | None:
-    """A day within the calendar's reach, or None."""
-    calendar = desk.pack.integrations.calendar
-    try:
-        day = date.fromisoformat(text.strip()) if text else None
-    except ValueError:
-        return None
-    last = desk.today + timedelta(days=calendar.horizon_days if calendar else 0)
-    return day if day is not None and desk.today <= day <= last else None
-
-
-def _hold_time(desk: Desk, number: int) -> str:
-    step = desk.booking
-    _calendar_source(desk, step)
-    if step is None or not step.offered:
-        return desk.said("No times were shown yet: call free_times first.")
-    if not 1 <= number <= len(step.offered):
-        return desk.said(f"There is no time {number}: the list has {len(step.offered)}.")
-    choosing = step.model_copy(update={"stage": BookingStage.CHOOSE, "summary_turn": None})
-    reply = take(desk.context(), choosing, step.offered[number - 1])
-    desk.booking = reply.next
-    if reply.next is None or reply.next.stage is not BookingStage.NAME:
-        return desk.said(reply.text)  # taken meanwhile: fresh times
-    when = slot_time(step.offered[number - 1].astimezone(desk.zone), desk.language)
-    return desk.said(
-        f"Held for 15 minutes: {when}. Now ask the patient for their full name and phone number."
-    )
-
-
-def _prepare_booking(desk: Desk, name: str, phone: str) -> str:
-    step = desk.booking
-    _calendar_source(desk, step)
-    if step is None or step.hold_id is None:
-        return desk.said("No time is held: call hold_time first.")
-    code = country_code(desk.pack)
-    full_name, number = valid_name(name), valid_phone(phone, code)
-    if full_name is None:
-        return desk.said("That is not a first and last name: ask for it again.")
-    if number is None:
-        return desk.said(
-            f"That phone number is not valid: ask for it with the international prefix ({code}…)."
-        )
-    with business_session(desk.session_factory, desk.pack.id) as session:
-        current = held(session, step.hold_id, desk.now)
-        if current is not None:
-            attach(session, current.id, name=full_name, phone=number)
-    if current is None:
-        desk.booking = None
-        return desk.said("The time is no longer held: call free_times again.")
-    desk.booking = step.model_copy(
-        update={"stage": BookingStage.CONFIRM, "summary_turn": desk.turn}
-    )
-    summary = phrase(
-        "summary",
-        desk.language,
-        when=slot_time(current.start.astimezone(desk.zone), desk.language),
-        service=desk.catalog.services.get(step.service_id, {}).get(desk.language, step.service_id),
-        doctor=desk.catalog.doctors.get(step.doctor_id, step.doctor_id),
-        name=full_name,
-        phone=number,
-    )
-    desk.summary = summary
-    return desk.said(summary)
-
-
-def _confirm_booking(desk: Desk) -> str:
-    step = desk.booking
-    _calendar_source(desk, step)
-    if step is None or step.stage is not BookingStage.CONFIRM:
-        return desk.said("There is no summary to confirm: call prepare_booking first.")
-    if step.summary_turn != desk.turn - 1:
-        # A yes counts only as the answer to the summary in the reply just before it.
-        return desk.said("The summary was not your last message: call prepare_booking again.")
-    if not affirms(desk.message):
-        return desk.said("The patient has not said yes in their last message: ask them to confirm.")
-    reply: StepReply = confirm(desk.context(), step)
-    desk.booking = reply.next
-    desk.booked = reply.booked
-    desk.booked_text = reply.text if reply.booked else None
-    return desk.said(reply.text)
-
-
-def _cancel_booking(desk: Desk) -> str:
-    _calendar_source(desk, desk.booking)
-    if desk.booking is not None:
-        cancel(desk.context(), desk.booking)
-        desk.booking = None
-    return desk.said("Nothing is booked; the time is free again.")
-
-
-def _calendar_source(desk: Desk, step: BookingStep | None) -> None:
-    if step is not None:
-        desk.sources.append(f"calendar:{step.doctor_id}")
