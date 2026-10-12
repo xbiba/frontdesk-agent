@@ -31,8 +31,13 @@ from frontdesk.model_gateway.google_tokens import TokenSource
 API: Final = "https://www.googleapis.com/calendar/v3"
 SCOPE: Final = "https://www.googleapis.com/auth/calendar.readonly"
 WRITE_SCOPE: Final = "https://www.googleapis.com/auth/calendar.events"  # M5: appointments
-BLOCK_FIELDS: Final = "items(id,start,end,summary,status,eventType,organizer(self)),nextPageToken"
-BUSY_FIELDS: Final = "items(id,start,end,status,eventType),nextPageToken"
+BLOCK_FIELDS: Final = (
+    "kind,items(id,start,end,summary,status,eventType,organizer(self)),nextPageToken"
+)
+BUSY_FIELDS: Final = "kind,items(id,start,end,status,eventType),nextPageToken"
+# A listing must say what it is: an answer without it (an error page, an empty body) would read as
+# a calendar with no appointments and offer taken times (security review of 2026-10-12).
+_LISTING: Final = "calendar#events"
 MAX_PAGES: Final = 10
 TIMEOUT_SECONDS: Final = 10.0
 _NOT_BUSY: Final = frozenset({"workingLocation"})  # where someone works, not an appointment
@@ -99,6 +104,8 @@ class GoogleCalendar:
         for _ in range(MAX_PAGES):
             token = {"pageToken": page} if page else {}
             data = self._send(url, headers, params={**params, **token})
+            if data.get("kind") != _LISTING:
+                raise CalendarUnavailableError("malformed listing")
             items += data.get("items") or []
             page = data.get("nextPageToken")
             if not page:
@@ -133,9 +140,8 @@ class GoogleCalendar:
         except httpx2.HTTPError:
             self._confirm_written(url, event_id, headers)
             return
-        if response.status_code == 409:
-            return
-        if response.status_code >= 500:
+        if response.status_code == 409 or response.status_code >= 500:
+            # 409: the id exists, but it may be an appointment since cancelled; 5xx: unknown.
             self._confirm_written(url, event_id, headers)
         elif response.status_code >= 400:
             raise CalendarUnavailableError(f"status {response.status_code}")

@@ -43,7 +43,11 @@ def at(day: int, hour: int) -> datetime:
 
 
 def _page(*items: dict[str, Any], page: str | None = None) -> Page:
-    return {"items": list(items), **({"nextPageToken": page} if page else {})}
+    return {
+        "kind": "calendar#events",
+        "items": list(items),
+        **({"nextPageToken": page} if page else {}),
+    }
 
 
 def _timed(event_id: str, day: int, start: int, end: int, **extra: Any) -> dict[str, Any]:
@@ -242,8 +246,27 @@ def test_an_appointment_is_one_event_with_its_own_id() -> None:
     }
 
 
-def test_a_repeated_request_meets_its_own_id_and_is_the_same_appointment() -> None:
-    _book(_writer(lambda _: httpx2.Response(409, json={"error": {}})))
+@pytest.mark.parametrize(("status", "written"), [("confirmed", True), ("cancelled", False)])
+def test_a_repeated_request_meets_its_own_id_and_reads_it_back(status: str, written: bool) -> None:
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "POST":
+            return httpx2.Response(409, json={"error": {}})
+        return httpx2.Response(200, json={"id": "abc123", "status": status})
+
+    if written:
+        _book(_writer(answer))
+    else:  # the id is ours, but reception has cancelled that appointment since
+        with pytest.raises(CalendarUnavailableError, match="may not be written"):
+            _book(_writer(answer))
+
+
+@pytest.mark.parametrize(
+    "body", [{}, {"items": []}, {"kind": "calendar#calendarList", "items": []}]
+)
+def test_a_listing_that_does_not_say_what_it_is_cannot_be_read(body: dict[str, Any]) -> None:
+    # An empty or foreign answer would read as no appointments, and offer taken times.
+    with pytest.raises(CalendarUnavailableError, match="malformed listing"):
+        _read(_writer(lambda _: httpx2.Response(200, json=body)))
 
 
 @pytest.mark.parametrize("found", [200, 404])
