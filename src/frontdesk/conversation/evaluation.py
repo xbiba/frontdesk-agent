@@ -26,9 +26,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from pydantic_core import ErrorDetails
 
 from frontdesk.agent.vocab import Intent
+from frontdesk.booking.calendar import FixtureCalendar
+from frontdesk.booking.holds import forget
 from frontdesk.conversation.behaviour import Behaviour, observed_behaviour, pipeline_failure
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, TurnResult, TurnRuntime, handle_message
+from frontdesk.db.engine import business_session
 from frontdesk.safety.rules import contains_diagnostic_language, promise_phrase
 from frontdesk.tenancy.pack import FixedTextKey, Language
 
@@ -249,12 +252,23 @@ def check_conversation(
 
 def case_runtime(runtime: TurnRuntime, case: TurnCase) -> TurnRuntime:
     """The runtime a case runs on: when it states a day, that day at 08:00 in the business's time
-    zone, for the dated documents and for the free slots of a calendar."""
+    zone, for the dated documents and for the free slots of a calendar; and a fixture calendar
+    without the bookings of the cases before."""
+    if isinstance(runtime.calendar, FixtureCalendar):
+        runtime = replace(runtime, calendar=runtime.calendar.fresh())
     day = case.today
     if day is None:
         return runtime
     morning = datetime.combine(day, time(8), tzinfo=ZoneInfo(runtime.pack.timezone))
     return replace(runtime, today=lambda: day, now=lambda: morning)
+
+
+def forget_case(runtime: TurnRuntime, state: ConversationState) -> None:
+    """A case that booked from the chat leaves no hold behind (M5)."""
+    calendar = runtime.pack.integrations.calendar
+    if calendar is not None and calendar.chat_booking:
+        with business_session(runtime.session_factory, runtime.pack.id) as session:
+            forget(session, state.conversation_id)
 
 
 def initial_state(case: TurnCase) -> ConversationState:
@@ -300,6 +314,7 @@ async def run_turn_eval(
         for message in case.conversation:
             result, state = await handle_message(message, state, on_its_day)
             results.append(result)
+        forget_case(on_its_day, state)
         outcomes.append(case_result(case, results, texts))
     return TurnEvalReport(runtime.pack.id, route, tuple(outcomes))
 

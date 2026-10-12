@@ -96,6 +96,13 @@ class FixtureCalendar:
         self._calendars: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         self.booked: dict[str, dict[str, Interval]] = {}  # calendar -> event id -> its time
 
+    def fresh(self) -> FixtureCalendar:
+        """The same calendars without the bookings made since: each evaluation case starts here."""
+        copy = object.__new__(FixtureCalendar)
+        copy._calendars = self._calendars
+        copy.booked = {}
+        return copy
+
     def read(
         self,
         calendar_id: str,

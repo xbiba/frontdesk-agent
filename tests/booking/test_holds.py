@@ -9,7 +9,16 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from frontdesk.booking.holds import HOLD_LIFETIME, attach, held, hold, mark_booked, purge, release
+from frontdesk.booking.holds import (
+    HOLD_LIFETIME,
+    attach,
+    forget,
+    held,
+    hold,
+    mark_booked,
+    purge,
+    release,
+)
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
 from frontdesk.db.models import BookingHold
 
@@ -156,3 +165,14 @@ def test_parallel_holds_on_one_time_leave_exactly_one(factory: sessionmaker[Sess
     with ThreadPoolExecutor(max_workers=6) as pool:
         results = list(pool.map(lambda n: _hold(factory, conversation=f"c{n}"), range(6)))
     assert sum(result is not None for result in results) == 1
+
+
+def test_forget_deletes_every_hold_of_one_conversation(factory: sessionmaker[Session]) -> None:
+    booked = _hold(factory, conversation="case-1")
+    assert booked is not None
+    with business_session(factory, CLINIC) as session:
+        mark_booked(session, booked, "event-1")
+    assert _hold(factory, conversation="case-2", start=at(11), end=at(12)) is not None
+    with business_session(factory, CLINIC) as session:
+        assert forget(session, "case-1") == 1
+    assert [row.conversation_id for row in _rows(factory)] == ["case-2"]

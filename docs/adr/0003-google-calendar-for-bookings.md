@@ -23,6 +23,13 @@ Amendment of 2026-10-12, from the bookings design approved that day:
 - **The booking reply.** It is written by code: the first free slots, then the pack's next step, which says how to book. When the calendar cannot be read, or nothing is free, the reply says how to book and never invents a time.
 - **Confirmation.** Reception confirms by default; the pack may choose immediate booking instead.
 
+Amendment of 2026-10-12 for M5, booking from the chat (Albi: the clinic agrees to the collection of a name and a phone number, and booking is immediate for now):
+- **The steps.** Code guides every step: the patient picks a numbered slot, then gives a name and a phone, sees a summary and answers yes. The model never sees the name or the phone. The calendar is read again before the hold and before the write.
+- **Holds.** Holds in Postgres (migration 0005) carry an exclusion constraint, so two patients never get one slot.
+- **The write.** The appointment is written with an id derived from the hold, so a repeated request or a lost answer never makes two. A 409 or a lost answer is checked by reading the id back.
+- **Retention.** Name and phone live only on the hold while the patient books, at most 15 minutes. Booking or cancelling drops them, and an expired hold is deleted by the next booking and by `frontdesk bookings purge`. The appointment then lives in the clinic's calendar.
+- **Later.** Reception confirmation is kept for later, behind the pack's setting.
+
 ## Consequences
 - Google Calendar must be the real agenda for doctors bookable online.
 - Calendar is an optional integration: a business without it needs no credentials and never initialises it.
