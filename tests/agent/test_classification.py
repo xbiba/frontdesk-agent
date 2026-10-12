@@ -1,5 +1,6 @@
 import re
 import uuid
+from datetime import date
 
 import pytest
 from hypothesis import given
@@ -11,12 +12,13 @@ from frontdesk.agent.classification import (
     POSTAL_CODE,
     ClassifierOutput,
     Rejection,
+    SlotScope,
     ValidatedFields,
     check_free_text,
     extract_order_details,
     validate_classification,
 )
-from frontdesk.agent.vocab import PROFILE_INTENTS, Category, Intent
+from frontdesk.agent.vocab import PROFILE_INTENTS, Category, Intent, SlotPart
 from frontdesk.knowledge.facts import Catalog
 from frontdesk.tenancy.pack import Features, Profile
 
@@ -540,3 +542,57 @@ def test_a_doctor_question_that_does_not_ask_when_stays_doctor_info() -> None:
     )
     assert isinstance(result, ValidatedFields)
     assert result.intent is Intent.DOCTOR_INFO
+
+
+# A booking under way: three times offered, the calendar read up to 5 November.
+SCOPE = SlotScope(today=date(2026, 10, 22), last_day=date(2026, 11, 5), offered=3)
+BOOKING = {"category": "administrative", "intent": "booking"}
+
+
+def test_a_booking_keeps_the_time_picked_and_the_times_wished() -> None:
+    result = _validate(
+        context={**CLINIC, "slots": SCOPE},
+        **BOOKING,
+        slot=2,
+        slot_day="2026-10-26",
+        slot_from="2026-10-23",
+        slot_part="afternoon",
+    )
+    assert isinstance(result, ValidatedFields)
+    assert (result.slot, result.slot_day, result.slot_from, result.slot_part) == (
+        2,
+        date(2026, 10, 26),
+        date(2026, 10, 23),
+        SlotPart.AFTERNOON,
+    )
+
+
+@pytest.mark.parametrize(
+    "times",
+    [
+        pytest.param({"slot": 4}, id="not-offered"),
+        pytest.param({"slot": 0}, id="no-number"),
+        pytest.param({"slot_day": "2026-10-21"}, id="before-today"),
+        pytest.param({"slot_day": "2026-11-06"}, id="past-the-calendar"),
+        pytest.param({"slot_from": "26/10/2026"}, id="not-a-date"),
+    ],
+)
+def test_times_out_of_reach_are_dropped(times: dict[str, object]) -> None:
+    result = _validate(context={**CLINIC, "slots": SCOPE}, **BOOKING, **times)
+    assert isinstance(result, ValidatedFields)
+    assert (result.slot, result.slot_day, result.slot_from) == (None, None, None)
+
+
+def test_times_belong_to_a_booking_with_a_calendar() -> None:
+    price = _validate(
+        context={**CLINIC, "slots": SCOPE},
+        category="administrative",
+        intent="price",
+        service_ids=["osteopathy"],
+        slot=1,
+        slot_part="morning",
+    )
+    no_calendar = _validate(**BOOKING, slot=1, slot_day="2026-10-26")
+    for result in (price, no_calendar):
+        assert isinstance(result, ValidatedFields)
+        assert (result.slot, result.slot_day, result.slot_part) == (None, None, None)

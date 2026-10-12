@@ -1,9 +1,10 @@
 """The steps of a booking from the chat (M5): what a reply to each step may be, and the phrases.
 
-Code reads the patient's answers, never the model: the choice of a slot (its number or its time), a
-name, a phone number, yes or no. The phrases are written by code in sq, it and en (ADR-0009); the
-Albanian ones still need a native speaker's review. Nothing here keeps a name or a phone: the
-caller stores them on the hold.
+Code reads the patient's answers: the choice of a slot (its number or its time), a name, a phone
+number, yes or no. A choice in other words ("Friday is fine") is read by the classifier, against the
+times offered, and checked by code (frontdesk.conversation.booking_turn.pick). The phrases are
+written by code in sq, it and en (ADR-0009); the Albanian ones still need a native speaker's
+review. Nothing here keeps a name or a phone: the caller stores them on the hold.
 """
 
 from __future__ import annotations
@@ -44,9 +45,19 @@ _YES: Final = frozenset(
 _NO: Final = frozenset({"no", "jo", "nope", "annulla", "cancel", "stop", "anulo", "lascia stare"})
 _PHRASES: Final[dict[str, dict[str, str]]] = {
     "choose": {
-        "sq": "Për të rezervuar, shkruani numrin e orarit që preferoni.",
-        "it": "Per prenotare, scriva il numero dell'orario che preferisce.",
-        "en": "To book, write the number of the time you prefer.",
+        "sq": "Cilin preferoni? Mund të shkruani numrin ose ditën.",
+        "it": "Quale preferisce? Può scrivere il numero o il giorno.",
+        "en": "Which one would you like? You can write its number or the day.",
+    },
+    "none_wished": {
+        "sq": "Nuk ka orare të lira {when}.",
+        "it": "Non ci sono orari liberi {when}.",
+        "en": "There are no free times {when}.",
+    },
+    "no_more": {
+        "sq": "Nuk ka orare të tjera të lira në {days} ditët e ardhshme.",
+        "it": "Non ci sono altri orari liberi nei prossimi {days} giorni.",
+        "en": "There are no other free times in the next {days} days.",
     },
     "ask_name": {
         "sq": "Mund të më shkruani emrin dhe mbiemrin tuaj?",
