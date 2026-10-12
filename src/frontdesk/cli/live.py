@@ -71,7 +71,7 @@ from frontdesk.model_gateway.routes import (
 )
 from frontdesk.settings import Settings, load_settings
 
-REQUESTS_PER_TURN: Final = 4  # two for the classifier, two for the responder (RESPONDER_LIMITS)
+REQUESTS_PER_TURN: Final = 5  # two for the classifier, two for the responder, one for the voice
 EXIT_ERROR: Final = 1
 EXIT_RATE_LIMITED: Final = 3
 EXIT_BUDGET: Final = 4
@@ -346,7 +346,8 @@ def _show_plan(run: _Run, pending: Sequence[TurnCase]) -> None:
     if run.meter is None or run.budget is None:
         return
     price = run.budget.price(route.route_id)
-    cap = max(route.output_limits.classifier, route.output_limits.responder)
+    limits = route.output_limits
+    cap = max(limits.classifier, limits.responder, limits.voice)
     most = (
         turns
         * REQUESTS_PER_TURN
