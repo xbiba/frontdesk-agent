@@ -37,10 +37,22 @@ _HOURS: Final = re.compile(
 )
 
 
+# The 12-hour clock of English replies ("2 PM", "2:00 p.m."): read as the 24-hour time it is. The
+# run of 2026-10-13 read "2:00 PM" as 02:00 and refused a right reply twice.
+_MERIDIEM: Final = re.compile(
+    r"(?<![\d:.])(1[0-2]|0?[1-9])(?:[:.]([0-5]\d))?\s*([ap])\.?\s?m\b\.?", re.IGNORECASE
+)
+
+
 def times_named(reply: str) -> list[tuple[tuple[int, int], str]]:
     """Each time the reply names, as "HH:MM", with where it stands in the reply."""
     found: dict[tuple[int, int], str] = {}
+    for match in _MERIDIEM.finditer(reply):
+        hour = int(match[1]) % 12 + (12 if match[3].lower() == "p" else 0)
+        found[match.span()] = f"{hour:02d}:{match[2] or '00'}"
     for match in _CLOCK.finditer(reply):
+        if any(start <= match.start() < end for start, end in found):
+            continue  # part of a 12-hour time, already read
         found[match.span()] = f"{int(match[1]):02d}:{match[2]}"
     for match in _HOURS.finditer(reply):
         offset = match.start(1)

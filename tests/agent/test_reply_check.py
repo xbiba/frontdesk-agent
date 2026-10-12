@@ -49,6 +49,8 @@ TOOL = "- 2026-10-23 (venerdì 23 ottobre): 09:00, 10:00, 12:00, 16:00\nOrari: l
         pytest.param("1) venerdì 23: alle 9 e alle 10\n2) venerdì 23: alle 16", set(), id="a-list"),
         pytest.param("Venerdì 23 alle 9 o alle 11?", {"times"}, id="a-time-not-free"),
         pytest.param("On Friday 23 at 9 and 13.", {"times"}, id="in-english"),
+        pytest.param("On Friday 23 at 4 PM.", set(), id="a-12-hour-time"),
+        pytest.param("On Friday 23 at 2:00 p.m.", {"times"}, id="a-12-hour-time-not-free"),
     ],
 )
 def test_each_time_named_is_one_the_tools_gave(reply: str, codes: set[str]) -> None:
