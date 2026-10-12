@@ -72,7 +72,13 @@ from frontdesk.knowledge.facts import Catalog, load_catalog
 from frontdesk.observability.logs import log_event
 from frontdesk.observability.tracing import record_content, record_metadata, turn_span
 from frontdesk.safety.language import detect_language
-from frontdesk.safety.rules import Verdict, emergency_rule, evaluate, rule_text_length
+from frontdesk.safety.rules import (
+    PersonalField,
+    Verdict,
+    emergency_rule,
+    evaluate,
+    rule_text_length,
+)
 from frontdesk.shop.attempts import consume_order_lookup
 from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.pack import BusinessPack, FixedTextKey, Language, Profile
@@ -225,7 +231,7 @@ async def handle_message(
         )
         record_content(span, enabled=runtime.capture_content, message=text, reply=result.text)
     _log_turn(result, runtime.pack.id)
-    exchange = (text, result.text) if runtime.reception is not None else None
+    exchange = (text, result.text) if _kept(result, runtime) else None
     return result, _next_state(state, result, runtime.pack, exchange=exchange)
 
 
@@ -294,14 +300,13 @@ async def _decide(
         if found is None:
             return _handoff(pack, language, FixedTextKey.HANDOFF, TurnTrace(rule="too_long"))
         return _emergency(pack, language, found)
-    rule = evaluate(stripped)
+    rule = evaluate(stripped, expected=_expected_fields(state, runtime))
     if rule.verdict is Verdict.EMERGENCY:
         return _emergency(pack, language, rule.rule)
     if rule.verdict is Verdict.CLINICAL_ADVICE:
         return _handoff(pack, language, FixedTextKey.CLINICAL, TurnTrace(rule=rule.rule))
     if runtime.reception is not None:
-        # The agent leads: a name and a phone number are what a booking under way asks for.
-        if rule.verdict is Verdict.PERSONAL_DATA and state.booking is None:
+        if rule.verdict is Verdict.PERSONAL_DATA:  # anything but the name and phone it asked for
             trace = TurnTrace(rule=f"personal_data:{rule.rule}")
             return _fixed(pack, language, FixedTextKey.PERSONAL_DATA, trace)
         return await _reception(stripped, language, state, runtime)
@@ -362,7 +367,9 @@ async def _reception(
     if reply.kind is ReplyKind.CLINICAL:
         return _handoff(pack, language, FixedTextKey.CLINICAL, _as(trace, Category.CLINICAL))
     texts = pack.fixed_texts[language]
-    parts = [reply.text.strip()]
+    # The patient confirms what code wrote: a summary said in other words is replaced by it.
+    said = reply.text if desk.summary is None or desk.summary in reply.text else desk.summary
+    parts = [said.strip()]
     privacy = texts.get(FixedTextKey.BOOKING_PRIVACY)
     if desk.booked and privacy and privacy not in reply.text:
         parts.append(privacy)  # the link to the clinic's privacy page ends every booking
@@ -400,6 +407,7 @@ def _desk(
         now=now,
         message=text,
         first_turn=state.turns == 0,
+        turn=state.turns,
         facts=facts,
         conversation="\n".join(entry.text for entry in state.history),
         booking=state.booking,
@@ -982,3 +990,26 @@ def _with_disclosure(pack: BusinessPack, language: Language, result: TurnResult)
         return replace(result, text=f"{emergency}\n\n{disclosure}{contact}")
     written = f"{disclosure}\n\n{result.code_text}" if result.code_text is not None else None
     return replace(result, text=f"{disclosure}\n\n{result.text}", code_text=written)
+
+
+def _expected_fields(state: ConversationState, runtime: TurnRuntime) -> frozenset[PersonalField]:
+    """The personal data a message may hold: when the reception agent holds a time, the name and
+    the phone it asks for, and their corrections while the summary waits for a yes. Nothing else,
+    and never outside a booking (security review of the agent, 2026-10-12)."""
+    step = state.booking
+    asking = step is not None and step.stage in {BookingStage.NAME, BookingStage.CONFIRM}
+    if runtime.reception is None or not asking:
+        return frozenset()
+    return frozenset({PersonalField.NAME, PersonalField.PHONE})
+
+
+def _kept(result: TurnResult, runtime: TurnRuntime) -> bool:
+    """The exchange goes into the reception agent's conversation only when the agent answered it:
+    never a message a rule turned away (personal data, an emergency, medical advice), whose text
+    the fixed reply says is not used (security review of the agent, 2026-10-12)."""
+    unsaid = {Category.EMERGENCY, Category.CLINICAL}
+    return (
+        runtime.reception is not None
+        and result.trace.rule == "pass"
+        and result.trace.category not in unsaid
+    )

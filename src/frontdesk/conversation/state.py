@@ -14,6 +14,7 @@ from typing import Final, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from frontdesk.agent.vocab import Category, ClarifyField, Intent
+from frontdesk.observability.tracing import redact
 from frontdesk.tenancy.pack import Language
 
 MAX_REMEMBERED_INTENTS: Final = 5
@@ -50,6 +51,8 @@ class BookingStep(BaseModel):
     shown: tuple[datetime, ...] = ()  # every time offered so far: "other times" are the rest
     hold_id: uuid.UUID | None = None
     retries: int = 0
+    # The reception agent: the turn whose reply showed the summary; only the next message may say yes.
+    summary_turn: int | None = None
 
 
 class HistoryEntry(BaseModel):
@@ -60,8 +63,10 @@ class HistoryEntry(BaseModel):
 
 
 def remembered(role: Literal["patient", "assistant"], text: str) -> HistoryEntry:
-    """A message as the conversation keeps it: phone-like numbers masked, cut to a length."""
-    return HistoryEntry(role=role, text=_PHONE_LIKE.sub("[…]", text)[:MAX_HISTORY_CHARS])
+    """A message as the conversation keeps it: email addresses and phone-like numbers masked, cut
+    to a length."""
+    masked = _PHONE_LIKE.sub("[…]", redact(text))  # addresses, then anything phone-like
+    return HistoryEntry(role=role, text=masked[:MAX_HISTORY_CHARS])
 
 
 class ConversationState(BaseModel):

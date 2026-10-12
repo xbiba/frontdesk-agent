@@ -85,12 +85,14 @@ class Desk:
     now: datetime
     message: str
     first_turn: bool
+    turn: int  # the turns before this one: a summary shown now may be confirmed at turn + 1
     facts: str
     conversation: str  # the conversation so far, as text: a number in it may be repeated
     booking: BookingStep | None
     seen: list[str] = field(default_factory=list)  # what the tools returned this turn
     sources: list[str] = field(default_factory=list)
     booked: bool = False
+    summary: str | None = None  # the summary prepare_booking wrote this turn, shown as written
 
     @property
     def zone(self) -> ZoneInfo:
@@ -339,7 +341,7 @@ def _hold_time(desk: Desk, number: int) -> str:
         return desk.said("No times were shown yet: call free_times first.")
     if not 1 <= number <= len(step.offered):
         return desk.said(f"There is no time {number}: the list has {len(step.offered)}.")
-    choosing = step.model_copy(update={"stage": BookingStage.CHOOSE})
+    choosing = step.model_copy(update={"stage": BookingStage.CHOOSE, "summary_turn": None})
     reply = take(desk.context(), choosing, step.offered[number - 1])
     desk.booking = reply.next
     if reply.next is None or reply.next.stage is not BookingStage.NAME:
@@ -369,7 +371,9 @@ def _prepare_booking(desk: Desk, name: str, phone: str) -> str:
     if current is None:
         desk.booking = None
         return desk.said("The time is no longer held: call free_times again.")
-    desk.booking = step.model_copy(update={"stage": BookingStage.CONFIRM})
+    desk.booking = step.model_copy(
+        update={"stage": BookingStage.CONFIRM, "summary_turn": desk.turn}
+    )
     summary = phrase(
         "summary",
         desk.language,
@@ -379,6 +383,7 @@ def _prepare_booking(desk: Desk, name: str, phone: str) -> str:
         name=full_name,
         phone=number,
     )
+    desk.summary = summary
     return desk.said(summary)
 
 
@@ -386,6 +391,9 @@ def _confirm_booking(desk: Desk) -> str:
     step = desk.booking
     if step is None or step.stage is not BookingStage.CONFIRM:
         return desk.said("There is no summary to confirm: call prepare_booking first.")
+    if step.summary_turn != desk.turn - 1:
+        # A yes counts only as the answer to the summary in the reply just before it.
+        return desk.said("The summary was not your last message: call prepare_booking again.")
     if not affirms(desk.message):
         return desk.said("The patient has not said yes in their last message: ask them to confirm.")
     reply: StepReply = confirm(desk.context(), step)

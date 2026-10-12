@@ -143,7 +143,7 @@ async def test_a_booking_the_agent_leads_is_made_by_the_tools(
     assert chat.state.booking is None
     # The conversation is kept for the agent, its phone numbers masked.
     texts = [entry.text for entry in chat.state.history]
-    assert "Mario Rossi, […]" in texts
+    assert "Mario Rossi, [phone]" in texts
     assert not any("123 4567" in text or "691234567" in text for text in texts)
 
 
@@ -240,3 +240,76 @@ async def test_a_tool_never_holds_a_time_that_was_not_shown(base: TurnRuntime) -
     assert script.tool_results() == ["No times were shown yet: call free_times first."]
     with business_session(base.session_factory, base.pack.id) as session:
         assert list(session.scalars(select(BookingHold))) == []
+
+
+# --- The security review of the agent (2026-10-12) --------------------------------------------------
+
+
+async def test_personal_data_outside_a_held_time_is_turned_away_and_not_kept(
+    base: TurnRuntime,
+) -> None:
+    script = Script([])
+    chat = Chat(base, script)
+    reply = await chat.say("Il mio numero è +355 69 123 4567, mi richiamate?")
+    assert reply.text == base.pack.fixed_texts["it"][FixedTextKey.PERSONAL_DATA]  # type: ignore[index]
+    assert script.calls == []
+    assert chat.state.history == ()
+
+
+async def test_only_the_name_and_phone_pass_while_a_time_is_held(base: TurnRuntime) -> None:
+    script = Script(
+        [
+            [("free_times", {})],
+            _final(f"{LIST}\nQuale preferisce?", "question"),
+            [("hold_time", {"number": 1})],
+            _final("Nome, cognome e telefono?", "question"),
+        ]
+    )
+    chat = Chat(base, script)
+    await chat.say("Vorrei prenotare")
+    await chat.say("il primo")
+    reply = await chat.say("Mario Rossi, mario.rossi@example.com")
+    assert reply.text == base.pack.fixed_texts["it"][FixedTextKey.PERSONAL_DATA]  # type: ignore[index]
+    assert len(script.calls) == 4  # the agent never saw the address
+    assert not any("example.com" in entry.text for entry in chat.state.history)
+
+
+async def test_a_yes_that_does_not_answer_the_summary_books_nothing(
+    base: TurnRuntime, calendar: FixtureCalendar
+) -> None:
+    script = Script(
+        [
+            [("free_times", {})],
+            _final(f"{LIST}\nQuale preferisce?", "question"),
+            [("hold_time", {"number": 1})],
+            _final("Nome, cognome e telefono?", "question"),
+            [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
+            _final(SUMMARY, "question"),
+            _final("Si paga in clinica. Vuole sapere altro?", "question"),
+            [("confirm_booking", {})],  # a yes to another question
+            _final("Mi conferma la prenotazione?", "question"),
+        ]
+    )
+    chat = Chat(base, script)
+    for message in ("Vorrei prenotare", "il primo", "Mario Rossi, +355 69 123 4567", "e pago lì?"):
+        await chat.say(message)
+    await chat.say("sì")
+    assert "The summary was not your last message" in script.tool_results()[-1]
+    assert calendar.booked == {}
+
+
+async def test_the_summary_is_shown_as_code_wrote_it(base: TurnRuntime) -> None:
+    script = Script(
+        [
+            [("free_times", {})],
+            _final(f"{LIST}\nQuale preferisce?", "question"),
+            [("hold_time", {"number": 2})],
+            _final("Nome, cognome e telefono?", "question"),
+            [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
+            _final("Perfetto Mario, confermiamo?", "question"),
+        ]
+    )
+    chat = Chat(base, script)
+    await chat.say("Vorrei prenotare")
+    await chat.say("il secondo")
+    assert (await chat.say("Mario Rossi, +355 69 123 4567")).text == SUMMARY
