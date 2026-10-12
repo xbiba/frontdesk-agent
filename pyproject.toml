@@ -104,6 +104,7 @@ name = "Core packages never import entrypoints"
 type = "forbidden"
 source_modules = [
   "frontdesk.agent",
+  "frontdesk.booking",
   "frontdesk.conversation",
   "frontdesk.db",
   "frontdesk.knowledge",
