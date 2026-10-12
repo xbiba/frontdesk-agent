@@ -208,6 +208,13 @@ RULES = [
         "calendar references unknown doctor 'nobody'",
         id="calendar-to-unknown-doctor",
     ),
+    pytest.param(
+        CLINIC,
+        "business.yaml",
+        lambda d: d["fixed_texts"]["it"].update(next_step="Per prenotare scrivici qui."),
+        "fixed text 'next_step' for language 'it' must contain the location phone or email",
+        id="next-step-gives-a-contact",  # it may stand in for the handoff of a booking
+    ),
 ]
 
 

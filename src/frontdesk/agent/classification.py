@@ -32,6 +32,8 @@ _NUMBER_IN_TEXT: Final = re.compile(r"(?<![\w-])([0-9]{4,6})(?![\w-])")
 # year is not a postal code. Hyphenated dates are kept out by `_NUMBER_IN_TEXT` itself.
 # Words that ask *when* (sq, it, en), read in the normalized message. A doctor question that asks when
 # is about dates, which the documents hold, not about the doctor's record (live MCU run, 2026-10-11).
+# When a doctor is in: the prompt says general_question, the model sometimes says doctor_info.
+_DOCTOR_DATES: Final = frozenset({Intent.DOCTOR_INFO, Intent.GENERAL_QUESTION})
 _ASKS_WHEN: Final = re.compile(
     r"\b(?:kur|deri kur|data|datat|dite|ditet|quando|fino a|date|giorni|giorno|when|until|dates|days)\b"
 )
@@ -126,10 +128,14 @@ def validate_classification(
     profile: Profile,
     features: Features,
     language: Language,
+    bookable: frozenset[str] = frozenset(),
 ) -> ValidatedFields | Rejection:
+    """`bookable`: the doctors whose free slots the deployment can read (M4)."""
     if output.category is Category.EMERGENCY:
         return ValidatedFields(category=Category.EMERGENCY, intent=Intent.OTHER, language=language)
-    output = _repaired(output, message=message, catalog=catalog, features=features)
+    output = _repaired(
+        output, message=message, catalog=catalog, features=features, bookable=bookable
+    )
     problem = _contract_problem(output, catalog=catalog, profile=profile, features=features)
     if problem is not None:
         return Rejection(reason=problem)
@@ -159,14 +165,20 @@ def validate_classification(
 
 
 def _repaired(
-    output: ClassifierOutput, *, message: str, catalog: Catalog, features: Features
+    output: ClassifierOutput,
+    *,
+    message: str,
+    catalog: Catalog,
+    features: Features,
+    bookable: frozenset[str],
 ) -> ClassifierOutput:
     """What the model was seen to leave out or write wrong, repaired where that is safe (the first
     live run, 2026-10-11): a service written by its name instead of its ID; a health problem that
     fits no category of the map, which gets the clinical notice; a general question left without
     its rewrite, for which the person's own words stand in, held to the same filter, unless they
     describe symptoms, which get the clinical notice. A business without services has no service
-    for the model to name."""
+    for the model to name. A question about when a doctor is in asks for that doctor's free slots
+    when the calendar can be read (M4), and the documents otherwise."""
     update: dict[str, object] = {}
     named = _service_ids_by_name(output.service_ids, catalog) if catalog.services else ()
     if named != tuple(output.service_ids):
@@ -181,10 +193,14 @@ def _repaired(
             "intent": Intent.OTHER,
             "problem_category_id": None,
         }
-    if output.intent is Intent.DOCTOR_INFO and _ASKS_WHEN.search(normalize(message)):
+    asks_when = _ASKS_WHEN.search(normalize(message)) is not None
+    named_bookable = any(doctor in bookable for doctor in output.doctor_ids)
+    if asks_when and named_bookable and output.intent in _DOCTOR_DATES:
+        update |= {"intent": Intent.BOOKING, "general_question": None}
+        output, update = output.model_copy(update=update), {}
+    elif output.intent is Intent.DOCTOR_INFO and asks_when:
         update |= {"intent": Intent.GENERAL_QUESTION, "general_question": None}
-        output = output.model_copy(update=update)
-        update = {}
+        output, update = output.model_copy(update=update), {}
     if output.intent is Intent.GENERAL_QUESTION and not output.general_question and message.strip():
         if contains_clinical_terms(message):
             update |= {"category": Category.CLINICAL, "intent": Intent.OTHER}

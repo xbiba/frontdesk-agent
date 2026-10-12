@@ -1,7 +1,8 @@
 import json
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic import ValidationError
@@ -555,4 +556,7 @@ def test_a_case_runs_on_its_own_day_when_it_states_one(clinic_pack: BusinessPack
     dated = TurnCase.model_validate(
         {"id": "dated", "message": "Quando?", "today": "2026-10-25", "expect": {}}
     )
-    assert case_runtime(runtime, dated).today() == date(2026, 10, 25)
+    on_its_day = case_runtime(runtime, dated)
+    assert on_its_day.today() == date(2026, 10, 25)
+    # 08:00 of that day in the business's time zone: the hour the free slots are counted from.
+    assert on_its_day.now() == datetime(2026, 10, 25, 8, tzinfo=ZoneInfo(clinic_pack.timezone))

@@ -66,11 +66,13 @@ class FixedTextKey(StrEnum):
     CLARIFICATION = "clarification"
     ATTACHMENT = "attachment"
     NEXT_STEP = "next_step"
+    NO_SLOTS = "no_slots"
 
 
 # A pack may leave these out. The next step (how to book) ends an answer once per conversation;
-# without one, an answer ends with the answer.
-OPTIONAL_FIXED_TEXTS: Final = frozenset({FixedTextKey.NEXT_STEP})
+# without one, an answer ends with the answer. Without `no_slots`, a booking question with no free
+# slot gets `no_information`.
+OPTIONAL_FIXED_TEXTS: Final = frozenset({FixedTextKey.NEXT_STEP, FixedTextKey.NO_SLOTS})
 
 
 class Frozen(BaseModel):
@@ -241,11 +243,12 @@ def _language_problems(pack: BusinessPack) -> list[str]:
             for key in FixedTextKey
             if (key not in OPTIONAL_FIXED_TEXTS or key in texts) and not texts.get(key, "").strip()
         ]
-        if not _gives_a_contact(texts.get(FixedTextKey.HANDOFF, ""), pack.location):
-            problems.append(
-                f"fixed text '{FixedTextKey.HANDOFF}' for language '{language}' "
-                "must contain the location phone or email"
-            )
+        problems += [
+            f"fixed text '{key}' for language '{language}' must contain the location phone or email"
+            for key in (FixedTextKey.HANDOFF, FixedTextKey.NEXT_STEP)
+            if (key is FixedTextKey.HANDOFF or key in texts)
+            and not _gives_a_contact(texts.get(key, ""), pack.location)
+        ]
     problems += [
         f"service '{service.id}' has no name in '{language}'"
         for service in pack.services
