@@ -172,6 +172,16 @@ def test_failures_come_in_a_fixed_order() -> None:
     )
 
 
+def test_a_booking_handoff_may_end_with_the_next_step_which_gives_the_contact() -> None:
+    step = "Per prenotare una visita, chiama la reception al +355 00 000 0000."
+    texts = {**TEXTS, FixedTextKey.NEXT_STEP: step}
+    case = _case(outcome="handoff")
+    booking = _result(f"Al momento non ci sono orari liberi.\n\n{step}", TurnOutcome.HANDOFF)
+    assert check_case(case, booking, texts=texts) == ()
+    # Without a next step in the pack, only the handoff text gives the contact.
+    assert "handoff without contact" in check_case(case, booking, texts=TEXTS)
+
+
 def test_a_failure_reason_stays_on_one_line_so_a_report_row_is_never_split() -> None:
     case = _case(contains=["Se è un'emergenza.\n\nCiao!"], not_contains=["Fisioterapia:\r\n"])
     failures = check_case(case, _result("Fisioterapia:\r\n30 EUR"), texts=TEXTS)
