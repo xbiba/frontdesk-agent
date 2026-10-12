@@ -46,6 +46,8 @@ class ModelRoute:
     dimension: int | None = None
     # Gemini's thinking level for this model: the lowest it accepts (3.8 Flash refuses "minimal").
     thinking: str = "minimal"
+    # How long one request may take before it is cut and retried (frontdesk.model_gateway.factory).
+    request_timeout_seconds: float = 30.0
 
 
 ROUTES: Final[dict[str, ModelRoute]] = {
@@ -84,6 +86,9 @@ ROUTES: Final[dict[str, ModelRoute]] = {
         region="eu",
         approved_for=frozenset({DataClass.EVALUATION}),
         thinking="low",
+        # Its replies take 2 seconds at the median and 11 at the 95th percentile; a few stuck for
+        # 15 to 36 seconds on 2026-10-12 and spent the whole turn. Cut at 15 and retried instead.
+        request_timeout_seconds=15.0,
     ),
     # The embedding candidates of the M3 experiment (design §4.5). Neither is served on the eu
     # multi-region; both are on europe-west1 (Belgium).

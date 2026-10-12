@@ -83,7 +83,7 @@ def tls_context() -> ssl.SSLContext:
     return ssl.create_default_context(cafile=certifi.where())
 
 
-def model_http_client() -> httpx2.AsyncClient:
+def model_http_client(timeout: float = MODEL_TIMEOUT_SECONDS) -> httpx2.AsyncClient:
     """The HTTP client of every live model: nothing is taken from the environment.
 
     A client that trusts the environment sends its requests through HTTP(S)_PROXY or ALL_PROXY and
@@ -99,7 +99,7 @@ def model_http_client() -> httpx2.AsyncClient:
     """
     return httpx2.AsyncClient(
         trust_env=False,
-        timeout=httpx2.Timeout(MODEL_TIMEOUT_SECONDS, connect=5.0),
+        timeout=httpx2.Timeout(timeout, connect=5.0),
         verify=tls_context(),
     )
 
@@ -113,19 +113,19 @@ def model_http_client_sync() -> httpx2.Client:
     )
 
 
-def google_http_options(location: str) -> HttpOptions:
+def google_http_options(location: str, timeout: float = MODEL_TIMEOUT_SECONDS) -> HttpOptions:
     context = tls_context()
     return HttpOptions(
         base_url=f"{VERTEX_HOSTS[location]}/",
         api_version=VERTEX_API_VERSION,
         httpx_client=model_http_client_sync(),
-        httpx_async_client=model_http_client(),
+        httpx_async_client=model_http_client(timeout),
         # The two clients above make every request. google-genai still looks for a context in these
         # arguments, and builds one from SSL_CERT_FILE and SSL_CERT_DIR where it finds none (for the
         # synchronous client, and for the websocket it never opens): give it ours.
         client_args={"verify": context},
         async_client_args={"verify": context, "ssl": context},
-        timeout=int(MODEL_TIMEOUT_SECONDS * 1000),  # milliseconds
+        timeout=int(timeout * 1000),  # milliseconds
         retry_options=GOOGLE_RETRIES,
     )
 
@@ -145,7 +145,7 @@ def google_client(route: ModelRoute, *, gcp_project: str) -> Client:
         vertexai=True,
         project=project,
         location=location,
-        http_options=google_http_options(location),
+        http_options=google_http_options(location, route.request_timeout_seconds),
         debug_config=DebugConfig(client_mode=None, replays_directory=None, replay_id=None),
     )
 

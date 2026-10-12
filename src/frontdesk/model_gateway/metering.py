@@ -62,6 +62,12 @@ from frontdesk.model_gateway.costs import Budget, BudgetError, BudgetExhaustedEr
 # it: no tokenizer makes more tokens than the UTF-8 bytes of its input, so a request of more bytes
 # is not sent.
 MAX_INPUT_TOKENS_PER_REQUEST: Final = 32_000
+# The reception agent's requests carry the conversation, the facts, its tools' results and Gemini's
+# thought signatures, which this JSON measure counts as bytes though they are not prompt text: one of
+# about 2,000 input tokens measured 32,349 bytes in the run of 2026-10-12. Its role gets a larger
+# bound, and its reserve holds as much.
+AGENT_INPUT_TOKENS_PER_REQUEST: Final = 96_000
+AGENT_ROLE: Final = "agent"
 # The errors that end a request before it reaches the provider, which bills nothing for it: no
 # credentials, no connection. An error status comes back as ModelHTTPError, also unbilled.
 NOT_SENT: Final = (GoogleAuthError, httpx2.ConnectError, httpx2.ConnectTimeout)
@@ -191,6 +197,7 @@ class Meter:
         messages: list[ModelMessage],
         parameters: ModelRequestParameters,
         model_settings: ModelSettings | None,
+        role: str = "",
     ) -> int:
         """The output cap of a request, when the reserve can bound what it would cost.
 
@@ -203,11 +210,9 @@ class Meter:
         if not cap:
             self._refuse("has no output cap")
         size = _request_bytes(messages, parameters)
-        if size > MAX_INPUT_TOKENS_PER_REQUEST:
-            self._refuse(
-                f"is {size} bytes long, more than the {MAX_INPUT_TOKENS_PER_REQUEST} tokens the "
-                "reserve assumes"
-            )
+        bound = input_bound(role)
+        if size > bound:
+            self._refuse(f"is {size} bytes long, more than the {bound} tokens the reserve assumes")
         return cap
 
     def _refuse(self, why: str) -> NoReturn:
@@ -215,7 +220,7 @@ class Meter:
         self._stop(STOP_BUDGET, message)
         raise UnboundedRequestError(message)
 
-    def reserve(self, max_tokens: int) -> float:
+    def reserve(self, max_tokens: int, role: str = "") -> float:
         """Refuse a request when the run has stopped or the budget has no room for it and for the
         requests in flight; otherwise hold the most it could cost, and return that.
 
@@ -224,7 +229,7 @@ class Meter:
             raise RunStoppedError(
                 f"the run has stopped ({self._stop_reason}): no further request is sent"
             )
-        most = self._price.cost(input_units=MAX_INPUT_TOKENS_PER_REQUEST, output_units=max_tokens)
+        most = self._price.cost(input_units=input_bound(role), output_units=max_tokens)
         try:
             self._budget.ensure_room(self._held + most)
         except BudgetExhaustedError as error:
@@ -345,6 +350,11 @@ class Meter:
         )
 
 
+def input_bound(role: str) -> int:
+    """The most input tokens a request of this role may hold, and its reserve assumes."""
+    return AGENT_INPUT_TOKENS_PER_REQUEST if role == AGENT_ROLE else MAX_INPUT_TOKENS_PER_REQUEST
+
+
 def _request_bytes(messages: list[ModelMessage], parameters: ModelRequestParameters) -> int:
     """The UTF-8 length of what a request carries: its messages, instructions included, and the
     definitions of its tools."""
@@ -385,7 +395,7 @@ class MeteredModel(WrapperModel):
         """The request in up to `MAX_ATTEMPTS` attempts. The last attempt ends it with what it
         ended with, which is what the runner's stop logic reads (a 429, a refusal by the budget).
         However it ends, the meter is told, for the breaker."""
-        cap = self._meter.admit(messages, model_request_parameters, model_settings)
+        cap = self._meter.admit(messages, model_request_parameters, model_settings, self._role)
         try:
             response = await self._attempts(messages, model_settings, model_request_parameters, cap)
         except BaseException as error:
@@ -423,7 +433,7 @@ class MeteredModel(WrapperModel):
         cap: int,
     ) -> ModelResponse:
         """One attempt: held while it is away, settled as soon as it ends."""
-        reserved = self._meter.reserve(cap)
+        reserved = self._meter.reserve(cap, self._role)
         started = self._meter.clock()
         try:
             response = await super().request(messages, model_settings, model_request_parameters)

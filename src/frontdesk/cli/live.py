@@ -55,12 +55,12 @@ from frontdesk.model_gateway.costs import Budget, BudgetError, load_budget
 from frontdesk.model_gateway.factory import pinned_location
 from frontdesk.model_gateway.metering import (
     BREAKER_ATTEMPTS,
-    MAX_INPUT_TOKENS_PER_REQUEST,
     STOP_BUDGET,
     STOP_LEDGER,
     STOP_RATE_LIMITED,
     STOP_UNAVAILABLE,
     Meter,
+    input_bound,
 )
 from frontdesk.model_gateway.routes import (
     CHAT_PROVIDERS,
@@ -356,7 +356,7 @@ def _show_plan(run: _Run, pending: Sequence[TurnCase]) -> None:
     most = (
         turns
         * (AGENT_REQUESTS_PER_TURN if agent else REQUESTS_PER_TURN)
-        * price.cost(input_units=MAX_INPUT_TOKENS_PER_REQUEST, output_units=cap)
+        * price.cost(input_units=input_bound("agent" if agent else ""), output_units=cap)
     )
     left = eur_left(run.budget, spent_usd(run.budget))
     typer.echo(
