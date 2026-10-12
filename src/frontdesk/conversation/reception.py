@@ -48,6 +48,7 @@ from frontdesk.knowledge.embedders import Embedder
 from frontdesk.knowledge.evidence import neutralized
 from frontdesk.knowledge.facts import Catalog
 from frontdesk.knowledge.retrieval import RetrievedChunk, chunk_evidence, hybrid_search
+from frontdesk.safety.rules import contains_clinical_terms
 from frontdesk.tenancy.pack import BusinessPack, Language, Profile
 
 RECEPTION_LIMITS: Final = UsageLimits(request_limit=6)
@@ -273,7 +274,11 @@ def build_reception(
         ):
             return output  # the handoff text, or the introduction, says it all
         known = "\n".join([desk.facts, *desk.seen, desk.conversation, desk.message])
-        problems = reply_problems(output.text, known, booked=desk.booked)
+        problems = list(reply_problems(output.text, known, booked=desk.booked))
+        if output.kind is ReplyKind.NOTICE and contains_clinical_terms(output.text):
+            # Next to the medical notice, the answer is only the practical part (ADR-0006): a word
+            # on the health problem there is the model talking health (security review, 2026-10-12).
+            problems.append("it talks about the health problem; answer only the practical part")
         if problems:
             raise ModelRetry(
                 "Rewrite the reply: " + "; ".join(problems) + ". Use only the clinic facts, the "

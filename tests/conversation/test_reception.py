@@ -461,3 +461,17 @@ async def test_every_booking_step_names_the_calendar(base: TurnRuntime) -> None:
     await chat.say("Vorrei prenotare")
     held = await chat.say("il primo")
     assert held.trace.sources == ("calendar:dr-arben-demo",)
+
+
+async def test_a_notice_answer_may_not_talk_about_the_problem(base: TurnRuntime) -> None:
+    script = Script(
+        [
+            _final("Con la febbre è meglio riposare; apriamo alle 09:00.", "notice"),
+            _final("Apriamo alle 09:00.", "notice"),
+        ]
+    )
+    reply = await Chat(base, script).say("Ho la febbre, a che ora aprite domani?")
+    assert reply.text.startswith("Apriamo alle 09:00.\n\n")
+    retry = script.calls[1][-1]
+    assert isinstance(retry, ModelRequest)
+    assert "health problem" in str(retry.parts[0])
