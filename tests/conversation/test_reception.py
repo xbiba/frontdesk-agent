@@ -423,3 +423,13 @@ async def test_a_confirmation_in_other_words_is_shown_as_code_wrote_it(
     assert reply.text.startswith("Prenotazione confermata: venerdì 23 ottobre, 09:00")
     assert "30 ottobre" not in reply.text
     assert reply.text.count(PRIVACY) == 1
+
+
+async def test_a_search_reads_the_conversation_s_language_first(base: TurnRuntime) -> None:
+    script = Script(
+        [[("search_information", {"question": "Come si prepara la visita?"})], _final("Ecco.")]
+    )
+    await Chat(base, script).say("Come mi preparo alla visita?")
+    (found,) = script.tool_results()
+    assert found  # the demo clinic's documents
+    assert len(found) <= 2500 + 400  # the passages, with their titles

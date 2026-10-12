@@ -47,10 +47,15 @@ from frontdesk.db.engine import business_session
 from frontdesk.knowledge.embedders import Embedder
 from frontdesk.knowledge.evidence import neutralized
 from frontdesk.knowledge.facts import Catalog
-from frontdesk.knowledge.retrieval import chunk_evidence, hybrid_search
+from frontdesk.knowledge.retrieval import RetrievedChunk, chunk_evidence, hybrid_search
 from frontdesk.tenancy.pack import BusinessPack, Language, Profile
 
 RECEPTION_LIMITS: Final = UsageLimits(request_limit=6)
+SEARCH_CANDIDATES: Final = 12  # passages the search ranks
+SEARCH_PASSAGES: Final = 4  # passages the agent reads, in its language when there are some
+# What one search returns at most: each later request of the turn carries it again, and a request
+# must stay within the reserve's bytes (one passed 32,000 in the run of 2026-10-12).
+SEARCH_CHARS: Final = 2500
 
 
 class ReplyKind(StrEnum):
@@ -290,9 +295,21 @@ def _search(desk: Desk, question: str) -> str:
             query=question,
             query_vector=vector,
             today=desk.today,
+            limit=SEARCH_CANDIDATES,
+            max_chars=SEARCH_CHARS * 4,
             min_similarity=desk.min_similarity,
         )
-    passages = [neutralized(chunk_evidence(chunk)) for chunk in chunks]
+    # The conversation's language first: the same document in three languages is three times the
+    # reading, and made the run of 2026-10-12 slow (live probe).
+    own = [chunk for chunk in chunks if chunk.language == desk.language]
+    chosen: list[RetrievedChunk] = []
+    size = 0
+    for chunk in (own or chunks)[:SEARCH_PASSAGES]:
+        if chosen and size + len(chunk.content) > SEARCH_CHARS:
+            break
+        chosen.append(chunk)
+        size += len(chunk.content)
+    passages = [neutralized(chunk_evidence(chunk)) for chunk in chosen]
     desk.sources += [item.source_ref.partition("#")[0] for item in passages]
     found = "\n\n".join(f"[{item.title}]\n{item.content}" for item in passages)
     return desk.said(found or "Nothing in the documents answers this.")
