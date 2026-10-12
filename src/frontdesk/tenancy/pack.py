@@ -83,8 +83,16 @@ class Features(Frozen):
 
 
 class CalendarIntegration(Frozen):
+    """One calendar per bookable doctor (ADR-0011). The doctor's hours are the events titled with
+    the marker; the other events are appointments, read only as busy time."""
+
     credentials_ref: str = Field(min_length=1)
     calendars: dict[str, str] = Field(min_length=1)
+    availability_marker: NonBlankStr = "Disponibile"
+    horizon_days: int = Field(default=14, ge=1, le=60)
+    min_notice_minutes: int = Field(default=120, ge=0, le=10080)
+    buffer_minutes: int = Field(default=0, ge=0, le=120)
+    max_options: int = Field(default=3, ge=1, le=5)
 
 
 class Integrations(Frozen):
@@ -197,6 +205,18 @@ class BusinessPack(Frozen):
     orientation_map: OrientationMap | None = None
     orders: list[Order] = Field(default_factory=list)
     documents: list[KnowledgeDocument] = Field(default_factory=list)
+
+    def bookable_doctors(self) -> dict[str, tuple[str, ...]]:
+        """Each doctor with a calendar, with the services a patient can book online."""
+        calendar = self.integrations.calendar
+        if calendar is None:
+            return {}
+        bookable = {service.id for service in self.services if service.bookable_online}
+        return {
+            doctor.id: tuple(item for item in doctor.service_ids if item in bookable)
+            for doctor in self.doctors
+            if doctor.id in calendar.calendars
+        }
 
     @model_validator(mode="after")
     def _check_consistency(self) -> BusinessPack:
@@ -320,6 +340,11 @@ def _profile_problems(pack: BusinessPack) -> list[str]:
             f"calendar references unknown doctor '{doctor_id}'"
             for doctor_id in calendar.calendars
             if doctor_id not in doctors
+        ]
+        problems += [
+            f"calendar for '{doctor_id}' has no bookable service"
+            for doctor_id, services in pack.bookable_doctors().items()
+            if not services
         ]
     return problems
 
