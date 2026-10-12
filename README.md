@@ -128,7 +128,7 @@ Live runs (`frontdesk eval turns --live --route <route> --run-dir <dir> --budget
 | M0 | Repository, CI, local stack, decision records | Done |
 | M1 | Business packs, approved versioned knowledge, hybrid retrieval, retrieval evaluation | Done |
 | M2 | Safety rules, classifier, replies written from records, document answers with checked quotes, offline evaluations, keyless demo with two deployments | Done |
-| M3 | Live model on Vertex AI in the EU, chosen by evaluation (today Gemini 3.1 Flash-Lite), with a small set of approved clinic information; the evaluations also run live, within a budget, and the claim checks are tuned by measurement | In progress |
+| M3 | Live model on Vertex AI in the EU, chosen by evaluation (today Gemini 3.1 Flash-Lite), with a small set of approved clinic information; the evaluations also run live, within a budget, and the claim checks are tuned by measurement | Done |
 | M4 | Instagram in shadow mode: the first channel adapter and its policy; the agent proposes replies and staff approve each one before it is sent | Planned |
 | M5 | Limited FAQ release in production, without bookings | Planned |
 | M6 | Bookings and WhatsApp | Planned |
