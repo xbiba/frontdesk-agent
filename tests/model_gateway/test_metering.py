@@ -94,7 +94,8 @@ async def test_a_rate_limit_that_outlived_the_retries_stops_the_run(tmp_path: Pa
             "x", model_settings={"max_tokens": 600}
         )
     assert meter.stop_reason == "rate_limited"
-    assert meter.drain() == ()  # a refused request costs nothing
+    # A refused request costs nothing: each attempt is a call of no cost, with its status.
+    assert {(call.finish_reason, call.usd) for call in meter.drain()} == {("error 429", 0.0)}
 
 
 async def test_other_provider_errors_do_not_stop_the_run(tmp_path: Path) -> None:
@@ -139,7 +140,9 @@ async def test_a_request_without_usage_is_charged_its_reserve_once_it_may_have_b
     reserve = (MAX_INPUT_TOKENS_PER_REQUEST * 1.0 + 600 * 10.0) / 1_000_000
     assert budget.spent_usd() == pytest.approx(reserve if charged else 0.0)
     calls = meter.drain()
-    assert [call.finish_reason for call in calls] == (["unconfirmed"] if charged else [])
+    assert [call.finish_reason for call in calls if call.usd > 0] == (
+        ["unconfirmed"] if charged else []
+    )
     assert meter.stop_reason is None
 
 

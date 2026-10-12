@@ -261,5 +261,5 @@ async def test_credentials_that_cannot_be_refreshed_cost_nothing_and_send_nothin
     assert run.sent == []
     assert ledger(run.budget) == []
     assert run.sleeps.waits == []  # credentials are not retried
-    assert run.meter.drain() == ()
+    assert [(call.finish_reason, call.usd) for call in run.meter.drain()] == [("not sent", 0.0)]
     assert run.meter.stop_reason is None

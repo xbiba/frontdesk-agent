@@ -79,6 +79,10 @@ UNBILLED: Final = (ModelHTTPError, *NOT_SENT)
 # `GOOGLE_RETRIES` keeps the same policy, and a test holds the two together.
 RETRY_STATUSES: Final = frozenset({429, 500, 502, 503, 504})
 RETRY_WAITS: Final = (2.0, 4.0, 8.0)
+# The agent answers a patient who waits: a reply within 20 seconds (decision of 2026-10-12), and a
+# twin goes out after 4.5 seconds anyway (frontdesk.model_gateway.hedging). The run of 2026-10-13
+# lost up to 29 seconds of a turn to the waits above.
+AGENT_RETRY_WAITS: Final = (1.0, 2.0, 4.0)
 MAX_ATTEMPTS: Final = len(RETRY_WAITS) + 1
 # Why a run stops (`Meter.stop_reason`); a command maps each to an exit code.
 STOP_BUDGET: Final = "budget"
@@ -247,11 +251,24 @@ class Meter:
         left) gives its hold back."""
         self._held = max(0.0, self._held - reserved)
 
-    def failed(self, role: str, reserved: float) -> None:
+    def failed(self, role: str, reserved: float, seconds: float, reason: str) -> None:
         """An attempt of `role` that cost nothing (the provider answered with an error status, or
-        the request never left): it gives its hold back, and it is one more failure in a row."""
+        the request never left): it gives its hold back, it is one more failure in a row, and it is
+        a call of the turn with `reason` and its time, which no record showed before."""
         self.release(reserved)
         self._failures[role] = self._failures.get(role, 0) + 1
+        self._calls.append(
+            CallRecord(
+                agent=role,
+                model_version=None,
+                input_tokens=0,
+                output_tokens=0,
+                thoughts_tokens=0,
+                finish_reason=reason,
+                usd=0.0,
+                seconds=seconds,
+            )
+        )
 
     def _append(self, kind: str, usd: float) -> None:
         try:
@@ -375,6 +392,16 @@ class Meter:
         )
 
 
+def retry_waits(role: str) -> tuple[float, ...]:
+    """The waits between the attempts of a request of this role."""
+    return AGENT_RETRY_WAITS if role == AGENT_ROLE else RETRY_WAITS
+
+
+def _unbilled(error: Exception) -> str:
+    """Why an attempt cost nothing: the error status it was answered with, or that it never left."""
+    return f"error {error.status_code}" if isinstance(error, ModelHTTPError) else "not sent"
+
+
 def input_bound(role: str) -> int:
     """The most input tokens a request of this role may hold, and its reserve assumes."""
     return AGENT_INPUT_TOKENS_PER_REQUEST if role == AGENT_ROLE else MAX_INPUT_TOKENS_PER_REQUEST
@@ -447,7 +474,7 @@ class MeteredModel(WrapperModel):
                     if isinstance(error, ModelHTTPError) and error.status_code == 429:
                         self._meter.rate_limited()  # it outlived the attempts
                     raise
-            await self._meter.sleep(RETRY_WAITS[attempt])
+            await self._meter.sleep(retry_waits(self._role)[attempt])
         raise AssertionError("the last attempt returns or raises")  # pragma: no cover
 
     async def _attempt(
@@ -462,9 +489,10 @@ class MeteredModel(WrapperModel):
         started = self._meter.clock()
         try:
             response = await super().request(messages, model_settings, model_request_parameters)
-        except UNBILLED:
+        except UNBILLED as error:
             # An error status, or a request that never left: the provider billed nothing.
-            self._meter.failed(self._role, reserved)
+            seconds = self._meter.clock() - started
+            self._meter.failed(self._role, reserved, seconds, _unbilled(error))
             raise
         except BaseException:
             # Sent, but no usage came back: the provider may have billed it. If the ledger cannot

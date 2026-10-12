@@ -144,10 +144,43 @@ async def test_each_attempt_is_settled_on_its_own(tmp_path: Path, row: Row) -> N
     assert sleeps.waits == list(row.waits)
     assert meter.stop_reason == row.stop
     assert meter.held_usd == 0.0
-    # Each attempt that cost something is a call of the turn, in order.
-    assert [call.finish_reason for call in meter.drain()] == [
+    # Each attempt is a call of the turn, in order; those that cost something are on the ledger.
+    calls = meter.drain()
+    assert len(calls) == len(row.script)
+    assert [call.finish_reason for call in calls if call.usd > 0] == [
         "unconfirmed" if kind == UNCONFIRMED else "stop" for kind, _ in row.ledger
     ]
+
+
+async def test_an_attempt_that_cost_nothing_is_a_call_with_its_status_and_its_time(
+    tmp_path: Path,
+) -> None:
+    # The run of 2026-10-13 lost up to 29 seconds of a turn to attempts that no record showed.
+    ticks = iter(range(10))
+    meter = Meter(
+        write_budget(tmp_path),
+        route_id=ROUTE,
+        run_id="run-1",
+        clock=lambda: float(next(ticks)),
+        sleep=Sleeps(),
+    )
+    model = ScriptedModel(status(429), refused, answer())
+    await Agent(meter.wrap(model, "classifier")).run("x", model_settings=CAP)
+    calls = meter.drain()
+    assert [(call.finish_reason, call.usd, call.seconds) for call in calls[:2]] == [
+        ("error 429", 0.0, 1.0),
+        ("not sent", 0.0, 1.0),
+    ]
+    assert calls[2].finish_reason == "stop"
+
+
+async def test_the_agent_waits_less_between_attempts(tmp_path: Path) -> None:
+    # A reply within 20 seconds (decision of 2026-10-12), and a twin goes out after 4.5 anyway.
+    sleeps = Sleeps()
+    meter = Meter(write_budget(tmp_path), route_id=ROUTE, run_id="run-1", sleep=sleeps)
+    model = ScriptedModel(status(503), status(503), status(503), answer())
+    await Agent(meter.wrap(model, "agent")).run("x", model_settings=CAP)
+    assert sleeps.waits == [1.0, 2.0, 4.0]
 
 
 async def test_the_last_attempt_ends_the_request_with_what_it_ended_with(tmp_path: Path) -> None:
