@@ -25,6 +25,7 @@ _LABELS: dict[str, dict[str, str]] = {
     "address": {"sq": "Adresa", "it": "Indirizzo", "en": "Address"},
     "phone": {"sq": "Telefoni", "it": "Telefono", "en": "Phone"},
     "email": {"sq": "Email", "it": "Email", "en": "Email"},
+    "whatsapp": {"sq": "WhatsApp", "it": "WhatsApp", "en": "WhatsApp"},
     "hours": {"sq": "Orari", "it": "Orari", "en": "Opening hours"},
     "price": {"sq": "Çmimi", "it": "Prezzo", "en": "Price"},
     "service": {"sq": "Shërbimi", "it": "Servizio", "en": "Service"},
@@ -105,6 +106,7 @@ def location_evidence(session: Session, business_id: str, language: Language) ->
     values = {
         "address": location.address,
         "phone": location.phone,
+        **({"whatsapp": location.whatsapp} if location.whatsapp else {}),
         "email": location.email,
         "hours": hours,
     }

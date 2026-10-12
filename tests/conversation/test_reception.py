@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic_ai import ModelResponse, ToolCallPart
@@ -21,11 +22,14 @@ from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, TurnResult, TurnRuntime, handle_message
 from frontdesk.db.engine import business_session
 from frontdesk.db.models import BookingHold
-from frontdesk.tenancy.pack import BusinessPack, FixedTextKey
+from frontdesk.tenancy.pack import BusinessPack, CalendarIntegration, FixedTextKey, Integrations
 from tests.conversation.helpers import classifier_turns, document_responder, make_runtime
-from tests.conversation.test_booking_flow import NOW, PRIVACY, TIRANE, _pack
 
 pytestmark = pytest.mark.db
+TIRANE = ZoneInfo("Europe/Tirane")
+NOW = datetime(2026, 10, 22, 8, tzinfo=TIRANE)
+STEP = "Per prenotare una visita, chiama la reception al +355 00 000 0000."
+PRIVACY = "Informazioni e privacy: www.example.com"
 Activate = Callable[..., sessionmaker[Session]]
 Step = list[tuple[str, dict[str, Any]]] | dict[str, Any]
 CALENDAR = """
@@ -46,6 +50,19 @@ BOOKED = (
     "Prenotazione confermata: venerdì 23 ottobre, 09:30, Visita ortopedica con Dr. Arben Demo. "
     "Per annullarla o spostarla, chiami la reception al +355 00 000 0000."
 )
+
+
+def _pack(clinic_pack: BusinessPack) -> BusinessPack:
+    texts = {
+        language: {**texts, FixedTextKey.NEXT_STEP: STEP, FixedTextKey.BOOKING_PRIVACY: PRIVACY}
+        for language, texts in clinic_pack.fixed_texts.items()
+    }
+    calendar = CalendarIntegration(
+        credentials_ref="adc", calendars={"dr-arben-demo": "cal-arben"}, chat_booking=True
+    )
+    return clinic_pack.model_copy(
+        update={"fixed_texts": texts, "integrations": Integrations(calendar=calendar)}
+    )
 
 
 class Script:
@@ -313,3 +330,38 @@ async def test_the_summary_is_shown_as_code_wrote_it(base: TurnRuntime) -> None:
     await chat.say("Vorrei prenotare")
     await chat.say("il secondo")
     assert (await chat.say("Mario Rossi, +355 69 123 4567")).text == SUMMARY
+
+
+# --- Albi, 2026-10-12: one-line introduction, a person's number and WhatsApp ------------------------
+
+
+async def test_a_first_greeting_gets_the_introduction_alone(base: TurnRuntime) -> None:
+    chat = Chat(base, Script([_final("", "greeting")]))
+    chat.state = ConversationState(conversation_id="c1")  # the first message
+    reply = await chat.say("Buongiorno")
+    assert reply.text == base.pack.fixed_texts["it"][FixedTextKey.DISCLOSURE]  # type: ignore[index]
+
+
+async def test_a_handoff_without_words_is_the_pack_s_own(base: TurnRuntime) -> None:
+    reply = await Chat(base, Script([_final("", "handoff")])).say("Vorrei parlare con una persona")
+    assert (reply.outcome, reply.text) == (
+        TurnOutcome.HANDOFF,
+        base.pack.fixed_texts["it"][FixedTextKey.HANDOFF],  # type: ignore[index]
+    )
+
+
+async def test_the_facts_give_reception_s_whatsapp(
+    activate_pack: Activate, clinic_pack: BusinessPack, calendar: FixtureCalendar
+) -> None:
+    location = clinic_pack.location.model_copy(update={"whatsapp": "+355 00 000 0001"})
+    pack = _pack(clinic_pack.model_copy(update={"location": location}))
+    runtime = make_runtime(
+        pack, activate_pack(pack), classifier_turns([], []), document_responder()
+    )
+    script = Script([_final("Può scriverci su WhatsApp al +355 00 000 0001.", "handoff")])
+    chat = Chat(replace(runtime, scheduler=CalendarScheduler(calendar), now=lambda: NOW), script)
+    reply = await chat.say("Posso scrivervi su WhatsApp?")
+    request = script.calls[0][-1]
+    assert isinstance(request, ModelRequest)
+    assert "WhatsApp: +355 00 000 0001" in (request.instructions or "")
+    assert reply.text.startswith("Può scriverci su WhatsApp al +355 00 000 0001.")

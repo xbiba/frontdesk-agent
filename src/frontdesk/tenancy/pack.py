@@ -119,6 +119,8 @@ class Location(Frozen):
     address: NonBlankStr
     phone: NonBlankStr
     email: NonBlankStr
+    # Reception's WhatsApp, when it has one: the agent gives it with the phone (Albi, 2026-10-12).
+    whatsapp: NonBlankStr | None = None
     opening_hours: list[OpeningHours] = Field(min_length=1)
 
 

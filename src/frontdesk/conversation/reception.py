@@ -54,6 +54,7 @@ RECEPTION_LIMITS: Final = UsageLimits(request_limit=6)
 
 
 class ReplyKind(StrEnum):
+    GREETING = "greeting"  # only a greeting or small talk
     ANSWER = "answer"
     QUESTION = "question"
     HANDOFF = "handoff"
@@ -64,8 +65,9 @@ class ReplyKind(StrEnum):
 class ReceptionReply(BaseModel):
     text: str = Field(description="The message to send the patient, in the conversation's language")
     kind: ReplyKind = Field(
-        description="answer, question (you ask the patient something), handoff (you send them to "
-        "reception), clinical (they ask for medical advice) or emergency"
+        description="greeting (only a greeting or small talk), answer, question (you ask the "
+        "patient something), handoff (you send them to reception), clinical (they ask for medical "
+        "advice) or emergency"
     )
 
 
@@ -139,8 +141,9 @@ def render_situation(desk: Desk) -> str:
     ]
     if desk.first_turn:
         lines.append(
-            "This is the patient's first message: the system puts its own introduction before "
-            "your reply, so do not greet or introduce yourself."
+            "This is the patient's first message: the system sends its own introduction first, "
+            "which greets and asks how it can help. Do not greet, introduce yourself or ask that "
+            "again; if the patient only greeted, kind greeting with no text."
         )
     if desk.booking is not None:
         lines.append(f"Booking under way: {_booking_state(desk, desk.booking)}")
@@ -253,9 +256,14 @@ def build_reception(
 
     @agent.output_validator
     def checked(ctx: RunContext[Desk], output: ReceptionReply) -> ReceptionReply:
+        desk = ctx.deps
         if output.kind in {ReplyKind.EMERGENCY, ReplyKind.CLINICAL}:
             return output  # the pack's fixed text answers
-        desk = ctx.deps
+        if not output.text.strip() and (
+            output.kind is ReplyKind.HANDOFF
+            or (output.kind is ReplyKind.GREETING and desk.first_turn)
+        ):
+            return output  # the handoff text, or the introduction, says it all
         known = "\n".join([desk.facts, *desk.seen, desk.conversation, desk.message])
         problems = reply_problems(output.text, known, booked=desk.booked)
         if problems:

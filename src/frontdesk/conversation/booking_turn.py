@@ -1,12 +1,11 @@
-"""A booking from the chat, step by step (M5). Code reads every answer, but for a pick of the slots
-offered in other words ("Friday is fine"), which the classifier reads and code checks here.
+"""The booking operations the reception agent's tools call (M5; the agent since 2026-10-12).
 
-The slots are offered numbered; a number (or a time) takes a hold on the slot; the name and the phone
-go onto the hold; a summary asks for a yes; the yes writes the appointment in the doctor's calendar,
-which is read again first, and the confirmation ends with the pack's privacy pointer (a link). A
-slot taken meanwhile, an expired hold or a calendar that cannot be read each end in fresh slots or
-in how to book through reception, never in a booking that is not there.
-Name and phone live on the hold only (frontdesk.booking.holds); this module keeps neither.
+Code decides every one: the free slots offered, numbered (the first ones, those that fit a
+wish, or the ones not shown yet); a hold on a slot that was offered and is still free; the
+booking of the held slot, once the patient said yes to its summary, with the calendar read
+again first; the release of the hold. A slot taken meanwhile, an expired hold or a calendar
+that cannot be read each end in fresh slots or in how to book through reception, never in a
+booking that is not there. Name and phone live on the hold only (frontdesk.booking.holds).
 """
 
 from __future__ import annotations
@@ -21,8 +20,8 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.booking.calendar import CalendarUnavailableError
-from frontdesk.booking.flow import parse_choice, phrase, valid_name, valid_phone, yes_or_no
-from frontdesk.booking.holds import attach, held, hold, mark_booked, release
+from frontdesk.booking.flow import phrase
+from frontdesk.booking.holds import held, hold, mark_booked, release
 from frontdesk.booking.reply import SlotWish, compose_slots, slot_time, wish_words
 from frontdesk.booking.scheduler import Scheduler
 from frontdesk.booking.slots import spread
@@ -113,43 +112,6 @@ def offer(
     return StepReply(text, "replied", step, doctor_id)  # an answer (the slots) that invites a pick
 
 
-def pick(context: BookingContext, step: BookingStep, wish: SlotWish) -> StepReply:
-    """A reply in the patient's words to the slots offered, as the classifier read it and code
-    checked it: the slot picked, the slots that fit a wish, or other slots ("what times are there?").
-    Raises CalendarUnavailableError."""
-    if wish.slot is not None and wish.slot <= len(step.offered):
-        return take(context, step, step.offered[wish.slot - 1])
-    return offer(
-        context,
-        step.doctor_id,
-        step.service_id,
-        wish=wish,
-        shown=step.shown,
-        others=not wish.narrows,
-    )
-
-
-def answer(context: BookingContext, step: BookingStep, message: str) -> StepReply | None:
-    """The next step, or None when the message is not an answer to the slots offered: the normal
-    pipeline then takes it, and the booking ends."""
-    try:
-        if step.stage is BookingStage.CHOOSE:
-            return _choose(context, step, message)
-        if step.stage is BookingStage.NAME:
-            return _name(context, step, message)
-        if step.stage is BookingStage.PHONE:
-            return _phone(context, step, message)
-        return _confirm(context, step, message)
-    except CalendarUnavailableError:
-        _release(context, step)
-        return _handoff(context, step.doctor_id)
-
-
-def _choose(context: BookingContext, step: BookingStep, message: str) -> StepReply | None:
-    start = parse_choice(message, step.offered, ZoneInfo(context.pack.timezone))
-    return take(context, step, start) if start is not None else None
-
-
 def take(context: BookingContext, step: BookingStep, start: datetime) -> StepReply:
     """A hold on the slot picked, then the name; fresh slots when it was taken meanwhile.
     Raises CalendarUnavailableError."""
@@ -169,58 +131,8 @@ def take(context: BookingContext, step: BookingStep, start: datetime) -> StepRep
         )
     if hold_id is None:
         return offer(context, step.doctor_id, step.service_id, prefix=_say(context, "taken"))
-    after = step.model_copy(update={"stage": BookingStage.NAME, "hold_id": hold_id, "retries": 0})
+    after = step.model_copy(update={"stage": BookingStage.NAME, "hold_id": hold_id})
     return StepReply(_say(context, "ask_name"), "asked", after, step.doctor_id)
-
-
-def _name(context: BookingContext, step: BookingStep, message: str) -> StepReply:
-    if yes_or_no(message) is False:
-        return cancel(context, step)
-    name = valid_name(message)
-    with business_session(context.session_factory, context.pack.id) as session:
-        current = held(session, _hold_id(step), context.now)
-        if current is not None and name is not None:
-            attach(session, current.id, name=name)
-    if current is None:
-        return offer(context, step.doctor_id, step.service_id, prefix=_say(context, "expired"))
-    if name is None:
-        return _again(context, step, "again_name")
-    after = step.model_copy(update={"stage": BookingStage.PHONE, "retries": 0})
-    return StepReply(_say(context, "ask_phone"), "asked", after, step.doctor_id)
-
-
-def _phone(context: BookingContext, step: BookingStep, message: str) -> StepReply:
-    if yes_or_no(message) is False:
-        return cancel(context, step)
-    phone = valid_phone(message, country_code(context.pack))
-    with business_session(context.session_factory, context.pack.id) as session:
-        current = held(session, _hold_id(step), context.now)
-        if current is not None and phone is not None:
-            attach(session, current.id, phone=phone)
-    if current is None:
-        return offer(context, step.doctor_id, step.service_id, prefix=_say(context, "expired"))
-    if phone is None:
-        return _again(context, step, "again_phone", code=country_code(context.pack) or "+")
-    summary = phrase(
-        "summary",
-        context.language,
-        when=slot_time(current.start.astimezone(ZoneInfo(context.pack.timezone)), context.language),
-        service=_service(context, step.service_id),
-        doctor=_doctor(context, step.doctor_id),
-        name=current.name or "",
-        phone=phone,
-    )
-    after = step.model_copy(update={"stage": BookingStage.CONFIRM, "retries": 0})
-    return StepReply(summary, "asked", after, step.doctor_id)
-
-
-def _confirm(context: BookingContext, step: BookingStep, message: str) -> StepReply:
-    decision = yes_or_no(message)
-    if decision is None:
-        return _again(context, step, "again_yes_no")
-    if decision is False:
-        return cancel(context, step)
-    return confirm(context, step)
 
 
 def confirm(context: BookingContext, step: BookingStep) -> StepReply:
@@ -267,15 +179,6 @@ def _free(context: BookingContext, step: BookingStep, start: datetime) -> bool:
     """The slot is still among the scheduler's free ones."""
     every = context.scheduler.free_slots(context.pack, step.doctor_id, step.service_id, context.now)
     return any(slot.start == start for slot in every)
-
-
-def _again(context: BookingContext, step: BookingStep, key: str, **values: str) -> StepReply:
-    """The question once more; a second wrong answer ends the booking with how to book."""
-    if step.retries >= 1:
-        _release(context, step)
-        return _handoff(context, step.doctor_id)
-    after = step.model_copy(update={"retries": step.retries + 1})
-    return StepReply(phrase(key, context.language, **values), "asked", after, step.doctor_id)
 
 
 def cancel(context: BookingContext, step: BookingStep) -> StepReply:

@@ -29,3 +29,14 @@ The second option.
 
 ## Exit plan
 The claim checks sit behind one function; a verifier model can be added after them if the live evaluation calls for one.
+
+## Amendment, 2026-10-12: the reception agent
+
+Albi's live chats of 2026-10-12 found the pipeline too rigid for a conversation: replies written from fixed phrases, and a booking flow that read "Friday, what time?" as a pick and "I would like the times" as a name. With `FRONTDESK_CONVERSATION=agent`, a model leads the conversation and writes every reply. The grounding moves from the reply's words to its facts:
+
+- The model reads the clinic's approved records (`conversation/reception_facts.py`), the conversation so far (12 messages, emails and phone numbers masked), and the date.
+- It reaches documents and the calendar only through tools. Bookings go through tools that code checks: a hold on a time that was shown, a validated name and phone, the summary as code writes it, and a booking only after a yes to that summary in the very next message.
+- Every number and link of a reply must come from the facts, the tools or the conversation. A reply that fails this, reads as a diagnosis, promises an action, or announces a booking no tool made, is sent back once with the reasons; a second failure is a handoff (`agent/reply_check.py`).
+- The deterministic rules still answer first (ADR-0006): emergency, medical advice, and personal data, except the name and phone a held booking asks for.
+
+The pipeline stays for the demo packs and the offline evaluations of the engine. The voice, which rewrote the pipeline's replies, and the pipeline's own booking steps are removed. A deployment that books from the chat runs the agent.

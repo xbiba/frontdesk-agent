@@ -1,50 +1,15 @@
-"""What an answer to each booking step may be, and the phrases (M5)."""
-
-from datetime import datetime
-from zoneinfo import ZoneInfo
+"""What a name, a phone and a yes may be, and the phrases of a booking (M5)."""
 
 import pytest
 
 from frontdesk.booking.flow import (
     _PHRASES,
+    affirms,
     entry_description,
-    parse_choice,
     phrase,
     valid_name,
     valid_phone,
-    yes_or_no,
 )
-
-TIRANE = ZoneInfo("Europe/Tirane")
-OFFERED = (
-    datetime(2026, 10, 23, 9, tzinfo=TIRANE),
-    datetime(2026, 10, 23, 10, tzinfo=TIRANE),
-    datetime(2026, 10, 26, 12, tzinfo=TIRANE),
-)
-
-
-@pytest.mark.parametrize(
-    ("message", "index"),
-    [
-        ("2", 1),
-        (" 3 ", 2),
-        ("il 2", 1),
-        ("numero 1", 0),
-        ("the 2nd", 1),
-        ("1)", 0),
-        ("alle 10:00", 1),
-        ("10.00 va bene", 1),
-        ("12:00", 2),
-        ("4", None),  # three were offered
-        ("Ho 2 domande", None),
-        ("Quanto costa?", None),
-        ("alle 11:00", None),  # not offered
-        ("9:00 o 10:00", None),  # two times
-    ],
-)
-def test_a_choice_is_a_number_or_an_offered_time(message: str, index: int | None) -> None:
-    expected = None if index is None else OFFERED[index]
-    assert parse_choice(message, OFFERED, TIRANE) == expected
 
 
 @pytest.mark.parametrize(
@@ -87,17 +52,19 @@ def test_a_phone_is_international_with_8_to_15_digits(message: str, phone: str |
     ("message", "answer"),
     [
         ("Sì!", True),
+        ("sì, confermo grazie", True),
         ("po", True),
-        ("Yes", True),
-        ("ok", True),
+        ("Yes please", True),
+        ("va bene", True),
         ("No.", False),
+        ("non ancora", False),
         ("jo", False),
-        ("annulla", False),
-        ("forse", None),
+        ("aspetta un attimo", False),
+        ("quanto costa?", False),
     ],
 )
-def test_yes_or_no_in_the_three_languages(message: str, answer: bool | None) -> None:
-    assert yes_or_no(message) is answer
+def test_a_yes_is_one_of_its_words_and_no_negation(message: str, answer: bool) -> None:
+    assert affirms(message) is answer
 
 
 def test_every_phrase_exists_in_every_language_and_the_entry_too() -> None:

@@ -229,3 +229,15 @@ def _request_fields(prompt: str) -> dict[str, str]:
     body = prompt.split("</request>", 1)[0]
     pairs = (line.partition(": ") for line in body.splitlines()[1:])
     return {key.strip(): value.strip() for key, separator, value in pairs if separator}
+
+
+def demo_reception_model() -> FunctionModel:
+    """The reception agent offline (CI and the demo): no model reads the message, so whatever the
+    rules let through goes to reception, in the pack's own handoff text. The offline cases are the
+    rules' (an emergency, medical advice, personal data), which answer before the agent: offline,
+    they take the path a live deployment with the agent takes."""
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return _output(info, {"text": "", "kind": "handoff"})
+
+    return FunctionModel(respond)

@@ -29,7 +29,6 @@ class OutputLimits:
 
     classifier: int = 600
     responder: int = 1200
-    voice: int = 500
     agent: int = 2000  # the reception agent: thinking, a tool call or the reply
 
 
