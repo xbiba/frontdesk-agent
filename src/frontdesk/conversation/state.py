@@ -31,6 +31,7 @@ class ConversationState(BaseModel):
     topic_doctor_ids: tuple[str, ...] = ()
     topic_age: int = 0
     pending_clarification: ClarifyField | None = None
+    next_step_shown: bool = False  # the pack's next step ends one answer per conversation
 
     def advanced(
         self,
@@ -41,6 +42,7 @@ class ConversationState(BaseModel):
         service_ids: Sequence[str],
         doctor_ids: Sequence[str],
         clarify: ClarifyField | None,
+        next_step_shown: bool = False,
     ) -> ConversationState:
         intents = self.previous_intents
         if intent is not None:
@@ -59,5 +61,6 @@ class ConversationState(BaseModel):
                 "topic_doctor_ids": doctors,
                 "topic_age": age,
                 "pending_clarification": clarify,
+                "next_step_shown": self.next_step_shown or next_step_shown,
             }
         )

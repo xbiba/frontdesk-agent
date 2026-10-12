@@ -50,6 +50,13 @@ RULES = [
         id="blank-fixed-text",
     ),
     pytest.param(
+        CLINIC,
+        "business.yaml",
+        lambda d: d["fixed_texts"]["en"].update(next_step="   "),
+        "missing fixed text 'next_step' for language 'en'",
+        id="blank-next-step",  # optional, but not blank
+    ),
+    pytest.param(
         SHOP,
         "business.yaml",
         lambda d: d["fixed_texts"].pop("en"),

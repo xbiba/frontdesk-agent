@@ -207,7 +207,7 @@ async def test_reports_carry_ids_and_failures_but_never_the_text_of_a_reply(
     message = "Quanto costa la fisioterapia?"
     reply, _ = await handle_message(message, ConversationState(turns=1), runtime)
     paragraphs = reply.text.split("\n\n")
-    assert len(paragraphs) == 2  # the price line and the closing question
+    assert len(paragraphs) == 1  # the price line: the demo clinic has no next step
     failing = _case(id="failing", message=message, expect={"outcome": "handoff"})
     passing = _case(id="passing", message=message, expect={"contains": ["30 EUR"]})
     report = await run_turn_eval(runtime, [failing, passing], route=ROUTE)

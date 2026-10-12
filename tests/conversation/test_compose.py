@@ -4,7 +4,7 @@ import pytest
 
 from frontdesk.agent.classification import ValidatedFields
 from frontdesk.agent.vocab import Category, ClarifyField, Intent
-from frontdesk.conversation.compose import clarify_question, closing, compose_facts, unanswered
+from frontdesk.conversation.compose import clarify_question, compose_facts, unanswered
 from frontdesk.knowledge.evidence import Evidence, EvidenceKind
 from frontdesk.knowledge.facts import Catalog
 from frontdesk.tenancy.pack import Language
@@ -53,17 +53,14 @@ def _fields(intent: Intent, category: Category = Category.ADMINISTRATIVE) -> Val
 
 def test_hours_and_contacts_show_only_what_was_asked() -> None:
     hours = compose_facts(_fields(Intent.HOURS), [LOCATION])
-    assert hours == f"Orari: lun-ven 08:00-19:00; sab 09:00-14:00\n\n{closing('it')}"
+    assert hours == "Orari: lun-ven 08:00-19:00; sab 09:00-14:00"
     contact = compose_facts(_fields(Intent.CONTACT), [LOCATION])
     assert contact is not None
     assert contact.startswith("Telefono: +355 00 000 0000\nEmail: info@klinika-demo.example")
 
 
 def test_prices_are_the_record_text() -> None:
-    assert (
-        compose_facts(_fields(Intent.PRICE), [PRICE])
-        == f"Fisioterapia: 30 EUR (a seduta)\n\n{closing('it')}"
-    )
+    assert compose_facts(_fields(Intent.PRICE), [PRICE]) == "Fisioterapia: 30 EUR (a seduta)"
     assert compose_facts(_fields(Intent.PRICE), []) is None
 
 
@@ -187,3 +184,20 @@ def test_unanswered_ignores_a_service_named_alongside_an_orientation_question() 
         service_ids=("physiotherapy",),
     )
     assert unanswered(fields, [BACK]) == ()
+
+
+def test_a_next_step_ends_an_answer_and_orientation_keeps_its_own_question() -> None:
+    step = "Per prenotare una visita, chiama la reception."
+    price = _fields(Intent.PRICE)
+    assert (
+        compose_facts(price, [PRICE], next_step=step)
+        == f"Fisioterapia: 30 EUR (a seduta)\n\n{step}"
+    )
+    assert compose_facts(price, [PRICE], next_step=step, with_closing=False) == (
+        "Fisioterapia: 30 EUR (a seduta)"
+    )
+    orientation = compose_facts(
+        _fields(Intent.SERVICE_INFO, Category.ORIENTATION), [BACK], next_step=step
+    )
+    assert orientation is not None
+    assert step not in orientation

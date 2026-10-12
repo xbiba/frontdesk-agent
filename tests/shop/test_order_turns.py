@@ -6,7 +6,6 @@ import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.agent.vocab import ClarifyField
-from frontdesk.conversation.compose import closing
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, TurnRuntime, handle_message
 from frontdesk.db.engine import business_session
@@ -114,7 +113,7 @@ async def test_the_reply_follows_the_language_and_leaves_out_a_missing_delivery_
         "Where is my order ORD-10458? Postal code 00184", ConversationState(turns=1), runtime
     )
     assert result.language == "en"
-    assert result.text == f"Order ORD-10458: being prepared\n\n{closing('en')}"
+    assert result.text == "Order ORD-10458: being prepared"
 
 
 async def test_the_trace_counts_the_live_evidence_without_listing_its_id(

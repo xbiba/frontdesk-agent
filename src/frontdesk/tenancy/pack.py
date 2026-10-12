@@ -8,7 +8,7 @@ from datetime import date
 from decimal import Decimal
 from enum import StrEnum
 from functools import cache
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 from zoneinfo import available_timezones
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
@@ -65,6 +65,12 @@ class FixedTextKey(StrEnum):
     NO_INFORMATION = "no_information"
     CLARIFICATION = "clarification"
     ATTACHMENT = "attachment"
+    NEXT_STEP = "next_step"
+
+
+# A pack may leave these out. The next step (how to book) ends an answer once per conversation;
+# without one, an answer ends with the answer.
+OPTIONAL_FIXED_TEXTS: Final = frozenset({FixedTextKey.NEXT_STEP})
 
 
 class Frozen(BaseModel):
@@ -213,7 +219,7 @@ def _language_problems(pack: BusinessPack) -> list[str]:
         problems += [
             f"missing fixed text '{key}' for language '{language}'"
             for key in FixedTextKey
-            if not texts.get(key, "").strip()
+            if (key not in OPTIONAL_FIXED_TEXTS or key in texts) and not texts.get(key, "").strip()
         ]
         if not _gives_a_contact(texts.get(FixedTextKey.HANDOFF, ""), pack.location):
             problems.append(
