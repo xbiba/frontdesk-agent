@@ -78,7 +78,7 @@ def offer(
         offered=tuple(slot.start for slot in slots),
     )
     text = _joined(prefix, listed, phrase("choose", context.language))
-    return StepReply(text, "asked", step, doctor_id)
+    return StepReply(text, "replied", step, doctor_id)  # an answer (the slots) that invites a pick
 
 
 def answer(context: BookingContext, step: BookingStep, message: str) -> StepReply | None:

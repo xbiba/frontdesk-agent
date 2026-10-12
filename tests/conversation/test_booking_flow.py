@@ -111,7 +111,7 @@ async def test_a_patient_books_from_the_chat(
     caplog.set_level(logging.DEBUG)
     chat = Chat(runtime, [BOOK])
     offered = await chat.say("Vorrei prenotare")
-    assert (offered.outcome, offered.text) == (TurnOutcome.ASKED, OFFER)
+    assert (offered.outcome, offered.text) == (TurnOutcome.REPLIED, OFFER)
     assert chat.state.booking is not None
     assert chat.state.booking.stage is BookingStage.CHOOSE
     asked_name = await chat.say("2")
