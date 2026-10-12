@@ -34,7 +34,7 @@ _WEEKDAYS: Final[dict[str, tuple[str, ...]]] = {
     "it": ("lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"),
     "en": ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"),
 }
-_MONTHS: Final[dict[str, tuple[str, ...]]] = {
+MONTHS: Final[dict[str, tuple[str, ...]]] = {
     "sq": (
         "janar",
         "shkurt",
@@ -167,7 +167,7 @@ def slot_time(start: datetime, language: Language) -> str:
 def day_words(day: date, language: Language) -> str:
     """A day as the patient reads it: "venerdì 23 ottobre"."""
     weekday = _WEEKDAYS[language][day.weekday()]
-    month = _MONTHS[language][day.month - 1]
+    month = MONTHS[language][day.month - 1]
     return f"{weekday} {day.day} {month}"
 
 

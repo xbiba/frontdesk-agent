@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from frontdesk.agent.answer_check import links_in, numbers_in
+from frontdesk.booking.reply import MONTHS
 from frontdesk.safety.rules import contains_diagnostic_language, promise_phrase
 
 # Saying a booking is done: only the booking tool may lead to these words.
@@ -28,11 +29,18 @@ _BOOKED: Final = re.compile(
 # The times a reply names (Albi, 2026-10-12: the model writes the times, code checks them): a clock
 # time ("10:00", "9.30"), and the hours after a word that brings them, alone or in a list ("alle 9,
 # 10, 12 e 16", "at 9 and 10", "në orën 9").
-_HOUR: Final = r"(?:[01]?\d|2[0-3])(?:[:.][0-5]\d)?"
+_HOUR: Final = r"(?:2[0-3]|[01]?\d)(?:[:.][0-5]\d)?"
 _CLOCK: Final = re.compile(r"(?<![\d:.])([01]?\d|2[0-3])[:.]([0-5]\d)(?!\d)")
 _HOURS: Final = re.compile(
     rf"\b(?:alle|ore|dalle|per le|at|from|until|or[eë]n|ora)\s+"
     rf"({_HOUR}(?:\s*(?:,|e|ed|and|o|or|dhe|ose|/)\s*{_HOUR})*)\b",
+    re.IGNORECASE,
+)
+
+# A day of the month is no hour: "from 23 October until 2 November" was read as 23:00 and 02:00 in
+# the run of 2026-10-13, and a right reply was refused twice.
+_MONTH_NEXT: Final = re.compile(
+    r"\s*(?:" + "|".join(month for names in MONTHS.values() for month in names) + ")",
     re.IGNORECASE,
 )
 
@@ -60,6 +68,8 @@ def times_named(reply: str) -> list[tuple[tuple[int, int], str]]:
             span = (offset + item.start(), offset + item.end())
             if any(start <= span[0] < end for start, end in found):
                 continue  # a clock time, already read
+            if _MONTH_NEXT.match(reply, span[1]):
+                continue  # a day of the month
             hour, _, minute = item[0].replace(".", ":").partition(":")
             found[span] = f"{int(hour):02d}:{minute or '00'}"
     return sorted(found.items())

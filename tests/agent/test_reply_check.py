@@ -56,3 +56,26 @@ TOOL = "- 2026-10-23 (venerdì 23 ottobre): 09:00, 10:00, 12:00, 16:00\nOrari: l
 def test_each_time_named_is_one_the_tools_gave(reply: str, codes: set[str]) -> None:
     found = reply_problems(reply, TOOL, booked=False, times=SHOWN)
     assert {problem.code for problem in found} == codes
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Dr. Oliverio is at the clinic from 23 October until 2 November 2026.",
+        "He is here until 2 November, and the first free time is on Friday 23 at 10:00.",
+        "Il dottor Oliverio è qui fino al 2 novembre, alle 10 di venerdì 23 ha posto.",
+        "Dr. Oliverio është në klinikë nga 23 tetori deri më 2 nëntor 2026.",
+    ],
+)
+def test_a_day_of_the_month_is_no_time(reply: str) -> None:
+    # "from 23 October until 2 November" was read as 23:00 and 02:00, and a right reply was refused
+    # twice (run of 2026-10-13).
+    known = f"Il dottor Oliverio è in clinica dal 23 ottobre al 2 novembre 2026.\n{TOOL}"
+    assert not list(reply_problems(reply, known, booked=False, times=SHOWN))
+
+
+def test_an_evening_hour_is_read_whole() -> None:
+    # "alle 20" was read as 02:00 and 00:00: an hour of 20 to 23 is one hour.
+    assert not list(
+        reply_problems("Venerdì 23 alle 20?", TOOL, booked=False, times=frozenset({"20:00"}))
+    )
