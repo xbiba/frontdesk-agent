@@ -13,6 +13,7 @@ from datetime import UTC, date, datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+from pydantic_ai import Agent
 from pydantic_ai.models import Model
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -21,6 +22,7 @@ from frontdesk.agent.demo_models import demo_classifier_model, demo_responder_mo
 from frontdesk.agent.prompts import read_prompt
 from frontdesk.agent.responder import build_responder
 from frontdesk.agent.tools import ToolServices, build_toolset
+from frontdesk.agent.voice import VoiceDeps, build_voice
 from frontdesk.booking.calcom import CalcomScheduler
 from frontdesk.booking.calendar import FixtureCalendar
 from frontdesk.booking.google_calendar import SCOPE as CALENDAR_SCOPE
@@ -45,7 +47,7 @@ from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.loader import load_pack
 from frontdesk.tenancy.pack import BusinessPack
 
-AgentRole = Literal["classifier", "responder"]
+AgentRole = Literal["classifier", "responder", "voice"]
 ModelWrapper = Callable[[Model, AgentRole], Model]
 
 
@@ -122,6 +124,7 @@ def build_turn_runtime(
     business_today = today or deployment.today
     classifier_prompt = read_prompt(pack.profile, "classifier")
     responder_prompt = read_prompt(pack.profile, "responder")
+    voice_prompt = read_prompt(pack.profile, "voice")
     with business_session(deployment.session_factory, pack.id) as session:
         catalog = load_catalog(session, pack.id)
         check_embedder(session, pack.id, deployment.embedder)
@@ -141,6 +144,7 @@ def build_turn_runtime(
         responder = build_responder(
             demo_responder_model(), pack.profile, toolset, instructions=responder_prompt.text
         )
+        voice: Agent[VoiceDeps, str] | None = None  # offline replies keep the code's words
     else:
         model = build_live_model(route, gcp_project=deployment.settings.gcp_project)
         wrap = wrap_model or _unwrapped
@@ -157,12 +161,24 @@ def build_turn_runtime(
             model_settings=live_model_settings(route, max_tokens=route.output_limits.responder),
             instructions=responder_prompt.text,
         )
+        voice = (
+            build_voice(
+                wrap(model, "voice"),
+                pack.profile,
+                model_settings=live_model_settings(route, max_tokens=route.output_limits.voice),
+                instructions=voice_prompt.text,
+            )
+            if deployment.settings.voice
+            else None
+        )
     return TurnRuntime(
         pack=pack,
         classifier=classifier,
         responder=responder,
         classifier_prompt_version=classifier_prompt.version,
         responder_prompt_version=responder_prompt.version,
+        voice=voice,
+        voice_prompt_version=voice_prompt.version if voice is not None else None,
         session_factory=deployment.session_factory,
         embedder=deployment.embedder,
         today=business_today,

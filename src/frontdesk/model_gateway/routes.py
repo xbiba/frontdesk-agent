@@ -29,6 +29,7 @@ class OutputLimits:
 
     classifier: int = 600
     responder: int = 1200
+    voice: int = 500
 
 
 @dataclass(frozen=True)

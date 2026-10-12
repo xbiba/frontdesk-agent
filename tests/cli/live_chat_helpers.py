@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from click.testing import Result
-from pydantic_ai import ModelResponse, ToolCallPart
-from pydantic_ai.messages import ModelMessage
+from pydantic_ai import ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.messages import ModelMessage, ModelRequest
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.usage import RequestUsage
 from typer.testing import CliRunner
@@ -94,11 +94,18 @@ def fake_gemini(
     failing: Mapping[str, Failure] | None = None,
 ) -> FunctionModel:
     """Stands for Gemini: the classifier gets `classification`, the responder quotes its first
-    passage. `sent` collects the role of each request. A role named in `failing` raises what its
-    function gives instead of answering, unless it gives None."""
+    passage, the voice says the draft as it is. `sent` collects the role of each request. A role
+    named in `failing` raises what its function gives instead of answering, unless it gives None."""
     failures = failing or {}
 
     def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if not info.output_tools:  # the voice answers in text
+            sent.append("voice")
+            if "voice" in failures and (failure := failures["voice"]()) is not None:
+                raise failure
+            return ModelResponse(
+                parts=[TextPart(_draft(messages))], usage=USAGE, finish_reason="stop"
+            )
         tool = info.output_tools[0]
         role = (
             "responder" if "claims" in tool.parameters_json_schema["properties"] else "classifier"
@@ -116,6 +123,13 @@ def fake_gemini(
         )
 
     return FunctionModel(respond)
+
+
+def _draft(messages: list[ModelMessage]) -> str:
+    request = messages[-1]
+    seen = request.instructions if isinstance(request, ModelRequest) else None
+    found = re.search(r"The draft:\n<<<\n(.*?)\n>>>", seen or "", re.DOTALL)
+    return found.group(1) if found else ""
 
 
 def quote_the_first_passage(prompt: str) -> dict[str, Any]:

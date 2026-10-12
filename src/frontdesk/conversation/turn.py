@@ -41,6 +41,7 @@ from frontdesk.agent.responder import (
     render_turn_prompt,
 )
 from frontdesk.agent.vocab import ADMINISTRATIVE_INTENTS, Category, ClarifyField, Intent
+from frontdesk.agent.voice import VoiceDeps, rewrite
 from frontdesk.booking.calendar import CalendarUnavailableError
 from frontdesk.booking.reply import SlotWish, booking_target, compose_slots, find_slots
 from frontdesk.booking.scheduler import Scheduler
@@ -76,6 +77,8 @@ _NOTICES: Final = {
     Category.UNCERTAIN: FixedTextKey.HANDOFF,
 }
 _SMALL_TALK: Final = frozenset({Intent.GREETING, Intent.OTHER})
+_PLAIN_HANDOFFS: Final = frozenset({FixedTextKey.HANDOFF, FixedTextKey.NO_INFORMATION})
+_FAILED_RULES: Final = frozenset({"timeout", "error", "too_long"})
 # The clarifying questions each profile's responder prompt offers (agents/<profile>/prompts/
 # responder.md); the shop's prompt has no clarify action. A test pins this table to the prompts.
 RESPONDER_CLARIFY_FIELDS: Final[dict[Profile, frozenset[ClarifyField]]] = {
@@ -89,6 +92,15 @@ class TurnOutcome(StrEnum):
     ASKED = "asked"
     FIXED = "fixed"
     HANDOFF = "handoff"
+
+
+class Rewrite(StrEnum):
+    """Whether the voice may rewrite a reply: never (fixed texts, document answers, bookings), its
+    words around no fact (a greeting, a handoff, a question), or its words around facts."""
+
+    NONE = "none"
+    WORDS = "words"
+    FACTS = "facts"
 
 
 @dataclass(frozen=True)
@@ -115,6 +127,7 @@ class TurnTrace:
     rejection: str | None = None
     clarify: ClarifyField | None = None
     booking: BookingStep | None = None  # a booking under way (M5); metadata only
+    voice: str | None = None  # "rewritten", "failed", or why the code's text was kept
 
 
 @dataclass(frozen=True)
@@ -145,6 +158,8 @@ class TurnResult:
     language: Language
     trace: TurnTrace
     draft: RejectedDraft | None = None
+    rewrite: Rewrite = Rewrite.NONE
+    code_text: str | None = None  # what code wrote, when the voice rewrote it
 
 
 def _utc_now() -> datetime:
@@ -172,6 +187,8 @@ class TurnRuntime:
     now: Callable[[], datetime] = _utc_now
     keep_drafts: bool = False  # the live evaluation keeps refused answers for its reviewer
     scheduler: Scheduler | None = None  # the bookable doctors' free slots and bookings (M4, M5)
+    voice: Agent[VoiceDeps, str] | None = None  # rewrites what code wrote; None: code's words
+    voice_prompt_version: str | None = None
 
 
 async def handle_message(
@@ -213,9 +230,42 @@ async def _run_turn(text: str, state: ConversationState, runtime: TurnRuntime) -
     except Exception as error:  # any failure becomes a handoff; only its type is logged
         log_event(logger, "turn.failed", business_id=pack.id, reason=type(error).__name__)
         result = _handoff(pack, language, FixedTextKey.HANDOFF, TurnTrace(rule="error"))
+    result = await _voiced(text.strip(), state, result, runtime)
     if state.turns == 0:
         result = _with_disclosure(pack, language, result)
     return result
+
+
+async def _voiced(
+    message: str, state: ConversationState, result: TurnResult, runtime: TurnRuntime
+) -> TurnResult:
+    """The reply in the voice's words, when code wrote it and the rewrite keeps its facts; the
+    code's text otherwise."""
+    if result.rewrite is Rewrite.NONE or runtime.voice is None:
+        return result
+    pack, language = runtime.pack, result.language
+    catalog = await asyncio.to_thread(_load_catalog, runtime)
+    names = [] if catalog is None else _names(catalog, language)
+    deps = VoiceDeps(
+        business_name=pack.name,
+        language=language,
+        style=_fixed_text(pack, language, FixedTextKey.GREETING),
+        draft=result.text,
+        previous_reply=state.last_reply,
+    )
+    voiced, status = await rewrite(
+        runtime.voice, message, deps, names=names, facts=result.rewrite is Rewrite.FACTS
+    )
+    trace = replace(result.trace, voice=status)
+    if voiced is None:
+        return replace(result, trace=trace)
+    return replace(result, text=voiced, code_text=result.text, trace=trace)
+
+
+def _names(catalog: Catalog, language: Language) -> list[str]:
+    """The doctors and the services, as a reply in `language` writes them."""
+    services = [names.get(language) or "" for names in catalog.services.values()]
+    return [name for name in (*catalog.doctors.values(), *services) if name]
 
 
 async def _decide(
@@ -464,9 +514,8 @@ def _how_to_book(
     step = pack.fixed_texts[language].get(FixedTextKey.NEXT_STEP)
     if step is None:
         return _handoff(pack, language, FixedTextKey.HANDOFF, trace, prefix=prefix)
-    return TurnResult(
-        "\n\n".join([*([prefix] if prefix else []), step]), TurnOutcome.HANDOFF, language, trace
-    )
+    text = "\n\n".join([*([prefix] if prefix else []), step])
+    return TurnResult(text, TurnOutcome.HANDOFF, language, trace, rewrite=Rewrite.WORDS)
 
 
 async def _answer(
@@ -588,8 +637,9 @@ def _facts_reply(
         return _handoff(pack, language, FixedTextKey.NO_INFORMATION, checked)
     if absent:
         # Part of the question has no record: say which part, then how to reach a person.
-        return _handoff(pack, language, FixedTextKey.HANDOFF, checked, prefix=text)
-    return TurnResult(text, TurnOutcome.REPLIED, language, checked)
+        partial = _handoff(pack, language, FixedTextKey.HANDOFF, checked, prefix=text)
+        return replace(partial, rewrite=Rewrite.FACTS)
+    return TurnResult(text, TurnOutcome.REPLIED, language, checked, rewrite=Rewrite.FACTS)
 
 
 def _asked_name(catalog: Catalog, fields: ValidatedFields, item: str) -> str:
@@ -691,7 +741,8 @@ def _clarify(
     catalog: Catalog, language: Language, field: ClarifyField, trace: TurnTrace
 ) -> TurnResult:
     text = clarify_question(field, language, catalog)
-    return TurnResult(text, TurnOutcome.ASKED, language, replace(trace, clarify=field))
+    asked = replace(trace, clarify=field)
+    return TurnResult(text, TurnOutcome.ASKED, language, asked, rewrite=Rewrite.WORDS)
 
 
 def _sources(items: Sequence[Evidence]) -> tuple[str, ...]:
@@ -745,6 +796,7 @@ def _log_turn(result: TurnResult, business_id: str) -> None:
         check_reasons=list(trace.check_reasons),
         reason=trace.rejection,
         language=result.language,
+        voice=trace.voice,
     )
 
 
@@ -762,7 +814,7 @@ def _next_state(
         service_ids=trace.service_ids,
         doctor_ids=trace.doctor_ids,
         clarify=trace.clarify,
-        next_step_shown=step is not None and step in result.text,
+        next_step_shown=step is not None and step in (result.code_text or result.text),
         booking=trace.booking,
         reply=None if summary else result.text,
     )
@@ -775,7 +827,10 @@ def _fixed_text(pack: BusinessPack, language: Language, key: FixedTextKey) -> st
 def _fixed(
     pack: BusinessPack, language: Language, key: FixedTextKey, trace: TurnTrace
 ) -> TurnResult:
-    return TurnResult(_fixed_text(pack, language, key), TurnOutcome.FIXED, language, trace)
+    # Small talk gets the voice; the other fixed texts are said as written.
+    words = Rewrite.WORDS if key is FixedTextKey.GREETING else Rewrite.NONE
+    text = _fixed_text(pack, language, key)
+    return TurnResult(text, TurnOutcome.FIXED, language, trace, rewrite=words)
 
 
 def _handoff(
@@ -792,7 +847,10 @@ def _handoff(
     if reason is not FixedTextKey.HANDOFF:
         parts.append(_fixed_text(pack, language, reason))
     parts.append(_fixed_text(pack, language, FixedTextKey.HANDOFF))
-    return TurnResult("\n\n".join(parts), TurnOutcome.HANDOFF, language, trace, draft)
+    # The voice may say a handoff in its words, unless it carries a notice or follows a failure.
+    plain = reason in _PLAIN_HANDOFFS and not prefix and trace.rule not in _FAILED_RULES
+    words = Rewrite.WORDS if plain else Rewrite.NONE
+    return TurnResult("\n\n".join(parts), TurnOutcome.HANDOFF, language, trace, draft, words)
 
 
 def _emergency(pack: BusinessPack, language: Language, rule: str) -> TurnResult:
@@ -808,4 +866,5 @@ def _with_disclosure(pack: BusinessPack, language: Language, result: TurnResult)
     if result.trace.category is Category.EMERGENCY and result.text.startswith(emergency):
         contact = result.text.removeprefix(emergency)  # "\n\n" and the contact text
         return replace(result, text=f"{emergency}\n\n{disclosure}{contact}")
-    return replace(result, text=f"{disclosure}\n\n{result.text}")
+    written = f"{disclosure}\n\n{result.code_text}" if result.code_text is not None else None
+    return replace(result, text=f"{disclosure}\n\n{result.text}", code_text=written)

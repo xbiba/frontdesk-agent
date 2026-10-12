@@ -446,3 +446,20 @@ def test_the_demo_cases_expect_an_outcome_that_fits_their_behaviour(
         checked += 1
         assert expect.outcome in OUTCOMES_OF[expect.behaviour], case.id
     assert checked
+
+
+def test_a_reply_in_the_voice_is_checked_in_what_code_wrote() -> None:
+    voiced = TurnResult(
+        "Certo! Per parlare con una persona chiama pure la reception.",
+        TurnOutcome.HANDOFF,
+        "it",
+        TurnTrace(rule="pass", voice="rewritten"),
+        code_text=CONTACT,
+    )
+    texts = _texts("it")
+    # The handoff still ends with the contact, and the case finds its text, in the code's words.
+    assert check_reply(voiced, texts=texts) == ()
+    assert check_case(_case("operatore", contains=[CONTACT]), voiced, texts=texts) == ()
+    # What must not be said must not be said in either.
+    unexpected = check_case(_case("operatore", not_contains=["chiama pure"]), voiced, texts=texts)
+    assert unexpected == ("unexpected text: chiama pure",)

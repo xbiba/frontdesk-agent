@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     temporal_namespace: str = "default"
     model_route: str = "offline-demo"
     gcp_project: str | None = None
+    # The voice rewrites what code wrote, on live routes only (Albi's live chat, 2026-10-12).
+    voice: bool = False
     embedding_backend: EmbeddingBackend = EmbeddingBackend.HASH
     min_support_similarity: float = Field(default=0.5, ge=0.0, le=1.0)
     # The vector side of retrieval keeps chunks at least this similar to the query (P47). 0 keeps

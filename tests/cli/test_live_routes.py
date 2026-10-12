@@ -15,6 +15,7 @@ from typer.testing import CliRunner
 
 from frontdesk.agent.classifier import CLASSIFIER_LIMITS
 from frontdesk.agent.responder import RESPONDER_LIMITS
+from frontdesk.agent.voice import VOICE_LIMITS
 from frontdesk.cli.live import REQUESTS_PER_TURN, evaluation_route, read_cases, select_cases
 from frontdesk.cli.main import app
 from frontdesk.conversation.evaluation import TurnCase
@@ -156,10 +157,11 @@ def test_a_model_that_retires_tomorrow_still_runs(monkeypatch: pytest.MonkeyPatc
 
 
 def test_the_ceiling_counts_every_request_the_pipeline_may_make_in_a_turn() -> None:
-    # Two requests for the classifier and two for the responder: if a limit changes, so must this.
-    assert CLASSIFIER_LIMITS.request_limit is not None
-    assert RESPONDER_LIMITS.request_limit is not None
-    assert CLASSIFIER_LIMITS.request_limit + RESPONDER_LIMITS.request_limit == REQUESTS_PER_TURN
+    # Two requests for the classifier, two for the responder and one for the voice: if a limit
+    # changes, so must this.
+    limits = (CLASSIFIER_LIMITS, RESPONDER_LIMITS, VOICE_LIMITS)
+    assert all(item.request_limit is not None for item in limits)
+    assert sum(item.request_limit or 0 for item in limits) == REQUESTS_PER_TURN
 
 
 # --- What the command line refuses on its own account ----------------------------------------------

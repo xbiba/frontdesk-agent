@@ -211,6 +211,8 @@ def _record(
         calls=tuple(CallRow.model_validate(asdict(call)) for call in calls),
         seconds=seconds,
         at=at,
+        code_text=result.code_text,
+        voice=trace.voice,
     )
 
 
