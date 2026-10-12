@@ -550,3 +550,40 @@ def test_the_voice_is_built_on_a_live_route_when_the_deployment_asks(
     assert runtime.voice_prompt_version == (
         prompt_version(Profile.RECEPTIONIST, "voice") if built else None
     )
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    ("route", "conversation", "built"),
+    [
+        pytest.param("vertex-eu-gemini-flash", "agent", True, id="live-agent"),
+        pytest.param("vertex-eu-gemini-flash", "pipeline", False, id="live-pipeline"),
+        pytest.param("offline-demo", "agent", False, id="offline-stays-the-pipeline"),
+    ],
+)
+def test_the_reception_agent_leads_on_a_live_route_when_the_deployment_asks(
+    activate_pack: Activate,
+    app_url: str,
+    clinic_pack: BusinessPack,
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    conversation: str,
+    built: bool,
+) -> None:
+    fake = FunctionModel(lambda messages, info: ModelResponse(parts=[]))
+    monkeypatch.setattr(
+        "frontdesk.composition.build_live_model", lambda route, *, gcp_project: fake
+    )
+    factory = activate_pack(clinic_pack)
+    deployment = _deployment(
+        clinic_pack,
+        factory,
+        app_url=app_url,
+        model_route=route,
+        conversation=conversation,
+        gcp_project="p",
+    )
+    runtime = build_turn_runtime(deployment, data_class=DataClass.EVALUATION)
+    assert (runtime.reception is not None) is built
+    expected = prompt_version(Profile.RECEPTIONIST, "reception") if built else None
+    assert runtime.reception_prompt_version == expected

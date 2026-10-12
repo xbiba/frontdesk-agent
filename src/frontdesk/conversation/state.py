@@ -1,12 +1,15 @@
-"""Conversation state between turns: metadata only, never message text."""
+"""Conversation state between turns: metadata, and the last reply as context. Only a conversation
+the reception agent leads keeps its last messages (Albi, 2026-10-12: the model must read the
+conversation), with every phone-like number masked."""
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
 from enum import StrEnum
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -17,6 +20,10 @@ MAX_REMEMBERED_INTENTS: Final = 5
 # The assistant's last reply, which the models read the next message with (Albi's live chat,
 # 2026-10-12: "Friday is fine" answers the times just offered). Never the person's message.
 MAX_REPLY_CHARS: Final = 600
+# The messages the reception agent reads back, each cut to a length.
+MAX_HISTORY: Final = 12
+MAX_HISTORY_CHARS: Final = 800
+_PHONE_LIKE: Final = re.compile(r"\+?\d[\d\s\-./()]{5,}\d")
 TOPIC_TURNS: Final = 3  # turns a topic survives without being mentioned again
 # The key of the order lookup attempts is a String(64) column: a longer id would fail every order
 # turn at the database.
@@ -45,6 +52,18 @@ class BookingStep(BaseModel):
     retries: int = 0
 
 
+class HistoryEntry(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    role: Literal["patient", "assistant"]
+    text: str
+
+
+def remembered(role: Literal["patient", "assistant"], text: str) -> HistoryEntry:
+    """A message as the conversation keeps it: phone-like numbers masked, cut to a length."""
+    return HistoryEntry(role=role, text=_PHONE_LIKE.sub("[…]", text)[:MAX_HISTORY_CHARS])
+
+
 class ConversationState(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -61,6 +80,7 @@ class ConversationState(BaseModel):
     next_step_shown: bool = False  # the pack's next step ends one answer per conversation
     booking: BookingStep | None = None  # a booking under way; any other turn ends it
     last_reply: str | None = None  # never one that holds a name or a phone
+    history: tuple[HistoryEntry, ...] = ()  # the reception agent's conversation only
 
     def advanced(
         self,
@@ -74,7 +94,14 @@ class ConversationState(BaseModel):
         next_step_shown: bool = False,
         booking: BookingStep | None = None,
         reply: str | None = None,
+        exchange: tuple[str, str] | None = None,
     ) -> ConversationState:
+        """`exchange`: the patient's message and the reply, kept when the reception agent leads."""
+        history = self.history
+        if exchange is not None:
+            message, answer = exchange
+            kept = (remembered("patient", message), remembered("assistant", answer))
+            history = (*history, *kept)[-MAX_HISTORY:]
         intents = self.previous_intents
         if intent is not None:
             intents = (*intents, intent)[-MAX_REMEMBERED_INTENTS:]
@@ -95,5 +122,6 @@ class ConversationState(BaseModel):
                 "next_step_shown": self.next_step_shown or next_step_shown,
                 "booking": booking,
                 "last_reply": reply[:MAX_REPLY_CHARS] if reply else None,
+                "history": history,
             }
         )

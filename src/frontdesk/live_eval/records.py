@@ -95,6 +95,8 @@ class RunManifest(_Row):
     responder_prompt: str
     # The voice's prompt, when the run had the voice (FRONTDESK_VOICE); None otherwise.
     voice_prompt: str | None = None
+    # The reception agent's prompt, when it led the run (FRONTDESK_CONVERSATION=agent).
+    reception_prompt: str | None = None
     fixed_texts: dict[Language, dict[FixedTextKey, str]]
     budget_file: str | None
     # The checks' thresholds (settings): a run judged with other ones is another run. A run made
@@ -115,6 +117,7 @@ _IDENTITY = (
     "classifier_prompt",
     "responder_prompt",
     "voice_prompt",
+    "reception_prompt",
     "fixed_texts",
     "min_support_similarity",
     "min_retrieval_similarity",

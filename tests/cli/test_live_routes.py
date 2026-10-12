@@ -16,9 +16,16 @@ from typer.testing import CliRunner
 from frontdesk.agent.classifier import CLASSIFIER_LIMITS
 from frontdesk.agent.responder import RESPONDER_LIMITS
 from frontdesk.agent.voice import VOICE_LIMITS
-from frontdesk.cli.live import REQUESTS_PER_TURN, evaluation_route, read_cases, select_cases
+from frontdesk.cli.live import (
+    AGENT_REQUESTS_PER_TURN,
+    REQUESTS_PER_TURN,
+    evaluation_route,
+    read_cases,
+    select_cases,
+)
 from frontdesk.cli.main import app
 from frontdesk.conversation.evaluation import TurnCase
+from frontdesk.conversation.reception import RECEPTION_LIMITS
 from frontdesk.model_gateway.routes import ROUTES
 
 runner = CliRunner()
@@ -162,6 +169,8 @@ def test_the_ceiling_counts_every_request_the_pipeline_may_make_in_a_turn() -> N
     limits = (CLASSIFIER_LIMITS, RESPONDER_LIMITS, VOICE_LIMITS)
     assert all(item.request_limit is not None for item in limits)
     assert sum(item.request_limit or 0 for item in limits) == REQUESTS_PER_TURN
+    # The reception agent instead: its tool calls and its reply, within its own limit.
+    assert RECEPTION_LIMITS.request_limit == AGENT_REQUESTS_PER_TURN
 
 
 # --- What the command line refuses on its own account ----------------------------------------------

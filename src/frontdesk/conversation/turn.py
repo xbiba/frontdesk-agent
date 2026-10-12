@@ -56,6 +56,14 @@ from frontdesk.conversation.compose import (
     unanswered,
 )
 from frontdesk.conversation.preload import document_evidence, fact_evidence
+from frontdesk.conversation.reception import (
+    RECEPTION_LIMITS,
+    Desk,
+    ReceptionReply,
+    ReplyKind,
+    history_messages,
+)
+from frontdesk.conversation.reception_facts import render_facts
 from frontdesk.conversation.state import BookingStage, BookingStep, ConversationState
 from frontdesk.db.engine import business_session
 from frontdesk.knowledge.embedders import Embedder
@@ -189,6 +197,9 @@ class TurnRuntime:
     scheduler: Scheduler | None = None  # the bookable doctors' free slots and bookings (M4, M5)
     voice: Agent[VoiceDeps, str] | None = None  # rewrites what code wrote; None: code's words
     voice_prompt_version: str | None = None
+    # The reception agent leads the conversation when set (FRONTDESK_CONVERSATION=agent).
+    reception: Agent[Desk, ReceptionReply] | None = None
+    reception_prompt_version: str | None = None
 
 
 async def handle_message(
@@ -214,7 +225,8 @@ async def handle_message(
         )
         record_content(span, enabled=runtime.capture_content, message=text, reply=result.text)
     _log_turn(result, runtime.pack.id)
-    return result, _next_state(state, result, runtime.pack)
+    exchange = (text, result.text) if runtime.reception is not None else None
+    return result, _next_state(state, result, runtime.pack, exchange=exchange)
 
 
 async def _run_turn(text: str, state: ConversationState, runtime: TurnRuntime) -> TurnResult:
@@ -287,6 +299,12 @@ async def _decide(
         return _emergency(pack, language, rule.rule)
     if rule.verdict is Verdict.CLINICAL_ADVICE:
         return _handoff(pack, language, FixedTextKey.CLINICAL, TurnTrace(rule=rule.rule))
+    if runtime.reception is not None:
+        # The agent leads: a name and a phone number are what a booking under way asks for.
+        if rule.verdict is Verdict.PERSONAL_DATA and state.booking is None:
+            trace = TurnTrace(rule=f"personal_data:{rule.rule}")
+            return _fixed(pack, language, FixedTextKey.PERSONAL_DATA, trace)
+        return await _reception(stripped, language, state, runtime)
     if state.booking is not None and runtime.scheduler is not None:
         # Ahead of the personal-data rule: here a name and a phone number are what was asked for.
         step = await _booking_step(stripped, language, state, state.booking, runtime)
@@ -304,6 +322,97 @@ async def _decide(
         trace = TurnTrace(rule="pass", rejection=classified.reason)
         return _handoff(pack, language, FixedTextKey.HANDOFF, trace)
     return await _route(classified, state, catalog, runtime)
+
+
+async def _reception(
+    text: str, language: Language, state: ConversationState, runtime: TurnRuntime
+) -> TurnResult:
+    """The reception agent's reply (frontdesk.conversation.reception): its words, its tools'
+    facts; the pack's fixed texts for an emergency or a request for medical advice."""
+    pack = runtime.pack
+    if runtime.reception is None:
+        raise ValueError("the runtime has no reception agent")
+    catalog = await asyncio.to_thread(_load_catalog, runtime)
+    if catalog is None:
+        trace = TurnTrace(rule="pass", rejection="no_active_knowledge")
+        return _handoff(pack, language, FixedTextKey.HANDOFF, trace)
+    desk = await asyncio.to_thread(_desk, text, language, state, catalog, runtime)
+    try:
+        run = await runtime.reception.run(
+            text,
+            deps=desk,
+            message_history=history_messages(state.history),
+            usage_limits=RECEPTION_LIMITS,
+        )
+    except AgentRunError as error:
+        log_event(logger, "reception.failed", business_id=pack.id, reason=type(error).__name__)
+        failed = TurnTrace(rule="pass", rejection="reception_error", booking=desk.booking)
+        return _handoff(pack, language, FixedTextKey.HANDOFF, failed)
+    reply = run.output
+    intent = Intent.BOOKING if desk.booking is not None or desk.booked else None
+    trace = TurnTrace(
+        rule="pass",
+        category=Category.ADMINISTRATIVE,
+        intent=intent,
+        sources=tuple(dict.fromkeys(desk.sources)),
+        booking=desk.booking,
+    )
+    if reply.kind is ReplyKind.EMERGENCY:
+        return _handoff(pack, language, FixedTextKey.EMERGENCY, _as(trace, Category.EMERGENCY))
+    if reply.kind is ReplyKind.CLINICAL:
+        return _handoff(pack, language, FixedTextKey.CLINICAL, _as(trace, Category.CLINICAL))
+    texts = pack.fixed_texts[language]
+    parts = [reply.text.strip()]
+    privacy = texts.get(FixedTextKey.BOOKING_PRIVACY)
+    if desk.booked and privacy and privacy not in reply.text:
+        parts.append(privacy)  # the link to the clinic's privacy page ends every booking
+    if reply.kind is ReplyKind.HANDOFF and not _names_the_phone(reply.text, pack):
+        parts.append(texts[FixedTextKey.HANDOFF])
+    outcome = {
+        ReplyKind.ANSWER: TurnOutcome.REPLIED,
+        ReplyKind.QUESTION: TurnOutcome.ASKED,
+        ReplyKind.HANDOFF: TurnOutcome.HANDOFF,
+    }[reply.kind]
+    return TurnResult("\n\n".join(parts), outcome, language, trace)
+
+
+def _desk(
+    text: str,
+    language: Language,
+    state: ConversationState,
+    catalog: Catalog,
+    runtime: TurnRuntime,
+) -> Desk:
+    pack, now = runtime.pack, runtime.now()
+    calendar = pack.integrations.calendar
+    books = runtime.scheduler is not None and calendar is not None and calendar.chat_booking
+    with business_session(runtime.session_factory, pack.id) as session:
+        facts = render_facts(session, pack, catalog, language, runtime.today(), chat_booking=books)
+    return Desk(
+        pack=pack,
+        catalog=catalog,
+        session_factory=runtime.session_factory,
+        scheduler=runtime.scheduler,
+        embedder=runtime.embedder,
+        min_similarity=runtime.min_retrieval_similarity,
+        conversation_id=state.conversation_id,
+        language=language,
+        now=now,
+        message=text,
+        first_turn=state.turns == 0,
+        facts=facts,
+        conversation="\n".join(entry.text for entry in state.history),
+        booking=state.booking,
+    )
+
+
+def _as(trace: TurnTrace, category: Category) -> TurnTrace:
+    return replace(trace, category=category, intent=Intent.OTHER)
+
+
+def _names_the_phone(text: str, pack: BusinessPack) -> bool:
+    phone = "".join(char for char in pack.location.phone if char.isdigit())
+    return len(phone) >= 6 and phone in "".join(char for char in text if char.isdigit())
 
 
 async def _classify(
@@ -801,7 +910,11 @@ def _log_turn(result: TurnResult, business_id: str) -> None:
 
 
 def _next_state(
-    state: ConversationState, result: TurnResult, pack: BusinessPack
+    state: ConversationState,
+    result: TurnResult,
+    pack: BusinessPack,
+    *,
+    exchange: tuple[str, str] | None = None,
 ) -> ConversationState:
     trace = result.trace
     step = pack.fixed_texts[result.language].get(FixedTextKey.NEXT_STEP)
@@ -817,6 +930,7 @@ def _next_state(
         next_step_shown=step is not None and step in (result.code_text or result.text),
         booking=trace.booking,
         reply=None if summary else result.text,
+        exchange=exchange,
     )
 
 
