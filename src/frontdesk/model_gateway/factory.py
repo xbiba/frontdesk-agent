@@ -176,13 +176,14 @@ def live_model_settings(route: ModelRoute, *, max_tokens: int) -> ModelSettings:
     """What a live model is asked with: a cap on output tokens and its provider's thinking lever.
 
     Opus 5.5 always thinks adaptively and rejects sampling parameters; effort is its lever. Gemini
-    3.1 Flash-Lite counts its thinking in the output tokens and takes a thinking level: the
-    classifier and the responder fill closed forms, so it thinks as little as it can.
+    counts its thinking in the output tokens and takes a thinking level: each route names the
+    lowest its model accepts (Flash-Lite "minimal", 3.8 Flash "low"), so it thinks as little as
+    it can.
     """
     if route.provider == "google-vertex":
         return GoogleModelSettings(
             max_tokens=max_tokens,
-            google_thinking_config={"thinking_level": ThinkingLevel.MINIMAL},
+            google_thinking_config={"thinking_level": ThinkingLevel(route.thinking.upper())},
         )
     if route.provider == "anthropic-vertex":
         return AnthropicModelSettings(max_tokens=max_tokens, anthropic_effort="medium")

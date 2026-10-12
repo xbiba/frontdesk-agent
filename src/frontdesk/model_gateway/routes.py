@@ -30,6 +30,7 @@ class OutputLimits:
     classifier: int = 600
     responder: int = 1200
     voice: int = 500
+    agent: int = 2000  # the reception agent: thinking, a tool call or the reply
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,8 @@ class ModelRoute:
     retires_on: date | None = None
     # Vector size of an embedding route; None for chat routes.
     dimension: int | None = None
+    # Gemini's thinking level for this model: the lowest it accepts (3.8 Flash refuses "minimal").
+    thinking: str = "minimal"
 
 
 ROUTES: Final[dict[str, ModelRoute]] = {
@@ -71,6 +74,17 @@ ROUTES: Final[dict[str, ModelRoute]] = {
         region="eu",
         approved_for=frozenset({DataClass.EVALUATION}),
         retires_on=date(2027, 5, 7),
+    ),
+    # The reception agent (Albi's live chat, 2026-10-12: Flash-Lite read "Friday, what time?" as a
+    # pick). GA since 2026-09-02 on the eu multi-region; Google lists no retirement date yet.
+    # Evaluation data only, as for Flash-Lite, until Vertex's data retention for Gemini is checked.
+    "vertex-eu-gemini-flash": ModelRoute(
+        route_id="vertex-eu-gemini-flash",
+        provider="google-vertex",
+        model_name="gemini-3.8-flash",
+        region="eu",
+        approved_for=frozenset({DataClass.EVALUATION}),
+        thinking="low",
     ),
     # The embedding candidates of the M3 experiment (design §4.5). Neither is served on the eu
     # multi-region; both are on europe-west1 (Belgium).

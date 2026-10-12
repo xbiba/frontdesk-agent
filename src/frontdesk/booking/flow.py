@@ -169,3 +169,42 @@ def yes_or_no(message: str) -> bool | None:
     if words in _NO:
         return False
     return None
+
+
+# A yes in a sentence ("sì, confermo grazie"), for the reception agent's confirm_booking: one of
+# these words and none of the negations.
+_AFFIRMATIVE: Final = frozenset(
+    {
+        "si",
+        "sì",
+        "sí",
+        "yes",
+        "yeah",
+        "yep",
+        "po",
+        "ok",
+        "okay",
+        "confermo",
+        "conferma",
+        "confermato",
+        "confirm",
+        "confirmed",
+        "konfirmoj",
+        "certo",
+        "sure",
+        "perfetto",
+        "esatto",
+        "bene",
+        "dakord",
+        "mirë",
+    }
+)
+_NEGATIVE: Final = frozenset(
+    {"no", "jo", "non", "nuk", "not", "nope", "annulla", "cancel", "stop", "anulo", "aspetta"}
+)
+
+
+def affirms(message: str) -> bool:
+    """The message says yes, and nothing in it says no."""
+    words = set(re.findall(r"[^\W\d_]+", message.casefold()))
+    return not words & _NEGATIVE and bool(words & _AFFIRMATIVE)

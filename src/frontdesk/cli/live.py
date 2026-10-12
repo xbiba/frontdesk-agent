@@ -72,6 +72,9 @@ from frontdesk.model_gateway.routes import (
 from frontdesk.settings import Settings, load_settings
 
 REQUESTS_PER_TURN: Final = 5  # two for the classifier, two for the responder, one for the voice
+AGENT_REQUESTS_PER_TURN: Final = (
+    6  # the reception agent's tool calls and its reply (RECEPTION_LIMITS)
+)
 EXIT_ERROR: Final = 1
 EXIT_RATE_LIMITED: Final = 3
 EXIT_BUDGET: Final = 4
@@ -260,6 +263,7 @@ def _manifest(
         classifier_prompt=runtime.classifier_prompt_version,
         responder_prompt=runtime.responder_prompt_version,
         voice_prompt=runtime.voice_prompt_version,
+        reception_prompt=runtime.reception_prompt_version,
         fixed_texts={language: dict(texts) for language, texts in pack.fixed_texts.items()},
         budget_file=str(budget.path) if budget else None,
         min_support_similarity=deployment.settings.min_support_similarity,
@@ -348,10 +352,11 @@ def _show_plan(run: _Run, pending: Sequence[TurnCase]) -> None:
         return
     price = run.budget.price(route.route_id)
     limits = route.output_limits
-    cap = max(limits.classifier, limits.responder, limits.voice)
+    agent = run.runtime.reception is not None
+    cap = limits.agent if agent else max(limits.classifier, limits.responder, limits.voice)
     most = (
         turns
-        * REQUESTS_PER_TURN
+        * (AGENT_REQUESTS_PER_TURN if agent else REQUESTS_PER_TURN)
         * price.cost(input_units=MAX_INPUT_TOKENS_PER_REQUEST, output_units=cap)
     )
     left = eur_left(run.budget, spent_usd(run.budget))

@@ -40,6 +40,7 @@ class StepReply:
     outcome: str  # "asked" while the booking goes on; "replied" when booked or cancelled; "handoff"
     next: BookingStep | None
     doctor_id: str
+    booked: bool = False  # the appointment is in the calendar
 
 
 @dataclass(frozen=True)
@@ -117,7 +118,7 @@ def pick(context: BookingContext, step: BookingStep, wish: SlotWish) -> StepRepl
     checked it: the slot picked, the slots that fit a wish, or other slots ("what times are there?").
     Raises CalendarUnavailableError."""
     if wish.slot is not None and wish.slot <= len(step.offered):
-        return _take(context, step, step.offered[wish.slot - 1])
+        return take(context, step, step.offered[wish.slot - 1])
     return offer(
         context,
         step.doctor_id,
@@ -146,11 +147,12 @@ def answer(context: BookingContext, step: BookingStep, message: str) -> StepRepl
 
 def _choose(context: BookingContext, step: BookingStep, message: str) -> StepReply | None:
     start = parse_choice(message, step.offered, ZoneInfo(context.pack.timezone))
-    return _take(context, step, start) if start is not None else None
+    return take(context, step, start) if start is not None else None
 
 
-def _take(context: BookingContext, step: BookingStep, start: datetime) -> StepReply:
-    """A hold on the slot picked, then the name; fresh slots when it was taken meanwhile."""
+def take(context: BookingContext, step: BookingStep, start: datetime) -> StepReply:
+    """A hold on the slot picked, then the name; fresh slots when it was taken meanwhile.
+    Raises CalendarUnavailableError."""
     end = start + timedelta(minutes=_duration(context, step.service_id))
     if not _free(context, step, start):
         return offer(context, step.doctor_id, step.service_id, prefix=_say(context, "taken"))
@@ -173,7 +175,7 @@ def _take(context: BookingContext, step: BookingStep, start: datetime) -> StepRe
 
 def _name(context: BookingContext, step: BookingStep, message: str) -> StepReply:
     if yes_or_no(message) is False:
-        return _cancel(context, step)
+        return cancel(context, step)
     name = valid_name(message)
     with business_session(context.session_factory, context.pack.id) as session:
         current = held(session, _hold_id(step), context.now)
@@ -189,8 +191,8 @@ def _name(context: BookingContext, step: BookingStep, message: str) -> StepReply
 
 def _phone(context: BookingContext, step: BookingStep, message: str) -> StepReply:
     if yes_or_no(message) is False:
-        return _cancel(context, step)
-    phone = valid_phone(message, _country_code(context.pack))
+        return cancel(context, step)
+    phone = valid_phone(message, country_code(context.pack))
     with business_session(context.session_factory, context.pack.id) as session:
         current = held(session, _hold_id(step), context.now)
         if current is not None and phone is not None:
@@ -198,7 +200,7 @@ def _phone(context: BookingContext, step: BookingStep, message: str) -> StepRepl
     if current is None:
         return offer(context, step.doctor_id, step.service_id, prefix=_say(context, "expired"))
     if phone is None:
-        return _again(context, step, "again_phone", code=_country_code(context.pack) or "+")
+        return _again(context, step, "again_phone", code=country_code(context.pack) or "+")
     summary = phrase(
         "summary",
         context.language,
@@ -217,7 +219,13 @@ def _confirm(context: BookingContext, step: BookingStep, message: str) -> StepRe
     if decision is None:
         return _again(context, step, "again_yes_no")
     if decision is False:
-        return _cancel(context, step)
+        return cancel(context, step)
+    return confirm(context, step)
+
+
+def confirm(context: BookingContext, step: BookingStep) -> StepReply:
+    """The patient said yes: the held slot is booked, once the calendar shows it still free.
+    Raises CalendarUnavailableError."""
     with business_session(context.session_factory, context.pack.id) as session:
         current = held(session, _hold_id(step), context.now)
     if current is None or current.name is None or current.phone is None:
@@ -252,7 +260,7 @@ def _confirm(context: BookingContext, step: BookingStep, message: str) -> StepRe
         contact=context.pack.location.phone,
     )
     privacy = context.pack.fixed_texts[context.language][FixedTextKey.BOOKING_PRIVACY]
-    return StepReply(_joined(booked, privacy), "replied", None, step.doctor_id)
+    return StepReply(_joined(booked, privacy), "replied", None, step.doctor_id, booked=True)
 
 
 def _free(context: BookingContext, step: BookingStep, start: datetime) -> bool:
@@ -270,7 +278,7 @@ def _again(context: BookingContext, step: BookingStep, key: str, **values: str) 
     return StepReply(phrase(key, context.language, **values), "asked", after, step.doctor_id)
 
 
-def _cancel(context: BookingContext, step: BookingStep) -> StepReply:
+def cancel(context: BookingContext, step: BookingStep) -> StepReply:
     _release(context, step)
     return StepReply(_say(context, "cancelled"), "replied", None, step.doctor_id)
 
@@ -315,7 +323,7 @@ def _duration(context: BookingContext, service_id: str) -> int:
     return next(item.duration_minutes for item in context.pack.services if item.id == service_id)
 
 
-def _country_code(pack: BusinessPack) -> str:
+def country_code(pack: BusinessPack) -> str:
     """The clinic's own country code ("+355" from "+355 69 443 9339"), for a national number."""
     found = re.match(r"\+\d{1,3}(?=[\s\-.(]|$)", pack.location.phone.strip())
     return found.group(0) if found else ""

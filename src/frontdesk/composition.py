@@ -29,6 +29,7 @@ from frontdesk.booking.google_calendar import SCOPE as CALENDAR_SCOPE
 from frontdesk.booking.google_calendar import WRITE_SCOPE as CALENDAR_WRITE_SCOPE
 from frontdesk.booking.google_calendar import GoogleCalendar, calendar_http_client
 from frontdesk.booking.scheduler import CalendarScheduler, Scheduler
+from frontdesk.conversation.reception import Desk, ReceptionReply, build_reception
 from frontdesk.conversation.turn import TurnRuntime
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
 from frontdesk.knowledge.embedders import Embedder, build_embedder
@@ -42,12 +43,12 @@ from frontdesk.model_gateway.routes import (
     UnapprovedRouteError,
     require_route,
 )
-from frontdesk.settings import CalendarBackend, Settings
+from frontdesk.settings import CalendarBackend, Conversation, Settings
 from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.loader import load_pack
 from frontdesk.tenancy.pack import BusinessPack
 
-AgentRole = Literal["classifier", "responder", "voice"]
+AgentRole = Literal["classifier", "responder", "voice", "agent"]
 ModelWrapper = Callable[[Model, AgentRole], Model]
 
 
@@ -137,6 +138,9 @@ def build_turn_runtime(
         min_similarity=deployment.settings.min_retrieval_similarity,
     )
     toolset = build_toolset(pack.profile, services)
+    # Offline, and on a live route unless the deployment asks for it, the pipeline leads.
+    reception: Agent[Desk, ReceptionReply] | None = None
+    reception_version: str | None = None
     if route.provider == "offline":
         classifier = build_classifier(
             demo_classifier_model(catalog), pack.profile, instructions=classifier_prompt.text
@@ -171,6 +175,15 @@ def build_turn_runtime(
             if deployment.settings.voice
             else None
         )
+        if deployment.settings.conversation is Conversation.AGENT:
+            reception_prompt = read_prompt(pack.profile, "reception")
+            reception = build_reception(
+                wrap(model, "agent"),
+                pack.profile,
+                model_settings=live_model_settings(route, max_tokens=route.output_limits.agent),
+                instructions=reception_prompt.text,
+            )
+            reception_version = reception_prompt.version
     return TurnRuntime(
         pack=pack,
         classifier=classifier,
@@ -179,6 +192,8 @@ def build_turn_runtime(
         responder_prompt_version=responder_prompt.version,
         voice=voice,
         voice_prompt_version=voice_prompt.version if voice is not None else None,
+        reception=reception,
+        reception_prompt_version=reception_version,
         session_factory=deployment.session_factory,
         embedder=deployment.embedder,
         today=business_today,

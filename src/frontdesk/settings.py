@@ -24,6 +24,14 @@ class CalendarBackend(StrEnum):
     CALCOM = "calcom"  # cal.com keeps the availability and writes to Google Calendar
 
 
+class Conversation(StrEnum):
+    """Who leads a conversation: the pipeline (rules, classifier, code's replies) or the reception
+    agent, a model with the clinic's facts and tools that code checks (Albi, 2026-10-12)."""
+
+    PIPELINE = "pipeline"
+    AGENT = "agent"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="FRONTDESK_", extra="ignore")
 
@@ -38,6 +46,8 @@ class Settings(BaseSettings):
     gcp_project: str | None = None
     # The voice rewrites what code wrote, on live routes only (Albi's live chat, 2026-10-12).
     voice: bool = False
+    # The reception agent leads the conversation on live routes; offline stays the pipeline.
+    conversation: Conversation = Conversation.PIPELINE
     embedding_backend: EmbeddingBackend = EmbeddingBackend.HASH
     min_support_similarity: float = Field(default=0.5, ge=0.0, le=1.0)
     # The vector side of retrieval keeps chunks at least this similar to the query (P47). 0 keeps
