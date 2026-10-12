@@ -5,7 +5,7 @@ from frontdesk.live_eval.judging import judge
 from frontdesk.live_eval.report import render_report
 from tests.live_eval.helpers import CONTACT, FIXED_TEXTS, case, manifest, record
 
-SENT = "sent back: numbers that are in no fact and no tool result: 55"
+SENT = "sent_back:numbers"
 
 
 def _report(**fields: object) -> str:

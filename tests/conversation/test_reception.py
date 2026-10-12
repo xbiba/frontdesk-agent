@@ -196,7 +196,9 @@ async def test_a_number_from_nowhere_is_sent_back_once(base: TurnRuntime) -> Non
     assert reply.text == "La visita ortopedica costa 40 EUR."
     retry = script.calls[1][-1]
     assert isinstance(retry, ModelRequest)
-    assert "55" in str(retry.parts[0])
+    assert "55" in str(retry.parts[0])  # the model is told the value
+    # Traces and logs get the kind only, never a value of the reply (security review).
+    assert reply.trace.check_reasons == ("sent_back:numbers",)
 
 
 async def test_a_booking_no_tool_made_is_never_announced(base: TurnRuntime) -> None:

@@ -10,6 +10,7 @@ sent back to the model once with the reasons; a second failure ends the turn wit
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Final
 
 from frontdesk.agent.answer_check import links_in, numbers_in
@@ -24,23 +25,35 @@ _BOOKED: Final = re.compile(
 )
 
 
-def reply_problems(reply: str, known: str, *, booked: bool) -> tuple[str, ...]:
+@dataclass(frozen=True)
+class Problem:
+    """Why a reply is sent back. `code` names the kind and goes to traces and logs, never a value of
+    the reply; `detail` tells the model what to change and goes to the model only."""
+
+    code: str
+    detail: str
+
+
+def reply_problems(reply: str, known: str, *, booked: bool) -> tuple[Problem, ...]:
     """Why `reply` may not be sent; empty when it may. `known`: everything the agent was given,
     which a number or a link must come from. `booked`: the booking tool made a booking."""
     problems = []
     if not reply.strip():
-        problems.append("the reply is empty")
+        problems.append(Problem("empty", "the reply is empty"))
     new_numbers = sorted(numbers_in(reply) - numbers_in(known))
     if new_numbers:
-        problems.append(f"numbers that are in no fact and no tool result: {', '.join(new_numbers)}")
+        detail = f"numbers that are in no fact and no tool result: {', '.join(new_numbers)}"
+        problems.append(Problem("numbers", detail))
     new_links = sorted(links_in(reply) - links_in(known))
     if new_links:
-        problems.append(f"links that are in no fact: {', '.join(new_links)}")
+        problems.append(Problem("links", f"links that are in no fact: {', '.join(new_links)}"))
     if contains_diagnostic_language(reply):
-        problems.append("it reads like a diagnosis or medical advice")
+        problems.append(Problem("diagnosis", "it reads like a diagnosis or medical advice"))
     promise = promise_phrase(reply)
     if promise is not None:
-        problems.append(f"it promises an action nobody will take: {promise}")
+        detail = f"it promises an action nobody will take: {promise}"
+        problems.append(Problem("promise", detail))
     if not booked and _BOOKED.search(reply):
-        problems.append("it says a booking is confirmed, but confirm_booking made none")
+        detail = "it says a booking is confirmed, but confirm_booking made none"
+        problems.append(Problem("booking", detail))
     return tuple(problems)

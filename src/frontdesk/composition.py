@@ -39,8 +39,8 @@ from frontdesk.knowledge.embedders import Embedder, build_embedder
 from frontdesk.knowledge.facts import load_catalog
 from frontdesk.knowledge.versions import check_embedder
 from frontdesk.model_gateway.factory import build_live_model, live_model_settings
-from frontdesk.model_gateway.hedging import HedgedModel
 from frontdesk.model_gateway.google_tokens import google_token_source
+from frontdesk.model_gateway.hedging import HedgedModel
 from frontdesk.model_gateway.routes import (
     CHAT_PROVIDERS,
     DataClass,

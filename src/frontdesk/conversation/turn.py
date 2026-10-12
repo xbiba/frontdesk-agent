@@ -380,8 +380,9 @@ def _desk(
 
 
 def _sent_back(desk: Desk) -> tuple[str, ...]:
-    """Each reply the check sent back to the model this turn, with its reasons."""
-    return tuple(f"{SENT_BACK} {reasons}" for reasons in desk.rejected)
+    """Each reply the check sent back to the model this turn, by the codes of its problems: never a
+    value of the reply, which traces and logs must not hold (security review, 2026-10-12)."""
+    return tuple(f"{SENT_BACK}{codes}" for codes in desk.rejected)
 
 
 def _as(trace: TurnTrace, category: Category) -> TurnTrace:

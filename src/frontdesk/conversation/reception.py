@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.agent.classification import check_free_text
 from frontdesk.agent.prompts import instructions_for
-from frontdesk.agent.reply_check import reply_problems
+from frontdesk.agent.reply_check import Problem, reply_problems
 from frontdesk.agent.vocab import ClarifyField, SlotPart
 from frontdesk.booking.flow import affirms, phrase, valid_name, valid_phone
 from frontdesk.booking.holds import attach, held
@@ -53,7 +53,7 @@ from frontdesk.tenancy.pack import BusinessPack, Language, Profile
 
 RECEPTION_LIMITS: Final = UsageLimits(request_limit=6)
 # How a reply the check refused is named in the turn's check reasons, for the run's report.
-SENT_BACK: Final = "sent back:"
+SENT_BACK: Final = "sent_back:"
 SEARCH_CANDIDATES: Final = 12  # passages the search ranks
 SEARCH_PASSAGES: Final = 4  # passages the agent reads, in its language when there are some
 # What one search returns at most: each later request of the turn carries it again, and a request
@@ -106,7 +106,7 @@ class Desk:
     booked: bool = False
     summary: str | None = None  # the summary prepare_booking wrote this turn, shown as written
     booked_text: str | None = None  # what confirm_booking said when it booked
-    rejected: list[str] = field(default_factory=list)  # why the check sent replies back
+    rejected: list[str] = field(default_factory=list)  # the codes of the replies sent back
 
     @property
     def zone(self) -> ZoneInfo:
@@ -281,11 +281,15 @@ def build_reception(
         if output.kind is ReplyKind.NOTICE and contains_clinical_terms(output.text):
             # Next to the medical notice, the answer is only the practical part (ADR-0006): a word
             # on the health problem there is the model talking health (security review, 2026-10-12).
-            problems.append("it talks about the health problem; answer only the practical part")
+            detail = "it talks about the health problem; answer only the practical part"
+            problems.append(Problem("health", detail))
         if problems:
-            desk.rejected.append("; ".join(problems))
+            # The codes only: the details hold values of the reply, for the model alone.
+            desk.rejected.append(",".join(problem.code for problem in problems))
             raise ModelRetry(
-                "Rewrite the reply: " + "; ".join(problems) + ". Use only the clinic facts, the "
+                "Rewrite the reply: "
+                + "; ".join(problem.detail for problem in problems)
+                + ". Use only the clinic facts, the "
                 "tool results and the conversation."
             )
         return output

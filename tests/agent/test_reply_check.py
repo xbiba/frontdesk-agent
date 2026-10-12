@@ -21,12 +21,15 @@ def test_a_reply_from_the_facts_passes() -> None:
         pytest.param("Costa 45 EUR.", "numbers", id="a-number-from-nowhere"),
         pytest.param("Veda www.altro.it", "links", id="a-link-from-nowhere"),
         pytest.param("Potrebbe trattarsi di una sciatica.", "diagnosis", id="a-diagnosis"),
-        pytest.param("La richiameremo domani.", "promises", id="a-promise"),
+        pytest.param("La richiameremo domani.", "promise", id="a-promise"),
         pytest.param("Prenotazione confermata per venerdì.", "booking", id="a-booking-not-made"),
     ],
 )
 def test_a_reply_beyond_the_facts_is_refused(reply: str, problem: str) -> None:
-    assert any(problem in reason for reason in reply_problems(reply, KNOWN, booked=False))
+    found = reply_problems(reply, KNOWN, booked=False)
+    assert problem in {item.code for item in found}
+    # The code names the kind; only the detail, for the model, holds the reply's values.
+    assert all(item.code.isidentifier() for item in found)
 
 
 def test_a_booking_the_tool_made_may_be_announced() -> None:
