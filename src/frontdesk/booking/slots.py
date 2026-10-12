@@ -97,3 +97,11 @@ def _spread(
     chosen = firsts[:limit]
     chosen += [item for item in ordered if item not in chosen][: limit - len(chosen)]
     return sorted(chosen)
+
+
+def spread(slots: Sequence[Slot], zone: ZoneInfo, limit: int) -> tuple[Slot, ...]:
+    """The first slot of each day first, for up to `limit` days, then the next ones in time order:
+    the same choice for slots computed here and for slots a scheduler such as cal.com gives."""
+    pairs = [(slot.start.astimezone(UTC), slot.end.astimezone(UTC)) for slot in slots]
+    chosen = _spread(pairs, zone, limit)
+    return tuple(Slot(start.astimezone(zone), end.astimezone(zone)) for start, end in chosen)

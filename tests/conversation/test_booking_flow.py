@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.agent.classifier import build_classifier
 from frontdesk.booking.calendar import CalendarUnavailableError, FixtureCalendar
+from frontdesk.booking.scheduler import CalendarScheduler
 from frontdesk.booking.slots import Interval
 from frontdesk.conversation.evaluation import TurnCase, run_turn_eval
 from frontdesk.conversation.state import BookingStage, ConversationState
@@ -90,7 +91,7 @@ def runtime(
 ) -> TurnRuntime:
     pack = _pack(clinic_pack)
     base = make_runtime(pack, activate_pack(pack), classifier_turns([], []), document_responder())
-    return replace(base, calendar=calendar, now=lambda: NOW)
+    return replace(base, scheduler=CalendarScheduler(calendar), now=lambda: NOW)
 
 
 def _holds(runtime: TurnRuntime) -> list[BookingHold]:

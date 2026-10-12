@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +21,7 @@ class CalendarBackend(StrEnum):
     NONE = "none"
     FIXTURE = "fixture"
     GOOGLE = "google"
+    CALCOM = "calcom"  # cal.com keeps the availability and writes to Google Calendar
 
 
 class Settings(BaseSettings):
@@ -44,6 +45,9 @@ class Settings(BaseSettings):
     calendar_fixture: Path | None = None
     # The service account the Mac impersonates with its ADC; unset on Cloud Run, which runs as it.
     calendar_impersonate: str | None = None
+    # cal.com's API key: in the environment only, never in a committed env file.
+    calcom_api_key: SecretStr | None = None
+    calcom_base_url: str = "https://api.cal.com"
     telemetry_capture_content: bool = False
     log_level: str = "INFO"
 

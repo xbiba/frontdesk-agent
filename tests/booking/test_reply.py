@@ -9,6 +9,7 @@ import pytest
 from frontdesk.agent.vocab import ClarifyField
 from frontdesk.booking.calendar import FixtureCalendar
 from frontdesk.booking.reply import booking_target, compose_slots, find_slots
+from frontdesk.booking.scheduler import CalendarScheduler
 from frontdesk.booking.slots import Slot
 from frontdesk.tenancy.pack import BusinessPack, CalendarIntegration, Integrations
 
@@ -128,7 +129,8 @@ cal-arben:
     )
     calendar = CalendarIntegration(credentials_ref="adc", calendars={"dr-arben-demo": "cal-arben"})
     pack = clinic_pack.model_copy(update={"integrations": Integrations(calendar=calendar)})
-    slots = find_slots(FixtureCalendar(path), pack, "dr-arben-demo", "orthopedics-visit", at(22, 8))
+    scheduler = CalendarScheduler(FixtureCalendar(path))
+    slots = find_slots(scheduler, pack, "dr-arben-demo", "orthopedics-visit", at(22, 8))
     assert [(slot.start, slot.end - slot.start) for slot in slots] == [
         (at(23, 9), timedelta(minutes=30)),
         (at(23, 10), timedelta(minutes=30)),

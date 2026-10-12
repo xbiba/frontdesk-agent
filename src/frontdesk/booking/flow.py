@@ -11,12 +11,9 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Sequence
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Final
 from zoneinfo import ZoneInfo
-
-from frontdesk.booking.calendar import CalendarView
-from frontdesk.booking.slots import free_slots
 
 _CHOICE: Final = re.compile(
     r"^(?:(?:il|la|lo|l'|the|nr|n|no|numero|number|numri|nummri)\.?\s*)?([1-9])"
@@ -67,9 +64,9 @@ _PHRASES: Final[dict[str, dict[str, str]]] = {
         "en": "Please write just your first and last name.",
     },
     "again_phone": {
-        "sq": "Ju lutem, shkruani numrin e telefonit vetëm me shifra.",
-        "it": "Mi scriva il numero di telefono con le sole cifre, per favore.",
-        "en": "Please write the phone number with digits only.",
+        "sq": "Ju lutem, shkruani numrin e telefonit me prefiksin ndërkombëtar ({code}…).",
+        "it": "Mi scriva il numero di telefono con il prefisso internazionale ({code}…), per favore.",
+        "en": "Please write the phone number with the international prefix ({code}…).",
     },
     "again_yes_no": {
         "sq": "Ju lutem, përgjigjuni po ose jo.",
@@ -143,10 +140,15 @@ def valid_name(message: str) -> str | None:
     return name if 2 <= len(name) <= 60 and letters >= 2 and _NAME.match(name) else None
 
 
-def valid_phone(message: str) -> str | None:
-    """A phone number: an optional + and 8 to 15 digits, separators removed."""
+def valid_phone(message: str, country_code: str = "") -> str | None:
+    """A phone number in international form, "+" and 8 to 15 digits, separators removed. "00"
+    stands for "+", and a national number ("069…") takes the clinic's country code."""
     phone = _PHONE_SEPARATORS.sub("", message.strip())
-    return phone if _PHONE.match(phone) else None
+    if phone.startswith("00"):
+        phone = "+" + phone[2:]
+    elif phone.startswith("0") and country_code:
+        phone = country_code + phone[1:]
+    return phone if phone.startswith("+") and _PHONE.match(phone) else None
 
 
 def yes_or_no(message: str) -> bool | None:
@@ -156,29 +158,3 @@ def yes_or_no(message: str) -> bool | None:
     if words in _NO:
         return False
     return None
-
-
-def still_free(
-    view: CalendarView,
-    start: datetime,
-    *,
-    duration: timedelta,
-    now: datetime,
-    horizon: timedelta,
-    min_notice: timedelta,
-    buffer: timedelta,
-    zone: ZoneInfo,
-) -> bool:
-    """The slot is still among the free ones, by the same arithmetic that offered it."""
-    every = free_slots(
-        view.blocks,
-        view.busy,
-        duration=duration,
-        now=now,
-        horizon=horizon,
-        min_notice=min_notice,
-        buffer=buffer,
-        zone=zone,
-        limit=10_000,
-    )
-    return any(slot.start == start for slot in every)

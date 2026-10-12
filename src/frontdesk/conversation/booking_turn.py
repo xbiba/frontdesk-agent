@@ -9,6 +9,7 @@ Name and phone live on the hold only (frontdesk.booking.holds); this module keep
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -16,18 +17,11 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from frontdesk.booking.calendar import Calendar, CalendarUnavailableError
-from frontdesk.booking.flow import (
-    entry_description,
-    parse_choice,
-    phrase,
-    still_free,
-    valid_name,
-    valid_phone,
-    yes_or_no,
-)
+from frontdesk.booking.calendar import CalendarUnavailableError
+from frontdesk.booking.flow import parse_choice, phrase, valid_name, valid_phone, yes_or_no
 from frontdesk.booking.holds import attach, held, hold, mark_booked, release
-from frontdesk.booking.reply import compose_slots, find_slots, read_calendar, slot_time
+from frontdesk.booking.reply import compose_slots, find_slots, slot_time
+from frontdesk.booking.scheduler import Scheduler
 from frontdesk.conversation.state import BookingStage, BookingStep
 from frontdesk.db.engine import business_session
 from frontdesk.knowledge.facts import Catalog
@@ -46,7 +40,7 @@ class StepReply:
 class BookingContext:
     pack: BusinessPack
     catalog: Catalog
-    calendar: Calendar
+    scheduler: Scheduler
     session_factory: sessionmaker[Session]
     conversation_id: str
     language: Language
@@ -58,7 +52,7 @@ def offer(
 ) -> StepReply:
     """The first free slots, numbered, and how to pick one; how to book when none is free.
     Raises CalendarUnavailableError."""
-    slots = find_slots(context.calendar, context.pack, doctor_id, service_id, context.now)
+    slots = find_slots(context.scheduler, context.pack, doctor_id, service_id, context.now)
     texts = context.pack.fixed_texts[context.language]
     if not slots:
         none = texts.get(FixedTextKey.NO_SLOTS) or texts[FixedTextKey.NO_INFORMATION]
@@ -141,7 +135,7 @@ def _name(context: BookingContext, step: BookingStep, message: str) -> StepReply
 def _phone(context: BookingContext, step: BookingStep, message: str) -> StepReply:
     if yes_or_no(message) is False:
         return _cancel(context, step)
-    phone = valid_phone(message)
+    phone = valid_phone(message, _country_code(context.pack))
     with business_session(context.session_factory, context.pack.id) as session:
         current = held(session, _hold_id(step), context.now)
         if current is not None and phone is not None:
@@ -149,7 +143,7 @@ def _phone(context: BookingContext, step: BookingStep, message: str) -> StepRepl
     if current is None:
         return offer(context, step.doctor_id, step.service_id, prefix=_say(context, "expired"))
     if phone is None:
-        return _again(context, step, "again_phone")
+        return _again(context, step, "again_phone", code=_country_code(context.pack) or "+")
     summary = phrase(
         "summary",
         context.language,
@@ -176,19 +170,18 @@ def _confirm(context: BookingContext, step: BookingStep, message: str) -> StepRe
     if not _free(context, step, current.start):
         _release(context, step)
         return offer(context, step.doctor_id, step.service_id, prefix=_say(context, "taken"))
-    calendar = context.pack.integrations.calendar
-    if calendar is None:  # a step exists only for a pack with a calendar
-        return _handoff(context, step.doctor_id)
-    default = context.pack.default_language
     event_id = current.id.hex
     try:
-        context.calendar.book(
-            calendar.calendars[step.doctor_id],
+        context.scheduler.book(
+            context.pack,
+            step.doctor_id,
+            step.service_id,
             current.start,
             current.end,
-            event_id=event_id,
-            title=f"{_service(context, step.service_id, default)} — {current.name}",
-            description=entry_description(current.phone, default),
+            name=current.name,
+            phone=current.phone,
+            reference=event_id,
+            language=context.language,
         )
     except CalendarUnavailableError:
         _release(context, step)
@@ -207,29 +200,18 @@ def _confirm(context: BookingContext, step: BookingStep, message: str) -> StepRe
 
 
 def _free(context: BookingContext, step: BookingStep, start: datetime) -> bool:
-    calendar = context.pack.integrations.calendar
-    if calendar is None:
-        raise CalendarUnavailableError("no calendar")
-    view = read_calendar(context.calendar, context.pack, step.doctor_id, context.now)
-    return still_free(
-        view,
-        start,
-        duration=timedelta(minutes=_duration(context, step.service_id)),
-        now=context.now,
-        horizon=timedelta(days=calendar.horizon_days),
-        min_notice=timedelta(minutes=calendar.min_notice_minutes),
-        buffer=timedelta(minutes=calendar.buffer_minutes),
-        zone=ZoneInfo(context.pack.timezone),
-    )
+    """The slot is still among the scheduler's free ones."""
+    every = context.scheduler.free_slots(context.pack, step.doctor_id, step.service_id, context.now)
+    return any(slot.start == start for slot in every)
 
 
-def _again(context: BookingContext, step: BookingStep, key: str) -> StepReply:
+def _again(context: BookingContext, step: BookingStep, key: str, **values: str) -> StepReply:
     """The question once more; a second wrong answer ends the booking with how to book."""
     if step.retries >= 1:
         _release(context, step)
         return _handoff(context, step.doctor_id)
     after = step.model_copy(update={"retries": step.retries + 1})
-    return StepReply(_say(context, key), "asked", after, step.doctor_id)
+    return StepReply(phrase(key, context.language, **values), "asked", after, step.doctor_id)
 
 
 def _cancel(context: BookingContext, step: BookingStep) -> StepReply:
@@ -275,3 +257,9 @@ def _service(context: BookingContext, service_id: str, language: str | None = No
 
 def _duration(context: BookingContext, service_id: str) -> int:
     return next(item.duration_minutes for item in context.pack.services if item.id == service_id)
+
+
+def _country_code(pack: BusinessPack) -> str:
+    """The clinic's own country code ("+355" from "+355 69 443 9339"), for a national number."""
+    found = re.match(r"\+\d{1,3}(?=[\s\-.(]|$)", pack.location.phone.strip())
+    return found.group(0) if found else ""

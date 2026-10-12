@@ -26,8 +26,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from pydantic_core import ErrorDetails
 
 from frontdesk.agent.vocab import Intent
-from frontdesk.booking.calendar import FixtureCalendar
 from frontdesk.booking.holds import forget
+from frontdesk.booking.scheduler import CalendarScheduler
 from frontdesk.conversation.behaviour import Behaviour, observed_behaviour, pipeline_failure
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, TurnResult, TurnRuntime, handle_message
@@ -254,8 +254,8 @@ def case_runtime(runtime: TurnRuntime, case: TurnCase) -> TurnRuntime:
     """The runtime a case runs on: when it states a day, that day at 08:00 in the business's time
     zone, for the dated documents and for the free slots of a calendar; and a fixture calendar
     without the bookings of the cases before."""
-    if isinstance(runtime.calendar, FixtureCalendar):
-        runtime = replace(runtime, calendar=runtime.calendar.fresh())
+    if isinstance(runtime.scheduler, CalendarScheduler):
+        runtime = replace(runtime, scheduler=runtime.scheduler.fresh())
     day = case.today
     if day is None:
         return runtime

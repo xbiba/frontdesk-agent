@@ -17,9 +17,11 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.agent.prompts import prompt_version, read_prompt
+from frontdesk.booking.calcom import CalcomScheduler
 from frontdesk.booking.calendar import FixtureCalendar
 from frontdesk.booking.google_calendar import GoogleCalendar
-from frontdesk.composition import Deployment, build_calendar, build_turn_runtime, open_deployment
+from frontdesk.booking.scheduler import CalendarScheduler
+from frontdesk.composition import Deployment, build_scheduler, build_turn_runtime, open_deployment
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, handle_message
 from frontdesk.knowledge.embedders import HashEmbedder
@@ -475,23 +477,30 @@ def test_each_agent_gets_the_output_cap_of_its_route(
 def test_the_calendar_reader_follows_the_backend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert build_calendar(Settings(calendar_backend=CalendarBackend.NONE)) is None
+    assert build_scheduler(Settings(calendar_backend=CalendarBackend.NONE)) is None
     with pytest.raises(ValueError, match="FRONTDESK_CALENDAR_FIXTURE is not set"):
-        build_calendar(Settings(calendar_backend=CalendarBackend.FIXTURE))
+        build_scheduler(Settings(calendar_backend=CalendarBackend.FIXTURE))
     fixture = tmp_path / "calendar.yaml"
     fixture.write_text("{}\n", encoding="utf-8")
-    reader = build_calendar(
+    reader = build_scheduler(
         Settings(calendar_backend=CalendarBackend.FIXTURE, calendar_fixture=fixture)
     )
-    assert isinstance(reader, FixtureCalendar)
+    assert isinstance(reader, CalendarScheduler)
+    assert isinstance(reader.calendar, FixtureCalendar)
 
     def no_google(**_: Any) -> Any:
         raise AssertionError("the credentials are found at the first read, not at the build")
 
     monkeypatch.setattr(google_tokens.google.auth, "default", no_google)
-    assert isinstance(
-        build_calendar(Settings(calendar_backend=CalendarBackend.GOOGLE)), GoogleCalendar
+    google = build_scheduler(Settings(calendar_backend=CalendarBackend.GOOGLE))
+    assert isinstance(google, CalendarScheduler)
+    assert isinstance(google.calendar, GoogleCalendar)
+    with pytest.raises(ValueError, match="FRONTDESK_CALCOM_API_KEY is not set"):
+        build_scheduler(Settings(calendar_backend=CalendarBackend.CALCOM))
+    calcom = build_scheduler(
+        Settings(calendar_backend=CalendarBackend.CALCOM, calcom_api_key="cal_test_x")
     )
+    assert isinstance(calcom, CalcomScheduler)
 
 
 @pytest.mark.db
@@ -503,8 +512,8 @@ def test_the_runtime_reads_a_calendar_only_for_a_pack_with_one(
     fixture.write_text("{}\n", encoding="utf-8")
     settings = {"calendar_backend": CalendarBackend.FIXTURE, "calendar_fixture": fixture}
     plain = build_turn_runtime(_deployment(clinic_pack, factory, app_url=app_url, **settings))
-    assert plain.calendar is None
+    assert plain.scheduler is None
     calendar = CalendarIntegration(credentials_ref="adc", calendars={"dr-arben-demo": "cal-arben"})
     booking = clinic_pack.model_copy(update={"integrations": Integrations(calendar=calendar)})
     runtime = build_turn_runtime(_deployment(booking, factory, app_url=app_url, **settings))
-    assert isinstance(runtime.calendar, FixtureCalendar)
+    assert isinstance(runtime.scheduler, CalendarScheduler)

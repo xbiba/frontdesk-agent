@@ -39,8 +39,9 @@ from frontdesk.agent.responder import (
     render_turn_prompt,
 )
 from frontdesk.agent.vocab import ADMINISTRATIVE_INTENTS, Category, ClarifyField, Intent
-from frontdesk.booking.calendar import Calendar, CalendarUnavailableError
+from frontdesk.booking.calendar import CalendarUnavailableError
 from frontdesk.booking.reply import booking_target, compose_slots, find_slots
+from frontdesk.booking.scheduler import Scheduler
 from frontdesk.conversation.booking_turn import BookingContext, StepReply
 from frontdesk.conversation.booking_turn import answer as booking_answer
 from frontdesk.conversation.booking_turn import offer as booking_offer
@@ -167,7 +168,7 @@ class TurnRuntime:
     orders: OrderStore | None = None
     now: Callable[[], datetime] = _utc_now
     keep_drafts: bool = False  # the live evaluation keeps refused answers for its reviewer
-    calendar: Calendar | None = None  # the bookable doctors' calendars (M4 reads, M5 writes)
+    scheduler: Scheduler | None = None  # the bookable doctors' free slots and bookings (M4, M5)
 
 
 async def handle_message(
@@ -233,7 +234,7 @@ async def _decide(
         return _emergency(pack, language, rule.rule)
     if rule.verdict is Verdict.CLINICAL_ADVICE:
         return _handoff(pack, language, FixedTextKey.CLINICAL, TurnTrace(rule=rule.rule))
-    if state.booking is not None and runtime.calendar is not None:
+    if state.booking is not None and runtime.scheduler is not None:
         # Ahead of the personal-data rule: here a name and a phone number are what was asked for.
         step = await _booking_step(stripped, language, state, state.booking, runtime)
         if step is not None:
@@ -320,7 +321,7 @@ async def _route(
 
 def _bookable(runtime: TurnRuntime) -> dict[str, tuple[str, ...]]:
     """The doctors whose free slots this runtime can read, with their bookable services."""
-    return runtime.pack.bookable_doctors() if runtime.calendar is not None else {}
+    return runtime.pack.bookable_doctors() if runtime.scheduler is not None else {}
 
 
 async def _booking(
@@ -337,7 +338,7 @@ async def _booking(
     target = booking_target(bookable, doctors, fields.service_ids) if bookable else None
     if isinstance(target, ClarifyField):
         return _clarify(catalog, language, target, trace)
-    if target is None or runtime.calendar is None:
+    if target is None or runtime.scheduler is None:
         return _how_to_book(pack, language, trace)
     doctor_id, service_id = target
     read = replace(trace, sources=(f"calendar:{doctor_id}",))
@@ -351,7 +352,7 @@ async def _booking(
         return _from_step(offered, language, read)
     try:
         slots = await asyncio.to_thread(
-            find_slots, runtime.calendar, pack, doctor_id, service_id, runtime.now()
+            find_slots, runtime.scheduler, pack, doctor_id, service_id, runtime.now()
         )
     except CalendarUnavailableError as error:
         log_event(logger, "calendar.unavailable", business_id=pack.id, reason=str(error))
@@ -396,12 +397,12 @@ async def _booking_step(
 def _booking_context(
     runtime: TurnRuntime, catalog: Catalog, state: ConversationState, language: Language
 ) -> BookingContext:
-    if runtime.calendar is None:
+    if runtime.scheduler is None:
         raise ValueError("a booking needs the runtime's calendar")
     return BookingContext(
         pack=runtime.pack,
         catalog=catalog,
-        calendar=runtime.calendar,
+        scheduler=runtime.scheduler,
         session_factory=runtime.session_factory,
         conversation_id=state.conversation_id,
         language=language,
