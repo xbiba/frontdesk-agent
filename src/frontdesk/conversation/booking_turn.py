@@ -2,8 +2,9 @@
 
 The slots are offered numbered; a number (or a time) takes a hold on the slot; the name and the phone
 go onto the hold; a summary asks for a yes; the yes writes the appointment in the doctor's calendar,
-which is read again first. A slot taken meanwhile, an expired hold or a calendar that cannot be read
-each end in fresh slots or in how to book through reception, never in a booking that is not there.
+which is read again first, and the confirmation ends with the pack's privacy pointer (a link). A
+slot taken meanwhile, an expired hold or a calendar that cannot be read each end in fresh slots or
+in how to book through reception, never in a booking that is not there.
 Name and phone live on the hold only (frontdesk.booking.holds); this module keeps neither.
 """
 
@@ -111,9 +112,8 @@ def _choose(context: BookingContext, step: BookingStep, message: str) -> StepRep
         )
     if hold_id is None:
         return offer(context, step.doctor_id, step.service_id, prefix=_say(context, "taken"))
-    privacy = context.pack.fixed_texts[context.language][FixedTextKey.BOOKING_PRIVACY]
     after = step.model_copy(update={"stage": BookingStage.NAME, "hold_id": hold_id, "retries": 0})
-    return StepReply(_joined(privacy, _say(context, "ask_name")), "asked", after, step.doctor_id)
+    return StepReply(_say(context, "ask_name"), "asked", after, step.doctor_id)
 
 
 def _name(context: BookingContext, step: BookingStep, message: str) -> StepReply:
@@ -196,7 +196,8 @@ def _confirm(context: BookingContext, step: BookingStep, message: str) -> StepRe
         doctor=_doctor(context, step.doctor_id),
         contact=context.pack.location.phone,
     )
-    return StepReply(booked, "replied", None, step.doctor_id)
+    privacy = context.pack.fixed_texts[context.language][FixedTextKey.BOOKING_PRIVACY]
+    return StepReply(_joined(booked, privacy), "replied", None, step.doctor_id)
 
 
 def _free(context: BookingContext, step: BookingStep, start: datetime) -> bool:

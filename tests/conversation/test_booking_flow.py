@@ -29,7 +29,7 @@ Activate = Callable[..., sessionmaker[Session]]
 TIRANE = ZoneInfo("Europe/Tirane")
 NOW = datetime(2026, 10, 22, 8, tzinfo=TIRANE)
 STEP = "Per prenotare una visita, chiama la reception al +355 00 000 0000."
-PRIVACY = "Nome e telefono servono solo per questo appuntamento."
+PRIVACY = "Informazioni e privacy: www.example.com"
 BOOK = {"category": "administrative", "intent": "booking", "doctor_ids": ["dr-arben-demo"]}
 PRICE = {"category": "administrative", "intent": "price", "service_ids": ["orthopedics-visit"]}
 CALENDAR = """
@@ -116,7 +116,7 @@ async def test_a_patient_books_from_the_chat(
     assert chat.state.booking is not None
     assert chat.state.booking.stage is BookingStage.CHOOSE
     asked_name = await chat.say("2")
-    assert asked_name.text == f"{PRIVACY}\n\nMi scrive il suo nome e cognome?"
+    assert asked_name.text == "Mi scrive il suo nome e cognome?"
     assert (await chat.say("Mario Rossi")).text == "E il suo numero di telefono?"
     summary = await chat.say("+355 69 123 4567")
     assert summary.text == (
@@ -128,7 +128,8 @@ async def test_a_patient_books_from_the_chat(
     assert booked.outcome is TurnOutcome.REPLIED
     assert booked.text == (
         "Prenotazione confermata: venerdì 23 ottobre, 10:00, Visita ortopedica con Dr. Arben Demo. "
-        "Per annullarla o spostarla, chiami la reception al +355 00 000 0000."
+        "Per annullarla o spostarla, chiami la reception al +355 00 000 0000.\n\n"
+        f"{PRIVACY}"
     )
     assert chat.state.booking is None
     (event,) = calendar.booked["cal-arben"].values()
@@ -187,7 +188,7 @@ async def test_two_patients_on_one_slot(runtime: TurnRuntime) -> None:
     first, second = Chat(runtime, [BOOK], "c1"), Chat(runtime, [BOOK], "c2")
     await first.say("Vorrei prenotare")
     await second.say("Vorrei prenotare")
-    assert (await first.say("2")).text.startswith(PRIVACY)
+    assert (await first.say("2")).text == "Mi scrive il suo nome e cognome?"
     assert (await second.say("2")).text.startswith("Questo orario non è più libero.")
 
 

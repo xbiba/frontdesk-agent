@@ -73,7 +73,8 @@ class FixedTextKey(StrEnum):
 # A pack may leave these out. The next step (how to book) ends an answer once per conversation;
 # without one, an answer ends with the answer. Without `no_slots`, a booking question with no free
 # slot gets `no_information`.
-# `booking_privacy` says what the name and the phone are for; a pack that books from the chat
+# `booking_privacy` ends a booking made in the chat: where the privacy notice is, a link (Albi,
+# 2026-10-12: nothing before the name, for a clean conversation). A pack that books from the chat
 # must give it (M5).
 OPTIONAL_FIXED_TEXTS: Final = frozenset(
     {FixedTextKey.NEXT_STEP, FixedTextKey.NO_SLOTS, FixedTextKey.BOOKING_PRIVACY}
