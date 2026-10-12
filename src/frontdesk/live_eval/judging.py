@@ -208,8 +208,10 @@ def as_result(record: TurnRecord) -> TurnResult:
         sources=record.sources,
         check_reasons=record.check_reasons,
         rejection=record.rejection,
+        voice=record.voice,
     )
-    return TurnResult(record.reply, TurnOutcome(record.outcome), record.language, trace)
+    outcome = TurnOutcome(record.outcome)
+    return TurnResult(record.reply, outcome, record.language, trace, code_text=record.code_text)
 
 
 def load_labels(path: Path, cases: Sequence[TurnCase]) -> dict[str, Label]:

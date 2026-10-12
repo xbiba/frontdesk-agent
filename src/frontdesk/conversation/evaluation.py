@@ -198,7 +198,9 @@ def check_reply(
     endings = tuple(
         text for key in (FixedTextKey.HANDOFF, FixedTextKey.NEXT_STEP) if (text := texts.get(key))
     )
-    if result.outcome is TurnOutcome.HANDOFF and not result.text.endswith(endings):
+    # What code wrote: the voice may say it in other words, never with other facts (voice_check).
+    written = result.code_text or result.text
+    if result.outcome is TurnOutcome.HANDOFF and not written.endswith(endings):
         failures.append("handoff without contact")
     failure = pipeline_failure(result.trace)
     if failure is not None and failure != expected_rule:
@@ -222,11 +224,15 @@ def check_case(case: TurnCase, result: TurnResult, *, texts: FixedTexts) -> tupl
         failures.append(f"rule: {result.trace.rule}")
     if expect.intent is not None and result.trace.intent is not expect.intent:
         failures.append(f"intent: {result.trace.intent}")
+    # The facts are checked in what code wrote; what the person reads may say them in other words.
+    written = result.code_text or result.text
     failures += [
-        f"missing text: {_one_line(text)}" for text in expect.contains if text not in result.text
+        f"missing text: {_one_line(text)}" for text in expect.contains if text not in written
     ]
     failures += [
-        f"unexpected text: {_one_line(text)}" for text in expect.not_contains if text in result.text
+        f"unexpected text: {_one_line(text)}"
+        for text in expect.not_contains
+        if text in written or text in result.text
     ]
     failures += [
         f"missing source: {source}"

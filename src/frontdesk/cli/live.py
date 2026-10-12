@@ -259,6 +259,7 @@ def _manifest(
         knowledge_version=str(version),
         classifier_prompt=runtime.classifier_prompt_version,
         responder_prompt=runtime.responder_prompt_version,
+        voice_prompt=runtime.voice_prompt_version,
         fixed_texts={language: dict(texts) for language, texts in pack.fixed_texts.items()},
         budget_file=str(budget.path) if budget else None,
         min_support_similarity=deployment.settings.min_support_similarity,

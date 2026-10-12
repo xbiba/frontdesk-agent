@@ -866,4 +866,5 @@ def _with_disclosure(pack: BusinessPack, language: Language, result: TurnResult)
     if result.trace.category is Category.EMERGENCY and result.text.startswith(emergency):
         contact = result.text.removeprefix(emergency)  # "\n\n" and the contact text
         return replace(result, text=f"{emergency}\n\n{disclosure}{contact}")
-    return replace(result, text=f"{disclosure}\n\n{result.text}")
+    written = f"{disclosure}\n\n{result.code_text}" if result.code_text is not None else None
+    return replace(result, text=f"{disclosure}\n\n{result.text}", code_text=written)
