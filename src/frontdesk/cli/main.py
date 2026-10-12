@@ -15,6 +15,7 @@ from typing import Annotated, Final
 import typer
 from sqlalchemy.orm import Session
 
+from frontdesk.cli.calendar import check_calendar
 from frontdesk.cli.chat import run_chat
 from frontdesk.cli.experiment import eval_embedders
 from frontdesk.cli.live import eval_report, live_turns, read_cases
@@ -67,9 +68,11 @@ app = typer.Typer(
 db_app = typer.Typer(no_args_is_help=True, help="Database migrations.")
 knowledge_app = typer.Typer(no_args_is_help=True, help="Versioned, approved knowledge.")
 eval_app = typer.Typer(no_args_is_help=True, help="Evaluations.")
+calendar_app = typer.Typer(no_args_is_help=True, help="The doctors' calendars.")
 app.add_typer(db_app, name="db")
 app.add_typer(knowledge_app, name="knowledge")
 app.add_typer(eval_app, name="eval")
+app.add_typer(calendar_app, name="calendar")
 
 EnvFile = Annotated[
     Path, typer.Option("--env-file", exists=True, dir_okay=False, help="The deployment's env file.")
@@ -451,3 +454,13 @@ def chat(
 def _read_line() -> str | None:
     line = sys.stdin.readline()
     return line or None
+
+
+@calendar_app.command("check")
+def calendar_check(
+    env_file: EnvFile,
+    doctor: Annotated[str, typer.Option("--doctor", help="The doctor's ID in the pack.")],
+) -> None:
+    """Read a doctor's calendar as the bot does: blocks, busy intervals and the first free slots.
+    No event's content is printed."""
+    raise typer.Exit(check_calendar(load_settings(env_file), doctor, datetime.now(UTC)))
