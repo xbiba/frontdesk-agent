@@ -42,7 +42,7 @@ cal-arben:
 OFFER = (
     "Primi orari liberi con Dr. Arben Demo (Visita ortopedica, 30 minuti):\n"
     "1) venerdì 23 ottobre, 09:00\n2) venerdì 23 ottobre, 10:00\n3) venerdì 23 ottobre, 10:30\n\n"
-    "Per prenotare, scriva il numero dell'orario che preferisce."
+    "Quale preferisce? Può scrivere il numero o il giorno."
 )
 TEN = datetime(2026, 10, 23, 10, tzinfo=TIRANE)
 

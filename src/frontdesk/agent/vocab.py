@@ -39,6 +39,13 @@ class ClarifyField(StrEnum):
     ORDER_DETAILS = "order_details"
 
 
+class SlotPart(StrEnum):
+    """The part of the day a patient asks for: morning before 13:00, afternoon from 13:00."""
+
+    MORNING = "morning"
+    AFTERNOON = "afternoon"
+
+
 ADMINISTRATIVE_INTENTS: Final = frozenset(
     {
         Intent.LOCATION,

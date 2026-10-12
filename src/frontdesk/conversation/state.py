@@ -14,6 +14,9 @@ from frontdesk.agent.vocab import Category, ClarifyField, Intent
 from frontdesk.tenancy.pack import Language
 
 MAX_REMEMBERED_INTENTS: Final = 5
+# The assistant's last reply, which the models read the next message with (Albi's live chat,
+# 2026-10-12: "Friday is fine" answers the times just offered). Never the person's message.
+MAX_REPLY_CHARS: Final = 600
 TOPIC_TURNS: Final = 3  # turns a topic survives without being mentioned again
 # The key of the order lookup attempts is a String(64) column: a longer id would fail every order
 # turn at the database.
@@ -37,6 +40,7 @@ class BookingStep(BaseModel):
     doctor_id: str
     service_id: str
     offered: tuple[datetime, ...] = ()
+    shown: tuple[datetime, ...] = ()  # every time offered so far: "other times" are the rest
     hold_id: uuid.UUID | None = None
     retries: int = 0
 
@@ -56,6 +60,7 @@ class ConversationState(BaseModel):
     pending_clarification: ClarifyField | None = None
     next_step_shown: bool = False  # the pack's next step ends one answer per conversation
     booking: BookingStep | None = None  # a booking under way; any other turn ends it
+    last_reply: str | None = None  # never one that holds a name or a phone
 
     def advanced(
         self,
@@ -68,6 +73,7 @@ class ConversationState(BaseModel):
         clarify: ClarifyField | None,
         next_step_shown: bool = False,
         booking: BookingStep | None = None,
+        reply: str | None = None,
     ) -> ConversationState:
         intents = self.previous_intents
         if intent is not None:
@@ -88,5 +94,6 @@ class ConversationState(BaseModel):
                 "pending_clarification": clarify,
                 "next_step_shown": self.next_step_shown or next_step_shown,
                 "booking": booking,
+                "last_reply": reply[:MAX_REPLY_CHARS] if reply else None,
             }
         )

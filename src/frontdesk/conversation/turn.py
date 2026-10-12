@@ -12,9 +12,10 @@ import asyncio
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from typing import Final
+from zoneinfo import ZoneInfo
 
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import AgentRunError
@@ -26,6 +27,7 @@ from frontdesk.agent.classification import (
     POSTAL_CODE,
     ClassifierOutput,
     Rejection,
+    SlotScope,
     ValidatedFields,
     validate_classification,
 )
@@ -40,11 +42,12 @@ from frontdesk.agent.responder import (
 )
 from frontdesk.agent.vocab import ADMINISTRATIVE_INTENTS, Category, ClarifyField, Intent
 from frontdesk.booking.calendar import CalendarUnavailableError
-from frontdesk.booking.reply import booking_target, compose_slots, find_slots
+from frontdesk.booking.reply import SlotWish, booking_target, compose_slots, find_slots
 from frontdesk.booking.scheduler import Scheduler
 from frontdesk.conversation.booking_turn import BookingContext, StepReply
 from frontdesk.conversation.booking_turn import answer as booking_answer
 from frontdesk.conversation.booking_turn import offer as booking_offer
+from frontdesk.conversation.booking_turn import pick as booking_pick
 from frontdesk.conversation.compose import (
     FACT_INTENTS,
     clarify_question,
@@ -52,7 +55,7 @@ from frontdesk.conversation.compose import (
     unanswered,
 )
 from frontdesk.conversation.preload import document_evidence, fact_evidence
-from frontdesk.conversation.state import BookingStep, ConversationState
+from frontdesk.conversation.state import BookingStage, BookingStep, ConversationState
 from frontdesk.db.engine import business_session
 from frontdesk.knowledge.embedders import Embedder
 from frontdesk.knowledge.evidence import Evidence, EvidenceKind
@@ -257,6 +260,14 @@ async def _classify(
     text: str, language: Language, state: ConversationState, catalog: Catalog, runtime: TurnRuntime
 ) -> ValidatedFields | Rejection:
     bookable = _bookable(runtime)
+    zone = ZoneInfo(runtime.pack.timezone)
+    today = runtime.now().astimezone(zone).date()
+    under_way = state.booking
+    offered = (
+        tuple(item.astimezone(zone) for item in under_way.offered)
+        if under_way is not None and under_way.stage is BookingStage.CHOOSE
+        else ()
+    )
     deps = classifier_deps(
         catalog,
         business_name=runtime.pack.name,
@@ -265,6 +276,9 @@ async def _classify(
         topic_service_ids=state.topic_service_ids,
         topic_doctor_ids=state.topic_doctor_ids,
         pending_clarification=state.pending_clarification,
+        today=today,
+        offered_slots=offered,
+        previous_reply=state.last_reply,
     )
     try:
         run = await runtime.classifier.run(text, deps=deps, usage_limits=CLASSIFIER_LIMITS)
@@ -273,6 +287,12 @@ async def _classify(
             logger, "classifier.failed", business_id=runtime.pack.id, reason=type(error).__name__
         )
         return Rejection(reason="classifier_error")
+    calendar = runtime.pack.integrations.calendar
+    slots = (
+        SlotScope(today, today + timedelta(days=calendar.horizon_days), len(offered))
+        if bookable and calendar is not None and calendar.chat_booking
+        else None
+    )
     return validate_classification(
         run.output,
         message=text,
@@ -282,6 +302,7 @@ async def _classify(
         language=language,
         bookable=frozenset(bookable),
         bookable_services=frozenset(item for services in bookable.values() for item in services),
+        slots=slots,
     )
 
 
@@ -344,8 +365,20 @@ async def _booking(
     read = replace(trace, sources=(f"calendar:{doctor_id}",))
     if pack.integrations.calendar is not None and pack.integrations.calendar.chat_booking:
         context = _booking_context(runtime, catalog, state, language)
+        wish = SlotWish(fields.slot, fields.slot_day, fields.slot_from, fields.slot_part)
+        under_way = state.booking
         try:
-            offered = await asyncio.to_thread(booking_offer, context, doctor_id, service_id)
+            if (
+                under_way is not None
+                and under_way.stage is BookingStage.CHOOSE
+                and (under_way.doctor_id, under_way.service_id) == target
+            ):
+                # The slots on offer stay the subject: "Friday is fine", "other times?".
+                offered = await asyncio.to_thread(booking_pick, context, under_way, wish)
+            else:
+                offered = await asyncio.to_thread(
+                    booking_offer, context, doctor_id, service_id, wish=wish
+                )
         except CalendarUnavailableError as error:
             log_event(logger, "calendar.unavailable", business_id=pack.id, reason=str(error))
             return _how_to_book(pack, language, replace(read, rejection="calendar_unavailable"))
@@ -720,6 +753,8 @@ def _next_state(
 ) -> ConversationState:
     trace = result.trace
     step = pack.fixed_texts[result.language].get(FixedTextKey.NEXT_STEP)
+    # The summary of a booking holds the name and the phone: the state never keeps it.
+    summary = trace.booking is not None and trace.booking.stage is BookingStage.CONFIRM
     return state.advanced(
         language=result.language,
         intent=trace.intent,
@@ -729,6 +764,7 @@ def _next_state(
         clarify=trace.clarify,
         next_step_shown=step is not None and step in result.text,
         booking=trace.booking,
+        reply=None if summary else result.text,
     )
 
 
