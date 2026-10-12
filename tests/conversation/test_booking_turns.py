@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.agent.vocab import ClarifyField
 from frontdesk.booking.calendar import FixtureCalendar
+from frontdesk.booking.scheduler import CalendarScheduler
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, TurnResult, TurnRuntime, handle_message
 from frontdesk.tenancy.pack import BusinessPack, CalendarIntegration, FixedTextKey, Integrations
@@ -63,7 +64,8 @@ def _runtime(
     path = tmp_path / "calendar.yaml"
     path.write_text(CALENDAR, encoding="utf-8")
     runtime = make_runtime(pack, activate(pack), classifier_model(args), document_responder())
-    return replace(runtime, calendar=FixtureCalendar(path) if calendar else None, now=lambda: NOW)
+    scheduler = CalendarScheduler(FixtureCalendar(path)) if calendar else None
+    return replace(runtime, scheduler=scheduler, now=lambda: NOW)
 
 
 async def _ask(

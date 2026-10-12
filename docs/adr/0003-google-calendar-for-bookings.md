@@ -30,6 +30,16 @@ Amendment of 2026-10-12 for M5, booking from the chat (Albi: the clinic agrees t
 - **Retention.** Name and phone live only on the hold while the patient books, at most 15 minutes. Booking or cancelling drops them, and an expired hold is deleted by the next booking and by `frontdesk bookings purge`. The appointment then lives in the clinic's calendar.
 - **Later.** Reception confirmation is kept for later, behind the pack's setting.
 
+Amendment of 2026-10-12, cal.com (Albi): the clinic keeps each doctor's availability in cal.com, which checks the clinic's Google Calendar for conflicts and writes the appointments there.
+- **A scheduler behind one protocol.**
+  - `CalendarScheduler` computes the slots from a calendar's blocks and busy time, for Google Calendar and for the evaluations' fixture.
+  - `CalcomScheduler` reads an event type's free slots and books through cal.com's API.
+  - The booking steps are the same for both.
+- **What cal.com receives.** The patient's name and phone, in international form, and our hold's reference. A lost answer is checked by that reference.
+- **Its constraints.**
+  - With one cal.com user, every doctor's event type shares one set of conflicts: a second real doctor needs a cal.com user of their own.
+  - cal.com keeps the bookings in its own store, in the US for api.cal.com. The clinic's notice and a data-processing agreement cover it.
+
 ## Consequences
 - Google Calendar must be the real agenda for doctors bookable online.
 - Calendar is an optional integration: a business without it needs no credentials and never initialises it.

@@ -43,7 +43,7 @@ def test_a_readable_calendar_prints_counts_and_free_times(
 ) -> None:
     assert check_calendar(_settings(businesses_dir, tmp_path), "dr-arben-demo", NOW) == 0
     assert capsys.readouterr().out.splitlines() == [
-        "calendar of dr-arben-demo: 1 'Disponibile' blocks and 1 busy intervals in the next 14 days",
+        "free slots of dr-arben-demo in the next 14 days: 1",
         "free: 2026-10-23 09:30 (orthopedics-visit)",
     ]
 

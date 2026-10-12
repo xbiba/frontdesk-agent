@@ -9,13 +9,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timedelta
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from zoneinfo import ZoneInfo
 
 from frontdesk.agent.vocab import ClarifyField
 from frontdesk.booking.calendar import CalendarReader, CalendarView, opening_intervals
-from frontdesk.booking.slots import Interval, Slot, free_slots
+from frontdesk.booking.slots import Interval, Slot, spread
 from frontdesk.tenancy.pack import BusinessPack, CalendarIntegration, Language
+
+if TYPE_CHECKING:
+    from frontdesk.booking.scheduler import Scheduler
 
 _LEAD: Final[dict[str, str]] = {
     "sq": "Oraret e para të lira me {doctor} ({service}, {minutes} minuta):",
@@ -100,10 +103,12 @@ def booking_target(
 
 
 def find_slots(
-    reader: CalendarReader, pack: BusinessPack, doctor_id: str, service_id: str, now: datetime
+    scheduler: Scheduler, pack: BusinessPack, doctor_id: str, service_id: str, now: datetime
 ) -> tuple[Slot, ...]:
-    """The free slots of the doctor's calendar for the service. Raises CalendarUnavailableError."""
-    return slots_in(read_calendar(reader, pack, doctor_id, now), pack, service_id, now)
+    """The first free slots to offer: the scheduler's, spread over the days. Raises
+    CalendarUnavailableError."""
+    every = scheduler.free_slots(pack, doctor_id, service_id, now)
+    return spread(every, ZoneInfo(pack.timezone), _calendar(pack).max_options)
 
 
 def read_calendar(
@@ -123,24 +128,6 @@ def read_calendar(
         marker=calendar.availability_marker,
         zone=zone,
         opening=opening,
-    )
-
-
-def slots_in(
-    view: CalendarView, pack: BusinessPack, service_id: str, now: datetime
-) -> tuple[Slot, ...]:
-    calendar = _calendar(pack)
-    service = next(item for item in pack.services if item.id == service_id)
-    return free_slots(
-        view.blocks,
-        view.busy,
-        duration=timedelta(minutes=service.duration_minutes),
-        now=now,
-        horizon=timedelta(days=calendar.horizon_days),
-        min_notice=timedelta(minutes=calendar.min_notice_minutes),
-        buffer=timedelta(minutes=calendar.buffer_minutes),
-        zone=ZoneInfo(pack.timezone),
-        limit=calendar.max_options,
     )
 
 

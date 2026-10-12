@@ -1,22 +1,19 @@
 """What an answer to each booking step may be, and the phrases (M5)."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest
 
-from frontdesk.booking.calendar import CalendarView
 from frontdesk.booking.flow import (
     _PHRASES,
     entry_description,
     parse_choice,
     phrase,
-    still_free,
     valid_name,
     valid_phone,
     yes_or_no,
 )
-from frontdesk.booking.slots import Interval
 
 TIRANE = ZoneInfo("Europe/Tirane")
 OFFERED = (
@@ -73,15 +70,17 @@ def test_a_name_is_letters_with_spaces_or_marks_between(message: str, name: str 
     ("message", "phone"),
     [
         ("+355 69 123 4567", "+355691234567"),
-        ("069-123-4567", "0691234567"),
+        ("069-123-4567", "+355691234567"),  # a national number takes the clinic's country code
+        ("0039 333 123 4567", "+393331234567"),
         ("(+39) 333.123.4567", "+393331234567"),
-        ("1234567", None),  # too short
+        ("3331234567", None),  # neither a + nor a national 0
+        ("+1234567", None),  # too short
         ("+1234567890123456", None),  # too long
         ("il mio numero è 0691234567", None),
     ],
 )
-def test_a_phone_is_a_plus_and_8_to_15_digits(message: str, phone: str | None) -> None:
-    assert valid_phone(message) == phone
+def test_a_phone_is_international_with_8_to_15_digits(message: str, phone: str | None) -> None:
+    assert valid_phone(message, "+355") == phone
 
 
 @pytest.mark.parametrize(
@@ -107,20 +106,3 @@ def test_every_phrase_exists_in_every_language_and_the_entry_too() -> None:
     assert (
         entry_description("+355691234567", "it") == "Telefono: +355691234567\nPrenotato dalla chat."
     )
-
-
-def test_a_slot_is_still_free_by_the_arithmetic_that_offered_it() -> None:
-    block = Interval(OFFERED[0], OFFERED[0] + timedelta(hours=2))
-    view = CalendarView(
-        blocks=(block,), busy=(Interval(OFFERED[1], OFFERED[1] + timedelta(hours=1)),)
-    )
-    settings = {
-        "duration": timedelta(hours=1),
-        "now": OFFERED[0] - timedelta(days=1),
-        "horizon": timedelta(days=14),
-        "min_notice": timedelta(hours=2),
-        "buffer": timedelta(0),
-        "zone": TIRANE,
-    }
-    assert still_free(view, OFFERED[0], **settings)
-    assert not still_free(view, OFFERED[1], **settings)

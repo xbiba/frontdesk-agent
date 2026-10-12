@@ -21,10 +21,12 @@ from frontdesk.agent.demo_models import demo_classifier_model, demo_responder_mo
 from frontdesk.agent.prompts import read_prompt
 from frontdesk.agent.responder import build_responder
 from frontdesk.agent.tools import ToolServices, build_toolset
-from frontdesk.booking.calendar import Calendar, FixtureCalendar
+from frontdesk.booking.calcom import CalcomScheduler
+from frontdesk.booking.calendar import FixtureCalendar
 from frontdesk.booking.google_calendar import SCOPE as CALENDAR_SCOPE
 from frontdesk.booking.google_calendar import WRITE_SCOPE as CALENDAR_WRITE_SCOPE
 from frontdesk.booking.google_calendar import GoogleCalendar, calendar_http_client
+from frontdesk.booking.scheduler import CalendarScheduler, Scheduler
 from frontdesk.conversation.turn import TurnRuntime
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
 from frontdesk.knowledge.embedders import Embedder, build_embedder
@@ -169,24 +171,29 @@ def build_turn_runtime(
         capture_content=deployment.settings.telemetry_capture_content,
         orders=OrderStore(tuple(pack.orders)) if pack.features.order_status else None,
         now=deployment.now,
-        calendar=(
-            build_calendar(deployment.settings, write=pack.integrations.calendar.chat_booking)
+        scheduler=(
+            build_scheduler(deployment.settings, write=pack.integrations.calendar.chat_booking)
             if pack.integrations.calendar
             else None
         ),
     )
 
 
-def build_calendar(settings: Settings, *, write: bool = False) -> Calendar | None:
-    """The reader of the doctors' calendars (ADR-0003). Google's credentials are found at the
-    first read, so a deployment builds without them and a read without them is a calendar that
-    cannot be read: the bot then says how to book."""
+def build_scheduler(settings: Settings, *, write: bool = False) -> Scheduler | None:
+    """Where the bookable doctors' free slots come from and where appointments go (ADR-0003).
+    Google's credentials are found at the first read, so a deployment builds without them; cal.com
+    needs its API key in the environment."""
     if settings.calendar_backend is CalendarBackend.FIXTURE:
         if settings.calendar_fixture is None:
             raise ValueError("FRONTDESK_CALENDAR_FIXTURE is not set for the fixture calendar")
-        return FixtureCalendar(settings.calendar_fixture)
+        return CalendarScheduler(FixtureCalendar(settings.calendar_fixture))
     if settings.calendar_backend is CalendarBackend.GOOGLE:
         scope = CALENDAR_WRITE_SCOPE if write else CALENDAR_SCOPE  # writing only to book (M5)
         token = google_token_source([scope], impersonate=settings.calendar_impersonate)
-        return GoogleCalendar(token, calendar_http_client())
+        return CalendarScheduler(GoogleCalendar(token, calendar_http_client()))
+    if settings.calendar_backend is CalendarBackend.CALCOM:
+        if settings.calcom_api_key is None:
+            raise ValueError("FRONTDESK_CALCOM_API_KEY is not set for the cal.com scheduler")
+        key = settings.calcom_api_key.get_secret_value()
+        return CalcomScheduler(key, calendar_http_client(), base_url=settings.calcom_base_url)
     return None
