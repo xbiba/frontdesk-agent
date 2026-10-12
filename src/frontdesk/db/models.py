@@ -1,4 +1,4 @@
-"""ORM models. Every business table has business_id and an RLS policy (migrations 0002-0004)."""
+"""ORM models. Every business table has business_id and an RLS policy (migrations 0002-0005)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import Computed, Date, DateTime, ForeignKey, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TSTZRANGE, TSVECTOR, UUID, Range
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 EMBEDDING_DIM = 384
@@ -95,3 +95,23 @@ class OrderLookupAttempts(Base):
     conversation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     used: Mapped[int] = mapped_column(Integer)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class BookingHold(Base):
+    """A slot taken while a patient books it from the chat, then booked (migration 0005). Name and
+    phone live here only while it is held; a booked hold keeps none."""
+
+    __tablename__ = "booking_holds"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    business_id: Mapped[str] = mapped_column(String(64))
+    conversation_id: Mapped[str] = mapped_column(String(64))
+    doctor_id: Mapped[str] = mapped_column(String(64))
+    service_id: Mapped[str] = mapped_column(String(64))
+    during: Mapped[Range[datetime]] = mapped_column(TSTZRANGE)
+    status: Mapped[str] = mapped_column(String(16))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    name: Mapped[str | None] = mapped_column(String(80))
+    phone: Mapped[str | None] = mapped_column(String(32))
+    event_id: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
