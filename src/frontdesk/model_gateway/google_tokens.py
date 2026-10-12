@@ -9,6 +9,7 @@ verifies with certifi, like the model clients (final review P63).
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from typing import Any
 
 import certifi
 import google.auth
@@ -20,21 +21,31 @@ TokenSource = Callable[[], str]
 
 
 def google_token_source(scopes: Sequence[str], *, impersonate: str | None) -> TokenSource:
-    credentials, _ = google.auth.default(scopes=list(scopes))
-    if impersonate:
-        credentials = impersonated_credentials.Credentials(  # type: ignore[no-untyped-call]
-            source_credentials=credentials,
-            target_principal=impersonate,
-            target_scopes=list(scopes),
-        )
+    """A token for `scopes`. The credentials are found at the first call, not here: building a
+    deployment needs no Google account, and a failure reaches the caller that asked for a token."""
+    found: list[Any] = []
     session = requests.Session()
     session.trust_env = False
     session.verify = certifi.where()
     request = Request(session=session)
 
     def token() -> str:
+        if not found:
+            found.append(_credentials(scopes, impersonate))
+        credentials = found[0]
         if not credentials.valid:
-            credentials.refresh(request)  # type: ignore[no-untyped-call]
+            credentials.refresh(request)
         return str(credentials.token)
 
     return token
+
+
+def _credentials(scopes: Sequence[str], impersonate: str | None) -> Any:
+    credentials, _ = google.auth.default(scopes=list(scopes))
+    if impersonate:
+        return impersonated_credentials.Credentials(  # type: ignore[no-untyped-call]
+            source_credentials=credentials,
+            target_principal=impersonate,
+            target_scopes=list(scopes),
+        )
+    return credentials
