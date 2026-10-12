@@ -446,3 +446,14 @@ def test_the_demo_cases_expect_an_outcome_that_fits_their_behaviour(
         checked += 1
         assert expect.outcome in OUTCOMES_OF[expect.behaviour], case.id
     assert checked
+
+
+def test_a_handoff_in_the_agent_s_words_gives_the_contact_number() -> None:
+    texts = {
+        **TEXTS,
+        FixedTextKey.HANDOFF: "Per parlare con una persona, chiama il +355 69 443 9339.",
+    }
+    said = _result("Può chiamare la reception al +355 69 443 9339.", TurnOutcome.HANDOFF)
+    silent = _result("Si rivolga alla reception.", TurnOutcome.HANDOFF)
+    assert check_reply(said, texts=texts) == ()
+    assert check_reply(silent, texts=texts) == ("handoff without contact",)

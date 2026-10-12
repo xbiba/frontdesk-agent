@@ -373,3 +373,53 @@ async def test_a_question_back_is_a_clarification(base: TurnRuntime) -> None:
     )
     reply = await Chat(base, script).say("vorrei sapere gli orari")
     assert reply.outcome is TurnOutcome.ASKED
+
+
+async def test_a_booking_made_before_the_model_fails_is_still_told(
+    base: TurnRuntime, calendar: FixtureCalendar
+) -> None:
+    script = Script(
+        [
+            [("free_times", {})],
+            _final(f"{LIST}\nQuale preferisce?"),
+            [("hold_time", {"number": 1})],
+            _final("Nome, cognome e telefono?"),
+            [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
+            _final(SUMMARY),
+            [("confirm_booking", {})],
+            # then the model answers no more: two refused replies end the run
+            _final("Prenotazione confermata per il 31 ottobre!"),
+            _final("Prenotazione confermata per il 31 ottobre!"),
+        ]
+    )
+    chat = Chat(base, script)
+    for message in ("Vorrei prenotare", "il primo", "Mario Rossi, +355 69 123 4567"):
+        await chat.say(message)
+    reply = await chat.say("sì")
+    assert reply.text.startswith("Prenotazione confermata: venerdì 23 ottobre, 09:00")
+    assert reply.text.endswith(PRIVACY)
+    assert len(calendar.booked["cal-arben"]) == 1
+
+
+async def test_a_confirmation_in_other_words_is_shown_as_code_wrote_it(
+    base: TurnRuntime, calendar: FixtureCalendar
+) -> None:
+    script = Script(
+        [
+            [("free_times", {})],
+            _final(f"{LIST}\nQuale preferisce?"),
+            [("hold_time", {"number": 1})],
+            _final("Nome, cognome e telefono?"),
+            [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
+            _final(SUMMARY),
+            [("confirm_booking", {})],
+            _final("Fatto! Prenotazione confermata per il 30 ottobre."),  # 30 is in the facts
+        ]
+    )
+    chat = Chat(base, script)
+    for message in ("Vorrei prenotare", "il primo", "Mario Rossi, +355 69 123 4567"):
+        await chat.say(message)
+    reply = await chat.say("sì")
+    assert reply.text.startswith("Prenotazione confermata: venerdì 23 ottobre, 09:00")
+    assert "30 ottobre" not in reply.text
+    assert reply.text.count(PRIVACY) == 1

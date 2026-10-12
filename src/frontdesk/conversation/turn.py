@@ -84,6 +84,8 @@ _NOTICES: Final = {
     Category.UNCERTAIN: FixedTextKey.HANDOFF,
 }
 _SMALL_TALK: Final = frozenset({Intent.GREETING, Intent.OTHER})
+# The part of a turn's time the reception agent may take: the rest answers when it runs out.
+RECEPTION_SHARE: Final = 0.8
 # The clarifying questions each profile's responder prompt offers (agents/<profile>/prompts/
 # responder.md); the shop's prompt has no clarify action. A test pins this table to the prompts.
 RESPONDER_CLARIFY_FIELDS: Final[dict[Profile, frozenset[ClarifyField]]] = {
@@ -282,15 +284,20 @@ async def _reception(
         return _handoff(pack, language, FixedTextKey.HANDOFF, trace)
     desk = await asyncio.to_thread(_desk, text, language, state, catalog, runtime)
     try:
-        run = await runtime.reception.run(
-            text,
-            deps=desk,
-            message_history=history_messages(state.history),
-            usage_limits=RECEPTION_LIMITS,
-        )
-    except AgentRunError as error:
+        # Within the turn's own limit, so that what the tools did is still known when it runs out.
+        async with asyncio.timeout(runtime.timeout_seconds * RECEPTION_SHARE):
+            run = await runtime.reception.run(
+                text,
+                deps=desk,
+                message_history=history_messages(state.history),
+                usage_limits=RECEPTION_LIMITS,
+            )
+    except (AgentRunError, TimeoutError) as error:
         log_event(logger, "reception.failed", business_id=pack.id, reason=type(error).__name__)
         failed = TurnTrace(rule="pass", rejection="reception_error", booking=desk.booking)
+        if desk.booked and desk.booked_text:
+            # The appointment is in the calendar: the patient reads it, whatever failed after.
+            return TurnResult(desk.booked_text, TurnOutcome.REPLIED, language, failed)
         return _handoff(pack, language, FixedTextKey.HANDOFF, failed)
     reply = run.output
     intent = Intent.BOOKING if desk.booking is not None or desk.booked else None
@@ -306,13 +313,17 @@ async def _reception(
     if reply.kind is ReplyKind.CLINICAL:
         return _handoff(pack, language, FixedTextKey.CLINICAL, _as(trace, Category.CLINICAL))
     texts = pack.fixed_texts[language]
-    # The patient confirms what code wrote: a summary said in other words is replaced by it.
-    said = reply.text if desk.summary is None or desk.summary in reply.text else desk.summary
+    # The summary and the confirmation reach the patient as code wrote them: a number checked
+    # against the facts could still be the wrong one ("30" is a duration somewhere).
+    said = reply.text
+    for written in (desk.summary, desk.booked_text):
+        if written and written not in said:
+            said = written
     if reply.kind is ReplyKind.GREETING and desk.first_turn:
         said = ""  # the introduction greets and asks how it can help
     parts = [said.strip()] if said.strip() else []
     privacy = texts.get(FixedTextKey.BOOKING_PRIVACY)
-    if desk.booked and privacy and privacy not in reply.text:
+    if desk.booked and privacy and privacy not in said:
         parts.append(privacy)  # the link to the clinic's privacy page ends every booking
     if reply.kind is ReplyKind.HANDOFF and not _names_the_phone(reply.text, pack):
         parts.append(texts[FixedTextKey.HANDOFF])

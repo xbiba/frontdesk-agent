@@ -12,6 +12,7 @@ which gives the few normalized words that matched the promise rule.
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
@@ -36,6 +37,8 @@ from frontdesk.safety.rules import contains_diagnostic_language, promise_phrase
 from frontdesk.tenancy.pack import FixedTextKey, Language
 
 FixedTexts = Mapping[FixedTextKey, str]
+# A phone number in a fixed text: a "+" or a digit, then digits with spaces, dots or dashes.
+_CONTACT = re.compile(r"\+?\d[\d .\-]{5,}\d")
 
 
 class TurnDatasetError(ValueError):
@@ -198,7 +201,9 @@ def check_reply(
     endings = tuple(
         text for key in (FixedTextKey.HANDOFF, FixedTextKey.NEXT_STEP) if (text := texts.get(key))
     )
-    if result.outcome is TurnOutcome.HANDOFF and not result.text.endswith(endings):
+    if result.outcome is TurnOutcome.HANDOFF and not (
+        result.text.endswith(endings) or _gives_the_contact(result.text, texts)
+    ):
         failures.append("handoff without contact")
     failure = pipeline_failure(result.trace)
     if failure is not None and failure != expected_rule:
@@ -425,3 +430,12 @@ def _describe(error: ValidationError) -> str:
 def _problem(problem: ErrorDetails) -> str:
     field = ".".join(str(part) for part in problem["loc"])
     return f"{field}: {problem['msg']}" if field else problem["msg"]
+
+
+def _gives_the_contact(text: str, texts: FixedTexts) -> bool:
+    """The reply names the phone number of the pack's handoff text: the reception agent writes the
+    contact in its own words rather than ending with the fixed text."""
+    handoff = texts.get(FixedTextKey.HANDOFF) or ""
+    numbers = ["".join(char for char in run if char.isdigit()) for run in _CONTACT.findall(handoff)]
+    said = "".join(char for char in text if char.isdigit())
+    return any(len(number) >= 6 and number in said for number in numbers)

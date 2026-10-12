@@ -96,6 +96,7 @@ class Desk:
     sources: list[str] = field(default_factory=list)
     booked: bool = False
     summary: str | None = None  # the summary prepare_booking wrote this turn, shown as written
+    booked_text: str | None = None  # what confirm_booking said when it booked
 
     @property
     def zone(self) -> ZoneInfo:
@@ -408,6 +409,7 @@ def _confirm_booking(desk: Desk) -> str:
     reply: StepReply = confirm(desk.context(), step)
     desk.booking = reply.next
     desk.booked = reply.booked
+    desk.booked_text = reply.text if reply.booked else None
     return desk.said(reply.text)
 
 
