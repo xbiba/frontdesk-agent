@@ -56,7 +56,7 @@ RECEPTION_LIMITS: Final = UsageLimits(request_limit=6)
 class ReplyKind(StrEnum):
     GREETING = "greeting"  # only a greeting or small talk
     ANSWER = "answer"
-    QUESTION = "question"
+    CLARIFY = "clarify"  # it cannot answer before the patient says what they mean
     HANDOFF = "handoff"
     EMERGENCY = "emergency"
     CLINICAL = "clinical"
@@ -65,9 +65,10 @@ class ReplyKind(StrEnum):
 class ReceptionReply(BaseModel):
     text: str = Field(description="The message to send the patient, in the conversation's language")
     kind: ReplyKind = Field(
-        description="greeting (only a greeting or small talk), answer, question (you ask the "
-        "patient something), handoff (you send them to reception), clinical (they ask for medical "
-        "advice) or emergency"
+        description="greeting (only a greeting or small talk), answer (you answered, showed "
+        "times or asked for the next booking step), clarify (you cannot answer before they say what "
+        "they mean), handoff (you send them to reception), clinical (they ask for medical advice) or "
+        "emergency"
     )
 
 

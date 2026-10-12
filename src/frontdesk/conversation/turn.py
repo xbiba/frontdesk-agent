@@ -319,7 +319,7 @@ async def _reception(
     outcome = {
         ReplyKind.GREETING: TurnOutcome.REPLIED,
         ReplyKind.ANSWER: TurnOutcome.REPLIED,
-        ReplyKind.QUESTION: TurnOutcome.ASKED,
+        ReplyKind.CLARIFY: TurnOutcome.ASKED,
         ReplyKind.HANDOFF: TurnOutcome.HANDOFF,
     }[reply.kind]
     return TurnResult("\n\n".join(parts), outcome, language, trace)

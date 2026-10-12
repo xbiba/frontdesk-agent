@@ -30,8 +30,8 @@ Style
 
 kind
 - greeting: the patient only greeted or made small talk (on the first message, with no text).
-- answer: you answered or gave information.
-- question: you asked the patient something (a choice, name and phone, a yes).
+- answer: you answered, gave information, showed times, or asked for the next booking step (a choice, name and phone, a yes); a question at its end changes nothing.
+- clarify: you cannot answer before the patient says what they mean, and you ask.
 - handoff: you sent them to reception, with its phone number and WhatsApp.
 - clinical, emergency: as above; the system then sends its own text.
 

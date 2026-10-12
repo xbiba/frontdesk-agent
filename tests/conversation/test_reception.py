@@ -133,13 +133,13 @@ async def test_a_booking_the_agent_leads_is_made_by_the_tools(
     script = Script(
         [
             [("free_times", {})],
-            _final(f"Ecco i primi orari liberi:\n{LIST}\nQuale preferisce?", "question"),
+            _final(f"Ecco i primi orari liberi:\n{LIST}\nQuale preferisce?", "answer"),
             [("free_times", {"day": "2026-10-23"})],
-            _final(f"Venerdì 23 ottobre ho:\n{FRIDAY}\nQuale preferisce?", "question"),
+            _final(f"Venerdì 23 ottobre ho:\n{FRIDAY}\nQuale preferisce?", "answer"),
             [("hold_time", {"number": 2})],
-            _final("Le tengo le 09:30. Mi scrive nome, cognome e telefono?", "question"),
+            _final("Le tengo le 09:30. Mi scrive nome, cognome e telefono?", "answer"),
             [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
-            _final(SUMMARY, "question"),
+            _final(SUMMARY, "answer"),
             [("confirm_booking", {})],
             _final(BOOKED),
         ]
@@ -170,13 +170,13 @@ async def test_without_the_patient_s_yes_nothing_is_booked(
     script = Script(
         [
             [("free_times", {})],
-            _final(f"{LIST}\nQuale preferisce?", "question"),
+            _final(f"{LIST}\nQuale preferisce?", "answer"),
             [("hold_time", {"number": 1})],
-            _final("Nome, cognome e telefono?", "question"),
+            _final("Nome, cognome e telefono?", "answer"),
             [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
-            _final(SUMMARY, "question"),
+            _final(SUMMARY, "answer"),
             [("confirm_booking", {})],  # the model calls it on a question
-            _final("Il prezzo è 40 EUR. Conferma la prenotazione?", "question"),
+            _final("Il prezzo è 40 EUR. Conferma la prenotazione?", "answer"),
         ]
     )
     chat = Chat(base, script)
@@ -208,7 +208,7 @@ async def test_a_booking_no_tool_made_is_never_announced(base: TurnRuntime) -> N
 
 
 async def test_the_agent_reads_the_conversation_so_far(base: TurnRuntime) -> None:
-    script = Script([_final("Certo, mi dica.", "question"), _final("Il prezzo è 40 EUR.")])
+    script = Script([_final("Certo, mi dica.", "answer"), _final("Il prezzo è 40 EUR.")])
     chat = Chat(base, script)
     await chat.say("Avrei una domanda sulla visita ortopedica")
     await chat.say("quanto costa?")
@@ -252,7 +252,7 @@ async def test_the_agent_reads_the_clinic_s_facts(base: TurnRuntime) -> None:
 
 
 async def test_a_tool_never_holds_a_time_that_was_not_shown(base: TurnRuntime) -> None:
-    script = Script([[("hold_time", {"number": 1})], _final("Le mostro gli orari?", "question")])
+    script = Script([[("hold_time", {"number": 1})], _final("Le mostro gli orari?", "answer")])
     await Chat(base, script).say("prendo il primo")
     assert script.tool_results() == ["No times were shown yet: call free_times first."]
     with business_session(base.session_factory, base.pack.id) as session:
@@ -277,9 +277,9 @@ async def test_only_the_name_and_phone_pass_while_a_time_is_held(base: TurnRunti
     script = Script(
         [
             [("free_times", {})],
-            _final(f"{LIST}\nQuale preferisce?", "question"),
+            _final(f"{LIST}\nQuale preferisce?", "answer"),
             [("hold_time", {"number": 1})],
-            _final("Nome, cognome e telefono?", "question"),
+            _final("Nome, cognome e telefono?", "answer"),
         ]
     )
     chat = Chat(base, script)
@@ -297,14 +297,14 @@ async def test_a_yes_that_does_not_answer_the_summary_books_nothing(
     script = Script(
         [
             [("free_times", {})],
-            _final(f"{LIST}\nQuale preferisce?", "question"),
+            _final(f"{LIST}\nQuale preferisce?", "answer"),
             [("hold_time", {"number": 1})],
-            _final("Nome, cognome e telefono?", "question"),
+            _final("Nome, cognome e telefono?", "answer"),
             [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
-            _final(SUMMARY, "question"),
-            _final("Si paga in clinica. Vuole sapere altro?", "question"),
+            _final(SUMMARY, "answer"),
+            _final("Si paga in clinica. Vuole sapere altro?", "answer"),
             [("confirm_booking", {})],  # a yes to another question
-            _final("Mi conferma la prenotazione?", "question"),
+            _final("Mi conferma la prenotazione?", "answer"),
         ]
     )
     chat = Chat(base, script)
@@ -319,11 +319,11 @@ async def test_the_summary_is_shown_as_code_wrote_it(base: TurnRuntime) -> None:
     script = Script(
         [
             [("free_times", {})],
-            _final(f"{LIST}\nQuale preferisce?", "question"),
+            _final(f"{LIST}\nQuale preferisce?", "answer"),
             [("hold_time", {"number": 2})],
-            _final("Nome, cognome e telefono?", "question"),
+            _final("Nome, cognome e telefono?", "answer"),
             [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
-            _final("Perfetto Mario, confermiamo?", "question"),
+            _final("Perfetto Mario, confermiamo?", "answer"),
         ]
     )
     chat = Chat(base, script)
@@ -365,3 +365,11 @@ async def test_the_facts_give_reception_s_whatsapp(
     assert isinstance(request, ModelRequest)
     assert "WhatsApp: +355 00 000 0001" in (request.instructions or "")
     assert reply.text.startswith("Può scriverci su WhatsApp al +355 00 000 0001.")
+
+
+async def test_a_question_back_is_a_clarification(base: TurnRuntime) -> None:
+    script = Script(
+        [_final("Gli orari di apertura, o altri orari per un appuntamento?", "clarify")]
+    )
+    reply = await Chat(base, script).say("vorrei sapere gli orari")
+    assert reply.outcome is TurnOutcome.ASKED
