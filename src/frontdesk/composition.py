@@ -21,8 +21,9 @@ from frontdesk.agent.demo_models import demo_classifier_model, demo_responder_mo
 from frontdesk.agent.prompts import read_prompt
 from frontdesk.agent.responder import build_responder
 from frontdesk.agent.tools import ToolServices, build_toolset
-from frontdesk.booking.calendar import CalendarReader, FixtureCalendar
+from frontdesk.booking.calendar import Calendar, FixtureCalendar
 from frontdesk.booking.google_calendar import SCOPE as CALENDAR_SCOPE
+from frontdesk.booking.google_calendar import WRITE_SCOPE as CALENDAR_WRITE_SCOPE
 from frontdesk.booking.google_calendar import GoogleCalendar, calendar_http_client
 from frontdesk.conversation.turn import TurnRuntime
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
@@ -168,11 +169,15 @@ def build_turn_runtime(
         capture_content=deployment.settings.telemetry_capture_content,
         orders=OrderStore(tuple(pack.orders)) if pack.features.order_status else None,
         now=deployment.now,
-        calendar=build_calendar(deployment.settings) if pack.integrations.calendar else None,
+        calendar=(
+            build_calendar(deployment.settings, write=pack.integrations.calendar.chat_booking)
+            if pack.integrations.calendar
+            else None
+        ),
     )
 
 
-def build_calendar(settings: Settings) -> CalendarReader | None:
+def build_calendar(settings: Settings, *, write: bool = False) -> Calendar | None:
     """The reader of the doctors' calendars (ADR-0003). Google's credentials are found at the
     first read, so a deployment builds without them and a read without them is a calendar that
     cannot be read: the bot then says how to book."""
@@ -181,6 +186,7 @@ def build_calendar(settings: Settings) -> CalendarReader | None:
             raise ValueError("FRONTDESK_CALENDAR_FIXTURE is not set for the fixture calendar")
         return FixtureCalendar(settings.calendar_fixture)
     if settings.calendar_backend is CalendarBackend.GOOGLE:
-        token = google_token_source([CALENDAR_SCOPE], impersonate=settings.calendar_impersonate)
+        scope = CALENDAR_WRITE_SCOPE if write else CALENDAR_SCOPE  # writing only to book (M5)
+        token = google_token_source([scope], impersonate=settings.calendar_impersonate)
         return GoogleCalendar(token, calendar_http_client())
     return None

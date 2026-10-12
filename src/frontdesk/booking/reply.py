@@ -151,13 +151,25 @@ def _calendar(pack: BusinessPack) -> CalendarIntegration:
 
 
 def compose_slots(
-    slots: Sequence[Slot], *, doctor: str, service: str, minutes: int, language: Language
+    slots: Sequence[Slot],
+    *,
+    doctor: str,
+    service: str,
+    minutes: int,
+    language: Language,
+    numbered: bool = False,
 ) -> str:
+    """The lead-in and one line per slot; numbered when the patient picks one from the chat."""
     lead = _LEAD[language].format(doctor=doctor, service=service, minutes=minutes)
-    return "\n".join([lead, *(f"- {_when(slot.start, language)}" for slot in slots)])
+    marks = [f"{index})" if numbered else "-" for index in range(1, len(slots) + 1)]
+    lines = [
+        f"{mark} {slot_time(slot.start, language)}" for mark, slot in zip(marks, slots, strict=True)
+    ]
+    return "\n".join([lead, *lines])
 
 
-def _when(start: datetime, language: Language) -> str:
+def slot_time(start: datetime, language: Language) -> str:
+    """A slot's start as the patient reads it: "venerdì 23 ottobre, 10:00"."""
     weekday = _WEEKDAYS[language][start.weekday()]
     month = _MONTHS[language][start.month - 1]
     return f"{weekday} {start.day} {month}, {start:%H:%M}"

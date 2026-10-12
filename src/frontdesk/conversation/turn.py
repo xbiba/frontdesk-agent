@@ -39,8 +39,11 @@ from frontdesk.agent.responder import (
     render_turn_prompt,
 )
 from frontdesk.agent.vocab import ADMINISTRATIVE_INTENTS, Category, ClarifyField, Intent
-from frontdesk.booking.calendar import CalendarReader, CalendarUnavailableError
+from frontdesk.booking.calendar import Calendar, CalendarUnavailableError
 from frontdesk.booking.reply import booking_target, compose_slots, find_slots
+from frontdesk.conversation.booking_turn import BookingContext, StepReply
+from frontdesk.conversation.booking_turn import answer as booking_answer
+from frontdesk.conversation.booking_turn import offer as booking_offer
 from frontdesk.conversation.compose import (
     FACT_INTENTS,
     clarify_question,
@@ -48,7 +51,7 @@ from frontdesk.conversation.compose import (
     unanswered,
 )
 from frontdesk.conversation.preload import document_evidence, fact_evidence
-from frontdesk.conversation.state import ConversationState
+from frontdesk.conversation.state import BookingStep, ConversationState
 from frontdesk.db.engine import business_session
 from frontdesk.knowledge.embedders import Embedder
 from frontdesk.knowledge.evidence import Evidence, EvidenceKind
@@ -107,6 +110,7 @@ class TurnTrace:
     invalid_evidence_ids: int = 0
     rejection: str | None = None
     clarify: ClarifyField | None = None
+    booking: BookingStep | None = None  # a booking under way (M5); metadata only
 
 
 @dataclass(frozen=True)
@@ -163,7 +167,7 @@ class TurnRuntime:
     orders: OrderStore | None = None
     now: Callable[[], datetime] = _utc_now
     keep_drafts: bool = False  # the live evaluation keeps refused answers for its reviewer
-    calendar: CalendarReader | None = None  # reads the bookable doctors' free slots (M4)
+    calendar: Calendar | None = None  # the bookable doctors' calendars (M4 reads, M5 writes)
 
 
 async def handle_message(
@@ -229,6 +233,11 @@ async def _decide(
         return _emergency(pack, language, rule.rule)
     if rule.verdict is Verdict.CLINICAL_ADVICE:
         return _handoff(pack, language, FixedTextKey.CLINICAL, TurnTrace(rule=rule.rule))
+    if state.booking is not None and runtime.calendar is not None:
+        # Ahead of the personal-data rule: here a name and a phone number are what was asked for.
+        step = await _booking_step(stripped, language, state, state.booking, runtime)
+        if step is not None:
+            return step
     if rule.verdict is Verdict.PERSONAL_DATA:
         trace = TurnTrace(rule=f"personal_data:{rule.rule}")
         return _fixed(pack, language, FixedTextKey.PERSONAL_DATA, trace)
@@ -332,6 +341,14 @@ async def _booking(
         return _how_to_book(pack, language, trace)
     doctor_id, service_id = target
     read = replace(trace, sources=(f"calendar:{doctor_id}",))
+    if pack.integrations.calendar is not None and pack.integrations.calendar.chat_booking:
+        context = _booking_context(runtime, catalog, state, language)
+        try:
+            offered = await asyncio.to_thread(booking_offer, context, doctor_id, service_id)
+        except CalendarUnavailableError as error:
+            log_event(logger, "calendar.unavailable", business_id=pack.id, reason=str(error))
+            return _how_to_book(pack, language, replace(read, rejection="calendar_unavailable"))
+        return _from_step(offered, language, read)
     try:
         slots = await asyncio.to_thread(
             find_slots, runtime.calendar, pack, doctor_id, service_id, runtime.now()
@@ -353,6 +370,56 @@ async def _booking(
     )
     step = _next_step(pack, fields, state)
     return TurnResult(f"{text}\n\n{step}" if step else text, TurnOutcome.REPLIED, language, read)
+
+
+async def _booking_step(
+    text: str,
+    language: Language,
+    state: ConversationState,
+    step: BookingStep,
+    runtime: TurnRuntime,
+) -> TurnResult | None:
+    """The next step of a booking under way, or None when the message answers another question."""
+    catalog = await asyncio.to_thread(_load_catalog, runtime)
+    if catalog is None:
+        return None
+    context = _booking_context(runtime, catalog, state, language)
+    reply = await asyncio.to_thread(booking_answer, context, step, text)
+    if reply is None:
+        return None
+    trace = TurnTrace(
+        rule="booking", intent=Intent.BOOKING, sources=(f"calendar:{reply.doctor_id}",)
+    )
+    return _from_step(reply, language, trace)
+
+
+def _booking_context(
+    runtime: TurnRuntime, catalog: Catalog, state: ConversationState, language: Language
+) -> BookingContext:
+    if runtime.calendar is None:
+        raise ValueError("a booking needs the runtime's calendar")
+    return BookingContext(
+        pack=runtime.pack,
+        catalog=catalog,
+        calendar=runtime.calendar,
+        session_factory=runtime.session_factory,
+        conversation_id=state.conversation_id,
+        language=language,
+        now=runtime.now(),
+    )
+
+
+_STEP_OUTCOMES: Final = {
+    "asked": TurnOutcome.ASKED,
+    "replied": TurnOutcome.REPLIED,
+    "handoff": TurnOutcome.HANDOFF,
+}
+
+
+def _from_step(reply: StepReply, language: Language, trace: TurnTrace) -> TurnResult:
+    return TurnResult(
+        reply.text, _STEP_OUTCOMES[reply.outcome], language, replace(trace, booking=reply.next)
+    )
 
 
 def _how_to_book(
@@ -660,6 +727,7 @@ def _next_state(
         doctor_ids=trace.doctor_ids,
         clarify=trace.clarify,
         next_step_shown=step is not None and step in result.text,
+        booking=trace.booking,
     )
 
 

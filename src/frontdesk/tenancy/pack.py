@@ -67,12 +67,17 @@ class FixedTextKey(StrEnum):
     ATTACHMENT = "attachment"
     NEXT_STEP = "next_step"
     NO_SLOTS = "no_slots"
+    BOOKING_PRIVACY = "booking_privacy"
 
 
 # A pack may leave these out. The next step (how to book) ends an answer once per conversation;
 # without one, an answer ends with the answer. Without `no_slots`, a booking question with no free
 # slot gets `no_information`.
-OPTIONAL_FIXED_TEXTS: Final = frozenset({FixedTextKey.NEXT_STEP, FixedTextKey.NO_SLOTS})
+# `booking_privacy` says what the name and the phone are for; a pack that books from the chat
+# must give it (M5).
+OPTIONAL_FIXED_TEXTS: Final = frozenset(
+    {FixedTextKey.NEXT_STEP, FixedTextKey.NO_SLOTS, FixedTextKey.BOOKING_PRIVACY}
+)
 
 
 class Frozen(BaseModel):
@@ -95,6 +100,8 @@ class CalendarIntegration(Frozen):
     min_notice_minutes: int = Field(default=120, ge=0, le=10080)
     buffer_minutes: int = Field(default=0, ge=0, le=120)
     max_options: int = Field(default=3, ge=1, le=5)
+    # M5: the patient books one of the free slots from the chat, at once (Albi, 2026-10-12).
+    chat_booking: bool = False
 
 
 class Integrations(Frozen):
@@ -349,6 +356,12 @@ def _profile_problems(pack: BusinessPack) -> list[str]:
             for doctor_id, services in pack.bookable_doctors().items()
             if not services
         ]
+        if calendar.chat_booking:
+            problems += [
+                f"chat booking needs the fixed text 'booking_privacy' in '{language}'"
+                for language in pack.languages
+                if FixedTextKey.BOOKING_PRIVACY not in pack.fixed_texts.get(language, {})
+            ]
     return problems
 
 

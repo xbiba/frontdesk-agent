@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from datetime import datetime
+from enum import StrEnum
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,6 +18,27 @@ TOPIC_TURNS: Final = 3  # turns a topic survives without being mentioned again
 # The key of the order lookup attempts is a String(64) column: a longer id would fail every order
 # turn at the database.
 MAX_CONVERSATION_ID_CHARS: Final = 64
+
+
+class BookingStage(StrEnum):
+    CHOOSE = "choose"  # the free slots were offered
+    NAME = "name"
+    PHONE = "phone"
+    CONFIRM = "confirm"
+
+
+class BookingStep(BaseModel):
+    """Where a booking from the chat stands (M5). Metadata only: the name and the phone live on the
+    hold in Postgres, never here."""
+
+    model_config = ConfigDict(frozen=True)
+
+    stage: BookingStage
+    doctor_id: str
+    service_id: str
+    offered: tuple[datetime, ...] = ()
+    hold_id: uuid.UUID | None = None
+    retries: int = 0
 
 
 class ConversationState(BaseModel):
@@ -32,6 +55,7 @@ class ConversationState(BaseModel):
     topic_age: int = 0
     pending_clarification: ClarifyField | None = None
     next_step_shown: bool = False  # the pack's next step ends one answer per conversation
+    booking: BookingStep | None = None  # a booking under way; any other turn ends it
 
     def advanced(
         self,
@@ -43,6 +67,7 @@ class ConversationState(BaseModel):
         doctor_ids: Sequence[str],
         clarify: ClarifyField | None,
         next_step_shown: bool = False,
+        booking: BookingStep | None = None,
     ) -> ConversationState:
         intents = self.previous_intents
         if intent is not None:
@@ -62,5 +87,6 @@ class ConversationState(BaseModel):
                 "topic_age": age,
                 "pending_clarification": clarify,
                 "next_step_shown": self.next_step_shown or next_step_shown,
+                "booking": booking,
             }
         )
