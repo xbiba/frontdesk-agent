@@ -129,12 +129,18 @@ def validate_classification(
     features: Features,
     language: Language,
     bookable: frozenset[str] = frozenset(),
+    bookable_services: frozenset[str] = frozenset(),
 ) -> ValidatedFields | Rejection:
-    """`bookable`: the doctors whose free slots the deployment can read (M4)."""
+    """`bookable` and `bookable_services`: the doctors whose free slots the deployment can read,
+    and their bookable services (M4)."""
     if output.category is Category.EMERGENCY:
         return ValidatedFields(category=Category.EMERGENCY, intent=Intent.OTHER, language=language)
     output = _repaired(
-        output, message=message, catalog=catalog, features=features, bookable=bookable
+        output,
+        message=message,
+        catalog=catalog,
+        features=features,
+        bookable=bookable | bookable_services,
     )
     problem = _contract_problem(output, catalog=catalog, profile=profile, features=features)
     if problem is not None:
@@ -194,7 +200,8 @@ def _repaired(
             "problem_category_id": None,
         }
     asks_when = _ASKS_WHEN.search(normalize(message)) is not None
-    named_bookable = any(doctor in bookable for doctor in output.doctor_ids)
+    mentioned = (*output.doctor_ids, *output.service_ids)  # "when can I find the osteopath?"
+    named_bookable = any(item in bookable for item in mentioned)
     if asks_when and named_bookable and output.intent in _DOCTOR_DATES:
         update |= {"intent": Intent.BOOKING, "general_question": None}
         output, update = output.model_copy(update=update), {}

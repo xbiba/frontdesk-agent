@@ -246,6 +246,7 @@ async def _decide(
 async def _classify(
     text: str, language: Language, state: ConversationState, catalog: Catalog, runtime: TurnRuntime
 ) -> ValidatedFields | Rejection:
+    bookable = _bookable(runtime)
     deps = classifier_deps(
         catalog,
         business_name=runtime.pack.name,
@@ -269,7 +270,8 @@ async def _classify(
         profile=runtime.pack.profile,
         features=runtime.pack.features,
         language=language,
-        bookable=frozenset(_bookable(runtime)),
+        bookable=frozenset(bookable),
+        bookable_services=frozenset(item for services in bookable.values() for item in services),
     )
 
 
