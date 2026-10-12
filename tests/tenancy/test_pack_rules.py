@@ -27,6 +27,11 @@ def _duplicate_first(data: Any) -> None:
     data.append(copy.deepcopy(data[0]))
 
 
+def _calendar_with(**settings: Any) -> Change:
+    calendar = {"credentials_ref": "adc", "calendars": {"dr-arben-demo": "c1"}, **settings}
+    return lambda data: data.update(integrations={"calendar": calendar})
+
+
 def _calendar_for(*doctor_ids: str) -> Change:
     calendars = {doctor_id: f"calendar-{doctor_id}" for doctor_id in doctor_ids}
     return lambda data: data.update(
@@ -287,6 +292,32 @@ def test_calendar_integration_for_known_doctors_loads(businesses_dir: Path, tmp_
         "dr-arben-demo": "calendar-dr-arben-demo",
         "ft-elira-shembull": "calendar-ft-elira-shembull",
     }
+    # The defaults of the bookings design (§3): a marker word, 14 days, 2 hours' notice, 3 options.
+    assert (calendar.availability_marker, calendar.horizon_days) == ("Disponibile", 14)
+    assert calendar.min_notice_minutes == 120
+    assert (calendar.buffer_minutes, calendar.max_options) == (0, 3)
+
+
+def test_bookable_doctors_are_those_with_a_calendar_and_their_bookable_services(
+    businesses_dir: Path, tmp_path: Path
+) -> None:
+    pack_dir = copy_pack(businesses_dir, CLINIC, tmp_path)
+    assert load_pack(pack_dir).bookable_doctors() == {}
+    edit_yaml(pack_dir / "business.yaml", _calendar_for("dr-giulia-esempio", "ft-elira-shembull"))
+    assert load_pack(pack_dir).bookable_doctors() == {
+        "dr-giulia-esempio": ("dermatology-visit",),  # the ultrasound needs a consult first
+        "ft-elira-shembull": ("physiotherapy", "osteopathy"),
+    }
+
+
+def test_a_calendar_for_a_doctor_with_no_bookable_service_is_refused(
+    businesses_dir: Path, tmp_path: Path
+) -> None:
+    pack_dir = copy_pack(businesses_dir, CLINIC, tmp_path)
+    edit_yaml(pack_dir / "data/services.yaml", lambda d: d[3].update(bookable_online=False))
+    edit_yaml(pack_dir / "business.yaml", _calendar_for("dr-giulia-esempio"))
+    with pytest.raises(PackError, match="calendar for 'dr-giulia-esempio' has no bookable service"):
+        load_pack(pack_dir)
 
 
 SCHEMA = [
@@ -324,6 +355,27 @@ SCHEMA = [
         lambda d: d[0].update(postal_code="AB123"),
         r"\norders\.0\.postal_code\n\s+String should match pattern",
         id="postal-code-pattern",
+    ),
+    pytest.param(
+        CLINIC,
+        "business.yaml",
+        _calendar_with(availability_marker="  "),
+        r"\nintegrations\.calendar\.availability_marker\n\s+Value error, must not be blank",
+        id="blank-availability-marker",
+    ),
+    pytest.param(
+        CLINIC,
+        "business.yaml",
+        _calendar_with(horizon_days=0),
+        r"\nintegrations\.calendar\.horizon_days\n\s+Input should be greater than or equal to 1",
+        id="horizon-of-at-least-a-day",
+    ),
+    pytest.param(
+        CLINIC,
+        "business.yaml",
+        _calendar_with(max_options=6),
+        r"\nintegrations\.calendar\.max_options\n\s+Input should be less than or equal to 5",
+        id="at-most-five-options",
     ),
 ]
 
