@@ -39,6 +39,7 @@ from frontdesk.knowledge.embedders import Embedder, build_embedder
 from frontdesk.knowledge.facts import load_catalog
 from frontdesk.knowledge.versions import check_embedder
 from frontdesk.model_gateway.factory import build_live_model, live_model_settings
+from frontdesk.model_gateway.hedging import HedgedModel
 from frontdesk.model_gateway.google_tokens import google_token_source
 from frontdesk.model_gateway.routes import (
     CHAT_PROVIDERS,
@@ -176,7 +177,7 @@ def build_turn_runtime(
         if deployment.settings.conversation is Conversation.AGENT:
             reception_prompt = read_prompt(pack.profile, "reception")
             reception = build_reception(
-                wrap(model, "agent"),
+                HedgedModel(wrap(model, "agent")),  # a stuck request gets a twin (Albi, 2026-10-12)
                 pack.profile,
                 model_settings=live_model_settings(route, max_tokens=route.output_limits.agent),
                 instructions=reception_prompt.text,

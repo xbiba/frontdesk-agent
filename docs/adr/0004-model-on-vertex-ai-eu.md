@@ -32,3 +32,12 @@ The model is the one the M3 live evaluations choose on Vertex AI in the EU; toda
 
 ## Exit plan
 Routes are data in `frontdesk.model_gateway.routes`; a new route is one entry plus its evaluation results, a Haiku route one entry with provider `anthropic-vertex`. A new Vertex AI location also needs an entry in `VERTEX_HOSTS` (`frontdesk.model_gateway.factory`), which pins the host it calls.
+
+## Amendment, 2026-10-12: Gemini 3.8 Flash, hedged requests
+
+The reception agent runs on Gemini 3.8 Flash (`vertex-eu-gemini-flash`, eu multi-region, GA since 2026-09-02, evaluation data only like Flash-Lite until Vertex's data retention is checked). Its replies take about 2 seconds at the median. Some requests stayed stuck for 15 to 36 seconds in the runs of 2026-10-12. Two remedies:
+
+- **Hedged requests** (Albi, live and in production). A request still away after 4.5 seconds gets an identical twin, and the first answer wins (`model_gateway/hedging.py`). A meter records the losing twin at the winner's input and at most its output cap: an identical request that may have been billed, and no failure of the provider.
+- **A request timeout per route.** 15 seconds for 3.8 Flash, so that a stuck request is retried within the turn.
+
+The latency criterion of the live runs becomes 90% of replies within 10 seconds and 99% within 20 (Albi). A turn of the agent that uses a tool takes two model calls, the tool's and the reply.

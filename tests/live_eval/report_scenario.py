@@ -38,7 +38,7 @@ RECORDS: list[TurnRecord] = [
         outcome="handoff",
         check_reasons=("quote_not_in_source",),
         draft=draft("Ci sono sei posti.", "sei posti gratuiti"),
-        seconds=9.0,
+        seconds=12.0,
     ),
     record(
         "alarm",

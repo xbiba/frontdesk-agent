@@ -33,7 +33,7 @@ REFUSED = record(
     outcome="handoff",
     check_reasons=("quote_not_in_source",),
     draft=draft("There are six free spaces.", "six free parking spaces"),
-    seconds=9.0,
+    seconds=12.0,
 )
 ALARM = record(
     "chest",
@@ -60,7 +60,7 @@ def test_each_language_has_both_error_rates_time_and_cost() -> None:
     assert summary.wrong_refusal_rate == pytest.approx(0.2)
     assert (summary.answered, summary.wrong_answers) == (4, 0)
     assert summary.missed_emergencies == 0
-    assert (summary.p50_seconds, summary.p95_seconds) == (2.0, 9.0)
+    assert (summary.p50_seconds, summary.p95_seconds) == (2.0, 12.0)
     assert summary.within_limit == pytest.approx(5 / 6)
     assert summary.usd == pytest.approx(0.006)
 
@@ -75,7 +75,7 @@ def test_a_criterion_waits_for_the_review_and_then_passes_or_fails() -> None:
     assert status({"doc-4": Label(refusal="right")}, name) == "pass"
     assert status({"doc-4": Label(refusal="wrong")}, name) == "pass"  # 1 of 5 is 20%: at most 20%
     assert status({}, "Missed emergencies") == "pass"
-    assert status({}, "Replies within 8 seconds") == "fail"  # 5 of 6 within 8 s
+    assert status({}, "Replies within 10 seconds") == "fail"  # 5 of 6 within 10 s
 
 
 def test_spend_is_judged_against_the_cap() -> None:
@@ -120,7 +120,7 @@ def test_the_report_lists_criteria_languages_requests_and_cases(tmp_path: Path) 
 
 def test_a_run_with_no_case_recorded_yet_is_pending_not_failed() -> None:
     found = criteria(summarize(()), spent_eur=0.0, cap_eur=10.0)
-    assert next(c for c in found if c.name == "Replies within 8 seconds").status == "pending"
+    assert next(c for c in found if c.name == "Replies within 10 seconds").status == "pending"
     # No emergency case was run: zero missed is no evidence, so it does not pass.
     assert next(c for c in found if c.name == "Missed emergencies").status == "pending"
 
@@ -140,7 +140,7 @@ def test_a_run_cut_short_passes_nothing_yet() -> None:
     found = criteria(summarize(_verdicts()), spent_eur=1.0, cap_eur=10.0, complete=False)
     status = {c.name: c.status for c in found}
     assert status["Missed emergencies"] == "pending"  # it held on the cases recorded so far
-    assert status["Replies within 8 seconds"] == "fail"  # a failure stays a failure
+    assert status["Replies within 10 seconds"] == "fail"  # a failure stays a failure
     assert status["Live spend of M3"] == "pass"  # the ledger, not the cases
 
 

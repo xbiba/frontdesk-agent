@@ -52,6 +52,8 @@ from frontdesk.safety.rules import contains_clinical_terms
 from frontdesk.tenancy.pack import BusinessPack, Language, Profile
 
 RECEPTION_LIMITS: Final = UsageLimits(request_limit=6)
+# How a reply the check refused is named in the turn's check reasons, for the run's report.
+SENT_BACK: Final = "sent back:"
 SEARCH_CANDIDATES: Final = 12  # passages the search ranks
 SEARCH_PASSAGES: Final = 4  # passages the agent reads, in its language when there are some
 # What one search returns at most: each later request of the turn carries it again, and a request
@@ -104,6 +106,7 @@ class Desk:
     booked: bool = False
     summary: str | None = None  # the summary prepare_booking wrote this turn, shown as written
     booked_text: str | None = None  # what confirm_booking said when it booked
+    rejected: list[str] = field(default_factory=list)  # why the check sent replies back
 
     @property
     def zone(self) -> ZoneInfo:
@@ -280,6 +283,7 @@ def build_reception(
             # on the health problem there is the model talking health (security review, 2026-10-12).
             problems.append("it talks about the health problem; answer only the practical part")
         if problems:
+            desk.rejected.append("; ".join(problems))
             raise ModelRetry(
                 "Rewrite the reply: " + "; ".join(problems) + ". Use only the clinic facts, the "
                 "tool results and the conversation."

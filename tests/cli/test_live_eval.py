@@ -187,8 +187,8 @@ def test_tags_choose_the_cases_and_the_report_is_judged_over_the_same_cases(
     assert recorded_cases(run_dir) == ["price-tagged"]
     # Recomputed with the tag the run was started with it is the same report; without, the cases
     # the run never meant to run are missing from it.
-    assert "PASS     Replies within 8 seconds" in eval_report(run_dir, "--tag", "pricing").stdout
-    assert "PENDING  Replies within 8 seconds" in eval_report(run_dir).stdout
+    assert "PASS     Replies within 10 seconds" in eval_report(run_dir, "--tag", "pricing").stdout
+    assert "PENDING  Replies within 10 seconds" in eval_report(run_dir).stdout
 
 
 def test_a_tag_no_case_has_is_an_error_before_anything_is_written(

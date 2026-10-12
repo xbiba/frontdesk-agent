@@ -56,6 +56,7 @@ from pydantic_ai.usage import RequestUsage
 from pydantic_core import to_json
 
 from frontdesk.model_gateway.costs import Budget, BudgetError, BudgetExhaustedError
+from frontdesk.model_gateway.hedging import CURRENT_TWIN
 
 # The reserve assumes a request holds at most this many input tokens. Real requests stay far below
 # it (the prompts are under 3,000 characters, the evidence at most 4,000), and `Meter.admit` checks
@@ -328,6 +329,30 @@ class Meter:
             )
         )
 
+    def abandoned(
+        self, role: str, reserved: float, winner: RequestUsage, cap: int, seconds: float
+    ) -> None:
+        """A hedged twin cancelled after the other answered (frontdesk.model_gateway.hedging): the
+        winner's input tokens and at most `cap` output tokens, which may have been billed. It is no
+        failure in a row: its twin answered."""
+        usd = self._price.cost(input_units=winner.input_tokens, output_units=cap)
+        try:
+            self._append("chat-hedged", usd)
+        finally:
+            self.release(reserved)
+        self._calls.append(
+            CallRecord(
+                agent=role,
+                model_version=None,
+                input_tokens=winner.input_tokens,
+                output_tokens=0,
+                thoughts_tokens=0,
+                finish_reason="hedged",
+                usd=usd,
+                seconds=seconds,
+            )
+        )
+
     def rate_limited(self) -> None:
         self._stop(
             STOP_RATE_LIMITED, "Google answered 429 (rate limited) at the last attempt of a request"
@@ -444,9 +469,15 @@ class MeteredModel(WrapperModel):
         except BaseException:
             # Sent, but no usage came back: the provider may have billed it. If the ledger cannot
             # take the line, the meter has stopped the run; what ended the attempt still goes on
-            # (a cancellation must stay one).
+            # (a cancellation must stay one). A hedged twin that lost is an identical request to
+            # the winner's: its input, at most its output cap, and no failure of the provider.
+            seconds = self._meter.clock() - started
+            twin = CURRENT_TWIN.get()
             with suppress(BudgetError, OSError):
-                self._meter.unconfirmed(self._role, reserved, self._meter.clock() - started)
+                if twin is not None and twin.abandoned and twin.winner is not None:
+                    self._meter.abandoned(self._role, reserved, twin.winner, cap, seconds)
+                else:
+                    self._meter.unconfirmed(self._role, reserved, seconds)
             raise
         self._meter.record(self._role, response, self._meter.clock() - started, reserved=reserved)
         return response

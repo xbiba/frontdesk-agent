@@ -20,13 +20,19 @@ from dataclasses import asdict, dataclass, replace
 from typing import Final, Literal
 
 from frontdesk.conversation.evaluation import TurnCase
+from frontdesk.conversation.reception import SENT_BACK
 from frontdesk.live_eval.judging import CaseVerdict, judge, load_labels
 from frontdesk.live_eval.records import RunFiles, RunManifest, read_turns
 from frontdesk.live_eval.review import render_review_page
 from frontdesk.model_gateway.costs import Budget
 
-MAX_SECONDS: Final = 8.0  # 95% of replies within 8 seconds (§1)
-SHARE_WITHIN: Final = 0.95
+# Albi, 2026-10-12: 90% of replies within 10 seconds and 99% within 20. Design §1 asked for 95%
+# within 8, when a reply took one model call; a turn of the reception agent that uses a tool takes
+# two (the tool's call, then the reply): 4.5 seconds at the median in the run of 2026-10-12.
+MAX_SECONDS: Final = 10.0
+SHARE_WITHIN: Final = 0.90
+CEILING_SECONDS: Final = 20.0
+SHARE_WITHIN_CEILING: Final = 0.99
 MAX_WRONG_REFUSALS: Final = 0.20  # per language (§1)
 ALL: Final = "all"
 LABELS: Final = "labels.yaml"
@@ -57,6 +63,7 @@ class LanguageSummary:
     p50_seconds: float
     p95_seconds: float
     within_limit: float  # share of turns answered within MAX_SECONDS
+    within_ceiling: float  # share of turns answered within CEILING_SECONDS
     usd: float
     critical_pending: int = 0  # critical cases that passed the checks but wait for the reviewer
 
@@ -129,6 +136,7 @@ def criteria(
         _invented_facts(every),
         *[_lost_answers(name, one) for name, one in summaries.items() if name != ALL],
         _reply_time(every),
+        _reply_ceiling(every),
         _critical_cases(every),
     ]
     if not complete:
@@ -173,10 +181,19 @@ def _lost_answers(language: str, summary: LanguageSummary) -> Criterion:
 
 def _reply_time(every: LanguageSummary) -> Criterion:
     return Criterion(
-        "Replies within 8 seconds",
+        f"Replies within {MAX_SECONDS:.0f} seconds",
         f"at least {_percent(SHARE_WITHIN)}",
         f"{_percent(every.within_limit)} (p95 {every.p95_seconds:.1f} s)",
-        _share_status(every),
+        _share_status(every.within_limit, SHARE_WITHIN, turns=every.turns),
+    )
+
+
+def _reply_ceiling(every: LanguageSummary) -> Criterion:
+    return Criterion(
+        f"Replies within {CEILING_SECONDS:.0f} seconds",
+        f"at least {_percent(SHARE_WITHIN_CEILING)}",
+        _percent(every.within_ceiling),
+        _share_status(every.within_ceiling, SHARE_WITHIN_CEILING, turns=every.turns),
     )
 
 
@@ -238,6 +255,7 @@ def render_report(
         "",
         *_request_table(verdicts),
         "",
+        *_agent_replies(manifest, verdicts),
         *_case_table(verdicts),
     ]
     return "\n".join(lines) + "\n"
@@ -303,7 +321,7 @@ def _language_table(summaries: dict[str, LanguageSummary], budget: Budget | None
         "",
         "| language | cases | passed | critical failed | missed emergencies | right answers "
         "refused | wrong answers passed | invented facts | to review | handoffs by failure | "
-        "p50 s | p95 s | within 8 s | EUR per message | EUR |",
+        "p50 s | p95 s | within 10 s | EUR per message | EUR |",
         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
         *[_language_row(summary, budget) for summary in summaries.values()],
     ]
@@ -368,6 +386,7 @@ def _case_entry(v: CaseVerdict) -> dict[str, object]:
 def _summary(language: str, verdicts: Sequence[CaseVerdict]) -> LanguageSummary:
     seconds = [second for verdict in verdicts for second in verdict.seconds]
     within = sum(1 for second in seconds if second <= MAX_SECONDS)
+    ceiling = sum(1 for second in seconds if second <= CEILING_SECONDS)
     return LanguageSummary(
         language=language,
         cases=len(verdicts),
@@ -395,15 +414,16 @@ def _summary(language: str, verdicts: Sequence[CaseVerdict]) -> LanguageSummary:
         p50_seconds=percentile(seconds, 0.50),
         p95_seconds=percentile(seconds, 0.95),
         within_limit=within / len(seconds) if seconds else 0.0,
+        within_ceiling=ceiling / len(seconds) if seconds else 0.0,
         usd=sum(v.usd for v in verdicts),
     )
 
 
-def _share_status(summary: LanguageSummary) -> Status:
+def _share_status(share: float, needed: float, *, turns: int) -> Status:
     """No turn recorded yet is no measurement: pending, not failed."""
-    if not summary.turns:
+    if not turns:
         return "pending"
-    return "pass" if summary.within_limit >= SHARE_WITHIN else "fail"
+    return "pass" if share >= needed else "fail"
 
 
 def _zero(count: int, *, measured: bool) -> Status:
@@ -485,3 +505,23 @@ def write_run_reports(
     page = render_review_page(manifest, verdicts, labels, run_dir=str(files.directory))
     (files.directory / "review.html").write_text(page, encoding="utf-8")
     return verdicts
+
+
+def _agent_replies(manifest: RunManifest, verdicts: Sequence[CaseVerdict]) -> list[str]:
+    """For a run the reception agent led (Albi, 2026-10-12): how many replies the check sent back
+    to the model, and how many turns ended in the fixed text."""
+    if manifest.reception_prompt is None:
+        return []
+    turns = [turn for verdict in verdicts for turn in verdict.turns]
+    sent_back = [turn for turn in turns if any(r.startswith(SENT_BACK) for r in turn.check_reasons)]
+    fixed = [turn for turn in turns if turn.rejection == "reception_error"]
+    refused = [turn for turn in fixed if turn in sent_back]
+    return [
+        "## The agent's replies",
+        "",
+        f"- Sent back to the model once, with the reasons: {len(sent_back)} of {len(turns)} turns; "
+        f"{len(sent_back) - len(refused)} then passed the check.",
+        f"- Ended in the fixed text: {len(fixed)} turns; {len(refused)} after a second refused "
+        f"reply, {len(fixed) - len(refused)} after a model failure or the time limit.",
+        "",
+    ]

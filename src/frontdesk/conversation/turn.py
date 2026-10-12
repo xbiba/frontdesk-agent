@@ -51,6 +51,7 @@ from frontdesk.conversation.compose import (
 from frontdesk.conversation.preload import document_evidence, fact_evidence
 from frontdesk.conversation.reception import (
     RECEPTION_LIMITS,
+    SENT_BACK,
     Desk,
     ReceptionReply,
     ReplyKind,
@@ -294,7 +295,12 @@ async def _reception(
             )
     except (AgentRunError, TimeoutError) as error:
         log_event(logger, "reception.failed", business_id=pack.id, reason=type(error).__name__)
-        failed = TurnTrace(rule="pass", rejection="reception_error", booking=desk.booking)
+        failed = TurnTrace(
+            rule="pass",
+            rejection="reception_error",
+            booking=desk.booking,
+            check_reasons=_sent_back(desk),
+        )
         if desk.booked and desk.booked_text:
             # The appointment is in the calendar: the patient reads it, whatever failed after.
             return TurnResult(desk.booked_text, TurnOutcome.REPLIED, language, failed)
@@ -307,6 +313,7 @@ async def _reception(
         intent=intent,
         sources=tuple(dict.fromkeys(desk.sources)),
         booking=desk.booking,
+        check_reasons=_sent_back(desk),
     )
     if reply.kind is ReplyKind.EMERGENCY:
         return _handoff(pack, language, FixedTextKey.EMERGENCY, _as(trace, Category.EMERGENCY))
@@ -370,6 +377,11 @@ def _desk(
         conversation="\n".join(entry.text for entry in state.history),
         booking=state.booking,
     )
+
+
+def _sent_back(desk: Desk) -> tuple[str, ...]:
+    """Each reply the check sent back to the model this turn, with its reasons."""
+    return tuple(f"{SENT_BACK} {reasons}" for reasons in desk.rejected)
 
 
 def _as(trace: TurnTrace, category: Category) -> TurnTrace:
