@@ -128,3 +128,12 @@ def purge(session: Session, now: datetime) -> int:
     """Deletes the expired holds and the booked ones whose slot has passed; how many."""
     result = session.execute(delete(BookingHold).where(BookingHold.expires_at < now))
     return cast(CursorResult[Any], result).rowcount
+
+
+def forget(session: Session, conversation_id: str) -> int:
+    """Deletes every hold of one conversation, booked or not: an evaluation case leaves nothing
+    behind for the next one or the next run."""
+    result = session.execute(
+        delete(BookingHold).where(BookingHold.conversation_id == conversation_id)
+    )
+    return cast(CursorResult[Any], result).rowcount

@@ -15,6 +15,7 @@ from typing import Annotated, Final
 import typer
 from sqlalchemy.orm import Session
 
+from frontdesk.cli.bookings import purge_bookings
 from frontdesk.cli.calendar import check_calendar
 from frontdesk.cli.chat import run_chat
 from frontdesk.cli.experiment import eval_embedders
@@ -69,10 +70,12 @@ db_app = typer.Typer(no_args_is_help=True, help="Database migrations.")
 knowledge_app = typer.Typer(no_args_is_help=True, help="Versioned, approved knowledge.")
 eval_app = typer.Typer(no_args_is_help=True, help="Evaluations.")
 calendar_app = typer.Typer(no_args_is_help=True, help="The doctors' calendars.")
+bookings_app = typer.Typer(no_args_is_help=True, help="Bookings from the chat.")
 app.add_typer(db_app, name="db")
 app.add_typer(knowledge_app, name="knowledge")
 app.add_typer(eval_app, name="eval")
 app.add_typer(calendar_app, name="calendar")
+app.add_typer(bookings_app, name="bookings")
 
 EnvFile = Annotated[
     Path, typer.Option("--env-file", exists=True, dir_okay=False, help="The deployment's env file.")
@@ -464,3 +467,10 @@ def calendar_check(
     """Read a doctor's calendar as the bot does: blocks, busy intervals and the first free slots.
     No event's content is printed."""
     raise typer.Exit(check_calendar(load_settings(env_file), doctor, datetime.now(UTC)))
+
+
+@bookings_app.command("purge")
+def bookings_purge(env_file: EnvFile) -> None:
+    """Delete the expired holds, with any name and phone on them, and the bookings whose slot has
+    passed. Run it on a schedule."""
+    raise typer.Exit(purge_bookings(load_settings(env_file), datetime.now(UTC)))

@@ -29,7 +29,7 @@ from datetime import UTC, datetime
 from typing import Final
 
 from frontdesk.conversation.behaviour import FAILURE_RULES
-from frontdesk.conversation.evaluation import TurnCase, case_runtime, initial_state
+from frontdesk.conversation.evaluation import TurnCase, case_runtime, forget_case, initial_state
 from frontdesk.conversation.turn import RejectedDraft, TurnResult, TurnRuntime, handle_message
 from frontdesk.live_eval.records import (
     CallRow,
@@ -152,26 +152,29 @@ async def _run_case(
     records: list[TurnRecord] = []
     if meter is not None:
         meter.drain()
-    for number, message in enumerate(case.conversation, start=1):
-        started = clock()
-        result, state = await handle_message(message, state, runtime)
-        seconds = clock() - started
-        calls = meter.drain() if meter is not None else ()
-        if meter is not None and meter.stop_reason is not None:
-            return None
-        records.append(
-            _record(
-                result,
-                run_id=run_id,
-                attempt=attempt,
-                case=case,
-                turn=number,
-                message=message,
-                calls=calls,
-                seconds=seconds,
-                at=now(),
+    try:
+        for number, message in enumerate(case.conversation, start=1):
+            started = clock()
+            result, state = await handle_message(message, state, runtime)
+            seconds = clock() - started
+            calls = meter.drain() if meter is not None else ()
+            if meter is not None and meter.stop_reason is not None:
+                return None
+            records.append(
+                _record(
+                    result,
+                    run_id=run_id,
+                    attempt=attempt,
+                    case=case,
+                    turn=number,
+                    message=message,
+                    calls=calls,
+                    seconds=seconds,
+                    at=now(),
+                )
             )
-        )
+    finally:  # an interrupted case leaves no hold behind either
+        forget_case(runtime, state)
     return tuple(records)
 
 

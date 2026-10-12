@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from frontdesk.agent.classifier import build_classifier
 from frontdesk.booking.calendar import CalendarUnavailableError, FixtureCalendar
 from frontdesk.booking.slots import Interval
+from frontdesk.conversation.evaluation import TurnCase, run_turn_eval
 from frontdesk.conversation.state import BookingStage, ConversationState
 from frontdesk.conversation.turn import TurnOutcome, TurnResult, TurnRuntime, handle_message
 from frontdesk.db.engine import business_session
@@ -110,7 +111,7 @@ async def test_a_patient_books_from_the_chat(
     caplog.set_level(logging.DEBUG)
     chat = Chat(runtime, [BOOK])
     offered = await chat.say("Vorrei prenotare")
-    assert (offered.outcome, offered.text) == (TurnOutcome.ASKED, OFFER)
+    assert (offered.outcome, offered.text) == (TurnOutcome.REPLIED, OFFER)
     assert chat.state.booking is not None
     assert chat.state.booking.stage is BookingStage.CHOOSE
     asked_name = await chat.say("2")
@@ -242,4 +243,21 @@ async def test_a_calendar_that_refuses_the_write_says_how_to_book(
         TurnOutcome.HANDOFF,
         f"Non sono riuscito a completare la prenotazione.\n\n{STEP}",
     )
+    assert _holds(runtime) == []
+
+
+async def test_booking_cases_can_be_run_again_and_again(runtime: TurnRuntime) -> None:
+    # Each case gets a fresh fixture calendar and leaves no hold: the same booking twice books twice.
+    case = TurnCase.model_validate(
+        {
+            "id": "book",
+            "messages": ["Vorrei prenotare", "2", "Mario Rossi", "+355 69 123 4567", "sì"],
+            "expect": {"outcome": "replied", "contains": ["Prenotazione confermata"]},
+        }
+    )
+    twice = replace(runtime, classifier=_classifier(runtime, [BOOK, BOOK]))
+    report = await run_turn_eval(
+        twice, [case, case.model_copy(update={"id": "again"})], route="test"
+    )
+    assert [result.failures for result in report.results] == [(), ()]
     assert _holds(runtime) == []
