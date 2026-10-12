@@ -63,3 +63,17 @@ def test_an_unknown_calendar_cannot_be_read(tmp_path: Path) -> None:
         FixtureCalendar(path).read(
             "cal-2", at(20, 0), at(31, 0), marker="Disponibile", zone=TIRANE, opening=opening
         )
+
+
+def test_the_fixture_keeps_its_bookings_as_busy_time(tmp_path: Path) -> None:
+    path = tmp_path / "calendar.yaml"
+    path.write_text("cal-1: {blocks: [], busy: []}\n", encoding="utf-8")
+    calendar = FixtureCalendar(path)
+    calendar.book("cal-1", at(23, 10), at(23, 11), event_id="e1", title="t", description="d")
+    calendar.book("cal-1", at(23, 10), at(23, 11), event_id="e1", title="t", description="d")
+    view = calendar.read(
+        "cal-1", at(20, 0), at(31, 0), marker="Disponibile", zone=TIRANE, opening=opening
+    )
+    assert view.busy == (Interval(at(23, 10), at(23, 11)),)
+    with pytest.raises(CalendarUnavailableError, match="unknown calendar"):
+        calendar.book("cal-2", at(23, 10), at(23, 11), event_id="e2", title="t", description="d")

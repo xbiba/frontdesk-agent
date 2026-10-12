@@ -46,6 +46,26 @@ class CalendarReader(Protocol):
     ) -> CalendarView: ...
 
 
+class CalendarWriter(Protocol):
+    def book(
+        self,
+        calendar_id: str,
+        start: datetime,
+        end: datetime,
+        *,
+        event_id: str,
+        title: str,
+        description: str,
+    ) -> None:
+        """Writes the appointment, once: the same event id never makes a second one. Raises
+        CalendarUnavailableError when it cannot say that the appointment exists."""
+        ...
+
+
+class Calendar(CalendarReader, CalendarWriter, Protocol):
+    """A doctor's calendar, read for free slots and written with appointments (M5)."""
+
+
 def opening_intervals(hours: Sequence[OpeningHours], day: date, zone: ZoneInfo) -> list[Interval]:
     """The clinic's opening hours on `day`, from the pack's structured hours."""
     weekday = day.weekday()
@@ -74,6 +94,7 @@ class FixtureCalendar:
 
     def __init__(self, path: Path) -> None:
         self._calendars: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        self.booked: dict[str, dict[str, Interval]] = {}  # calendar -> event id -> its time
 
     def read(
         self,
@@ -98,7 +119,23 @@ class FixtureCalendar:
             )
         ]
         busy = [_timed(item, zone) for item in entry.get("busy") or []]
+        busy += list(self.booked.get(calendar_id, {}).values())
         return CalendarView(_within(blocks, start, end), _within(busy, start, end))
+
+    def book(
+        self,
+        calendar_id: str,
+        start: datetime,
+        end: datetime,
+        *,
+        event_id: str,
+        title: str,
+        description: str,
+    ) -> None:
+        """Keeps the appointment in memory, as busy time for the next read."""
+        if calendar_id not in self._calendars:
+            raise CalendarUnavailableError("unknown calendar")
+        self.booked.setdefault(calendar_id, {})[event_id] = Interval(start, end)
 
 
 def _timed(item: dict[str, str], zone: ZoneInfo) -> Interval:
