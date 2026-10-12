@@ -113,13 +113,11 @@ def test_two_days_fill_the_last_place_with_the_next_slot_in_time() -> None:
     assert found == ["23 09:00-10:00", "23 10:00-11:00", "24 09:00-10:00"]
 
 
-def test_a_block_left_as_busy_still_counts() -> None:
-    # Reception forgot "Show as: free": freeBusy returns the block itself as busy time.
-    hours = block(23, 9, 11)
-    assert slots([hours], [Interval(hours.start, hours.end)]) == [
-        "23 09:00-10:00",
-        "23 10:00-11:00",
-    ]
+def test_an_appointment_equal_to_a_block_takes_it() -> None:
+    # The reader keeps the blocks' own events out of the busy time, so a busy interval equal to a
+    # block is an appointment that fills it (security review of 2026-10-12: no double booking).
+    hours = block(23, 9, 10)
+    assert slots([hours], [Interval(hours.start, hours.end)]) == []
 
 
 def test_slots_keep_local_hours_across_the_daylight_saving_change() -> None:

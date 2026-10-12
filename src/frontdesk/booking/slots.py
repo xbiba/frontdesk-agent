@@ -46,17 +46,11 @@ def free_slots(
     """Up to `limit` free slots between now + min_notice and now + horizon (by start).
 
     The first slot of each day comes first, for up to `limit` days; the places left take the next
-    slots in time order. A busy interval that equals a block is the block itself, left as busy in
-    the calendar ("Show as" not set to free), and is dropped.
+    slots in time order. Every busy interval counts, even one equal to a block: it may be an
+    appointment that fills the block. The reader keeps the blocks' own events out of the busy time.
     """
-    hours = [_utc(item) for item in blocks]
-    own = {(item.start, item.end) for item in hours}
-    windows = _merged(hours)
-    taken = [
-        (item.start - buffer, item.end + buffer)
-        for item in map(_utc, busy)
-        if (item.start, item.end) not in own
-    ]
+    windows = _merged([_utc(item) for item in blocks])
+    taken = [(item.start - buffer, item.end + buffer) for item in map(_utc, busy)]
     earliest, latest = now.astimezone(UTC) + min_notice, now.astimezone(UTC) + horizon
     candidates = [
         (start, start + duration)
