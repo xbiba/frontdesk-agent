@@ -14,6 +14,15 @@ class EmbeddingBackend(StrEnum):
     FASTEMBED = "fastembed"
 
 
+class CalendarBackend(StrEnum):
+    """Where the doctors' free slots are read (ADR-0003): nowhere, a YAML fixture for tests and
+    evaluations, or Google Calendar."""
+
+    NONE = "none"
+    FIXTURE = "fixture"
+    GOOGLE = "google"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="FRONTDESK_", extra="ignore")
 
@@ -31,6 +40,10 @@ class Settings(BaseSettings):
     # The vector side of retrieval keeps chunks at least this similar to the query (P47). 0 keeps
     # the nearest ones whatever their similarity; each embedder is tuned with its own value.
     min_retrieval_similarity: float = Field(default=0.0, ge=0.0, le=1.0)
+    calendar_backend: CalendarBackend = CalendarBackend.NONE
+    calendar_fixture: Path | None = None
+    # The service account the Mac impersonates with its ADC; unset on Cloud Run, which runs as it.
+    calendar_impersonate: str | None = None
     telemetry_capture_content: bool = False
     log_level: str = "INFO"
 

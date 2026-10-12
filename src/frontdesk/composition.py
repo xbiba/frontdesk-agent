@@ -21,19 +21,23 @@ from frontdesk.agent.demo_models import demo_classifier_model, demo_responder_mo
 from frontdesk.agent.prompts import read_prompt
 from frontdesk.agent.responder import build_responder
 from frontdesk.agent.tools import ToolServices, build_toolset
+from frontdesk.booking.calendar import CalendarReader, FixtureCalendar
+from frontdesk.booking.google_calendar import SCOPE as CALENDAR_SCOPE
+from frontdesk.booking.google_calendar import GoogleCalendar, calendar_http_client
 from frontdesk.conversation.turn import TurnRuntime
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
 from frontdesk.knowledge.embedders import Embedder, build_embedder
 from frontdesk.knowledge.facts import load_catalog
 from frontdesk.knowledge.versions import check_embedder
 from frontdesk.model_gateway.factory import build_live_model, live_model_settings
+from frontdesk.model_gateway.google_tokens import google_token_source
 from frontdesk.model_gateway.routes import (
     CHAT_PROVIDERS,
     DataClass,
     UnapprovedRouteError,
     require_route,
 )
-from frontdesk.settings import Settings
+from frontdesk.settings import CalendarBackend, Settings
 from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.loader import load_pack
 from frontdesk.tenancy.pack import BusinessPack
@@ -164,4 +168,19 @@ def build_turn_runtime(
         capture_content=deployment.settings.telemetry_capture_content,
         orders=OrderStore(tuple(pack.orders)) if pack.features.order_status else None,
         now=deployment.now,
+        calendar=build_calendar(deployment.settings) if pack.integrations.calendar else None,
     )
+
+
+def build_calendar(settings: Settings) -> CalendarReader | None:
+    """The reader of the doctors' calendars (ADR-0003). Google's credentials are found at the
+    first read, so a deployment builds without them and a read without them is a calendar that
+    cannot be read: the bot then says how to book."""
+    if settings.calendar_backend is CalendarBackend.FIXTURE:
+        if settings.calendar_fixture is None:
+            raise ValueError("FRONTDESK_CALENDAR_FIXTURE is not set for the fixture calendar")
+        return FixtureCalendar(settings.calendar_fixture)
+    if settings.calendar_backend is CalendarBackend.GOOGLE:
+        token = google_token_source([CALENDAR_SCOPE], impersonate=settings.calendar_impersonate)
+        return GoogleCalendar(token, calendar_http_client())
+    return None

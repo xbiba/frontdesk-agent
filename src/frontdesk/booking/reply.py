@@ -13,9 +13,9 @@ from typing import Final
 from zoneinfo import ZoneInfo
 
 from frontdesk.agent.vocab import ClarifyField
-from frontdesk.booking.calendar import CalendarReader, opening_intervals
+from frontdesk.booking.calendar import CalendarReader, CalendarView, opening_intervals
 from frontdesk.booking.slots import Interval, Slot, free_slots
-from frontdesk.tenancy.pack import BusinessPack, Language
+from frontdesk.tenancy.pack import BusinessPack, CalendarIntegration, Language
 
 _LEAD: Final[dict[str, str]] = {
     "sq": "Oraret e para të lira me {doctor} ({service}, {minutes} minuta):",
@@ -103,35 +103,51 @@ def find_slots(
     reader: CalendarReader, pack: BusinessPack, doctor_id: str, service_id: str, now: datetime
 ) -> tuple[Slot, ...]:
     """The free slots of the doctor's calendar for the service. Raises CalendarUnavailableError."""
-    calendar = pack.integrations.calendar
-    if calendar is None:
-        raise ValueError(f"business '{pack.id}' has no calendar")
+    return slots_in(read_calendar(reader, pack, doctor_id, now), pack, service_id, now)
+
+
+def read_calendar(
+    reader: CalendarReader, pack: BusinessPack, doctor_id: str, now: datetime
+) -> CalendarView:
+    """The doctor's blocks and busy time from now to the horizon. Raises CalendarUnavailableError."""
+    calendar = _calendar(pack)
     zone = ZoneInfo(pack.timezone)
-    horizon = timedelta(days=calendar.horizon_days)
-    service = next(item for item in pack.services if item.id == service_id)
 
     def opening(day: date) -> list[Interval]:
         return opening_intervals(pack.location.opening_hours, day, zone)
 
-    view = reader.read(
+    return reader.read(
         calendar.calendars[doctor_id],
         now,
-        now + horizon,
+        now + timedelta(days=calendar.horizon_days),
         marker=calendar.availability_marker,
         zone=zone,
         opening=opening,
     )
+
+
+def slots_in(
+    view: CalendarView, pack: BusinessPack, service_id: str, now: datetime
+) -> tuple[Slot, ...]:
+    calendar = _calendar(pack)
+    service = next(item for item in pack.services if item.id == service_id)
     return free_slots(
         view.blocks,
         view.busy,
         duration=timedelta(minutes=service.duration_minutes),
         now=now,
-        horizon=horizon,
+        horizon=timedelta(days=calendar.horizon_days),
         min_notice=timedelta(minutes=calendar.min_notice_minutes),
         buffer=timedelta(minutes=calendar.buffer_minutes),
-        zone=zone,
+        zone=ZoneInfo(pack.timezone),
         limit=calendar.max_options,
     )
+
+
+def _calendar(pack: BusinessPack) -> CalendarIntegration:
+    if pack.integrations.calendar is None:
+        raise ValueError(f"business '{pack.id}' has no calendar")
+    return pack.integrations.calendar
 
 
 def compose_slots(

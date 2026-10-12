@@ -44,3 +44,20 @@ def test_a_named_account_is_impersonated(monkeypatch: pytest.MonkeyPatch) -> Non
         "target_scopes": ["scope"],
     }
     assert source.refreshes == 0
+
+
+def test_the_credentials_are_found_at_the_first_token_not_before(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+    credentials = FakeCredentials()
+
+    def default(scopes: object) -> tuple[FakeCredentials, str]:
+        calls.append(scopes)
+        return credentials, "p"
+
+    monkeypatch.setattr(google_tokens.google.auth, "default", default)
+    token = google_tokens.google_token_source(["scope"], impersonate=None)
+    assert calls == []
+    assert (token(), token()) == ("token-1", "token-1")
+    assert calls == [["scope"]]
