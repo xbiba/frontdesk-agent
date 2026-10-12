@@ -518,6 +518,19 @@ def test_asking_when_a_bookable_doctor_is_in_asks_for_the_free_slots(intent: str
     assert result.doctor_ids == ("dr-arben-demo",)
 
 
+def test_asking_when_a_bookable_service_is_offered_asks_for_the_free_slots() -> None:
+    result = _validate(
+        context={**CLINIC, "bookable_services": frozenset({"physiotherapy"})},
+        category="administrative",
+        intent="general_question",
+        service_ids=["physiotherapy"],
+        general_question="When is physiotherapy available?",
+        message="In che giorni posso fare fisioterapia?",
+    )
+    assert isinstance(result, ValidatedFields)
+    assert result.intent is Intent.BOOKING
+
+
 def test_a_doctor_question_that_does_not_ask_when_stays_doctor_info() -> None:
     result = _validate(
         category="administrative",

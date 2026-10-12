@@ -190,10 +190,12 @@ def check_reply(
     promise = promise_phrase(result.text)
     if promise is not None:
         failures.append(f"promise: {promise}")
-    # A handoff tells the person how to reach someone; it never promises a call (ADR-0006).
-    if result.outcome is TurnOutcome.HANDOFF and not result.text.endswith(
-        texts[FixedTextKey.HANDOFF]
-    ):
+    # A handoff tells the person how to reach someone; it never promises a call (ADR-0006). A
+    # booking that reception takes ends with the pack's next step, which must give the contact too.
+    endings = tuple(
+        text for key in (FixedTextKey.HANDOFF, FixedTextKey.NEXT_STEP) if (text := texts.get(key))
+    )
+    if result.outcome is TurnOutcome.HANDOFF and not result.text.endswith(endings):
         failures.append("handoff without contact")
     failure = pipeline_failure(result.trace)
     if failure is not None and failure != expected_rule:
