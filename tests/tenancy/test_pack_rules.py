@@ -317,6 +317,17 @@ def test_bookable_doctors_are_those_with_a_calendar_and_their_bookable_services(
     }
 
 
+def test_booking_from_the_chat_needs_the_privacy_text_in_every_language(
+    businesses_dir: Path, tmp_path: Path
+) -> None:
+    pack_dir = copy_pack(businesses_dir, CLINIC, tmp_path)
+    edit_yaml(pack_dir / "business.yaml", _calendar_with(chat_booking=True))
+    with pytest.raises(
+        PackError, match="chat booking needs the fixed text 'booking_privacy' in 'sq'"
+    ):
+        load_pack(pack_dir)
+
+
 def test_a_calendar_for_a_doctor_with_no_bookable_service_is_refused(
     businesses_dir: Path, tmp_path: Path
 ) -> None:
