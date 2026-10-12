@@ -433,3 +433,31 @@ async def test_a_search_reads_the_conversation_s_language_first(base: TurnRuntim
     (found,) = script.tool_results()
     assert found  # the demo clinic's documents
     assert len(found) <= 2500 + 400  # the passages, with their titles
+
+
+async def test_a_practical_answer_to_a_message_with_symptoms_gets_the_notice(
+    base: TurnRuntime,
+) -> None:
+    script = Script([_final("Apriamo alle 09:00.", "notice")])
+    reply = await Chat(base, script).say("Ho la febbre, a che ora aprite domani?")
+    texts = base.pack.fixed_texts["it"]
+    assert reply.text == (
+        f"Apriamo alle 09:00.\n\n{texts[FixedTextKey.CLINICAL]}\n\n{texts[FixedTextKey.HANDOFF]}"  # type: ignore[index]
+    )
+    assert reply.trace.category is not None
+    assert reply.trace.category.value == "clinical"
+
+
+async def test_every_booking_step_names_the_calendar(base: TurnRuntime) -> None:
+    script = Script(
+        [
+            [("free_times", {})],
+            _final(f"{LIST}\nQuale preferisce?"),
+            [("hold_time", {"number": 1})],
+            _final("Nome, cognome e telefono?"),
+        ]
+    )
+    chat = Chat(base, script)
+    await chat.say("Vorrei prenotare")
+    held = await chat.say("il primo")
+    assert held.trace.sources == ("calendar:dr-arben-demo",)

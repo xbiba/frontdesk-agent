@@ -312,6 +312,11 @@ async def _reception(
         return _handoff(pack, language, FixedTextKey.EMERGENCY, _as(trace, Category.EMERGENCY))
     if reply.kind is ReplyKind.CLINICAL:
         return _handoff(pack, language, FixedTextKey.CLINICAL, _as(trace, Category.CLINICAL))
+    if reply.kind is ReplyKind.NOTICE:
+        # A practical answer to a message that describes symptoms: then the medical notice and how to
+        # reach a person, as for the pipeline's mixed messages (ADR-0006).
+        noticed = _as(trace, Category.CLINICAL)
+        return _handoff(pack, language, FixedTextKey.CLINICAL, noticed, prefix=reply.text.strip())
     texts = pack.fixed_texts[language]
     # The summary and the confirmation reach the patient as code wrote them: a number checked
     # against the facts could still be the wrong one ("30" is a duration somewhere).

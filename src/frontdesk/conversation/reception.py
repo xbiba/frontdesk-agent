@@ -63,6 +63,7 @@ class ReplyKind(StrEnum):
     ANSWER = "answer"
     CLARIFY = "clarify"  # it cannot answer before the patient says what they mean
     HANDOFF = "handoff"
+    NOTICE = "notice"  # an answer to the practical part of a message that describes symptoms
     EMERGENCY = "emergency"
     CLINICAL = "clinical"
 
@@ -72,8 +73,8 @@ class ReceptionReply(BaseModel):
     kind: ReplyKind = Field(
         description="greeting (only a greeting or small talk), answer (you answered, showed "
         "times or asked for the next booking step), clarify (you cannot answer before they say what "
-        "they mean), handoff (you send them to reception), clinical (they ask for medical advice) or "
-        "emergency"
+        "they mean), handoff (you send them to reception), notice (you answered the practical part of "
+        "a message that describes symptoms), clinical (they ask for medical advice) or emergency"
     )
 
 
@@ -364,6 +365,7 @@ def _day(desk: Desk, text: str | None) -> date | None:
 
 def _hold_time(desk: Desk, number: int) -> str:
     step = desk.booking
+    _calendar_source(desk, step)
     if step is None or not step.offered:
         return desk.said("No times were shown yet: call free_times first.")
     if not 1 <= number <= len(step.offered):
@@ -381,6 +383,7 @@ def _hold_time(desk: Desk, number: int) -> str:
 
 def _prepare_booking(desk: Desk, name: str, phone: str) -> str:
     step = desk.booking
+    _calendar_source(desk, step)
     if step is None or step.hold_id is None:
         return desk.said("No time is held: call hold_time first.")
     code = country_code(desk.pack)
@@ -416,6 +419,7 @@ def _prepare_booking(desk: Desk, name: str, phone: str) -> str:
 
 def _confirm_booking(desk: Desk) -> str:
     step = desk.booking
+    _calendar_source(desk, step)
     if step is None or step.stage is not BookingStage.CONFIRM:
         return desk.said("There is no summary to confirm: call prepare_booking first.")
     if step.summary_turn != desk.turn - 1:
@@ -431,7 +435,13 @@ def _confirm_booking(desk: Desk) -> str:
 
 
 def _cancel_booking(desk: Desk) -> str:
+    _calendar_source(desk, desk.booking)
     if desk.booking is not None:
         cancel(desk.context(), desk.booking)
         desk.booking = None
     return desk.said("Nothing is booked; the time is free again.")
+
+
+def _calendar_source(desk: Desk, step: BookingStep | None) -> None:
+    if step is not None:
+        desk.sources.append(f"calendar:{step.doctor_id}")
