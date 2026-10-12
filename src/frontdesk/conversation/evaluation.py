@@ -15,10 +15,11 @@ import json
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
-from datetime import date
+from datetime import date, datetime, time
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -245,11 +246,13 @@ def check_conversation(
 
 
 def case_runtime(runtime: TurnRuntime, case: TurnCase) -> TurnRuntime:
-    """The runtime a case runs on: on the case's day when it states one."""
+    """The runtime a case runs on: when it states a day, that day at 08:00 in the business's time
+    zone, for the dated documents and for the free slots of a calendar."""
     day = case.today
     if day is None:
         return runtime
-    return replace(runtime, today=lambda: day)
+    morning = datetime.combine(day, time(8), tzinfo=ZoneInfo(runtime.pack.timezone))
+    return replace(runtime, today=lambda: day, now=lambda: morning)
 
 
 def initial_state(case: TurnCase) -> ConversationState:

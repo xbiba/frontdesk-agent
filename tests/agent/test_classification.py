@@ -502,6 +502,22 @@ def test_a_doctor_question_that_asks_when_is_looked_up_in_the_documents(message:
     assert result.doctor_ids == ("dr-arben-demo",)
 
 
+@pytest.mark.parametrize("intent", ["doctor_info", "general_question"])
+def test_asking_when_a_bookable_doctor_is_in_asks_for_the_free_slots(intent: str) -> None:
+    # M4: the free slots of a doctor whose calendar can be read answer "when is the doctor in?".
+    result = _validate(
+        context={**CLINIC, "bookable": frozenset({"dr-arben-demo"})},
+        category="administrative",
+        intent=intent,
+        doctor_ids=["dr-arben-demo"],
+        general_question="When is the doctor in?" if intent == "general_question" else None,
+        message="Quando è in clinica il dottor Demo?",
+    )
+    assert isinstance(result, ValidatedFields)
+    assert (result.intent, result.general_question) == (Intent.BOOKING, None)
+    assert result.doctor_ids == ("dr-arben-demo",)
+
+
 def test_a_doctor_question_that_does_not_ask_when_stays_doctor_info() -> None:
     result = _validate(
         category="administrative",

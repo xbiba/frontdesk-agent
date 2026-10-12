@@ -16,10 +16,11 @@ Google Calendar, shared with a service account. Slots are computed by code; Post
 
 Amendment of 2026-10-12, from the bookings design approved that day:
 - **One calendar per doctor.** It holds the appointments and the doctor's hours. The hours are events titled with the pack's marker word, "Disponibile" by default, and reception draws them every month. Two calendars per doctor were judged confusing for reception.
-- **Two reads only:**
-  - the events whose text holds the marker (`events.list` with `q` and `fields` limited to start, end, title, transparency and status);
-  - the busy intervals (`freeBusy`).
-  Other titles are dropped as soon as they arrive, and appointment notes are never requested. The calendar is shared with "See all event details", raised to "Make changes to events" when requests arrive.
+- **Two listings only** (security review of 2026-10-12):
+  - **Blocks.** The events whose text holds the marker, with id, start, end, title, status, type and `organizer(self)`. A block is an ordinary event organised by the calendar itself, so an invitation cannot open hours. Any other title is dropped as soon as it arrives.
+  - **Busy time.** Every other event, with id, start, end, status and type only. No title and no notes are requested. Every event that is not a block is busy, whatever its "Show as".
+  The calendar is shared with "See all event details", raised to "Make changes to events" when requests arrive.
+- **The booking reply.** It is written by code: the first free slots, then the pack's next step, which says how to book. When the calendar cannot be read, or nothing is free, the reply says how to book and never invents a time.
 - **Confirmation.** Reception confirms by default; the pack may choose immediate booking instead.
 
 ## Consequences

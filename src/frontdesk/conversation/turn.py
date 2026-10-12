@@ -39,6 +39,8 @@ from frontdesk.agent.responder import (
     render_turn_prompt,
 )
 from frontdesk.agent.vocab import ADMINISTRATIVE_INTENTS, Category, ClarifyField, Intent
+from frontdesk.booking.calendar import CalendarReader, CalendarUnavailableError
+from frontdesk.booking.reply import booking_target, compose_slots, find_slots
 from frontdesk.conversation.compose import (
     FACT_INTENTS,
     clarify_question,
@@ -161,6 +163,7 @@ class TurnRuntime:
     orders: OrderStore | None = None
     now: Callable[[], datetime] = _utc_now
     keep_drafts: bool = False  # the live evaluation keeps refused answers for its reviewer
+    calendar: CalendarReader | None = None  # reads the bookable doctors' free slots (M4)
 
 
 async def handle_message(
@@ -266,6 +269,7 @@ async def _classify(
         profile=runtime.pack.profile,
         features=runtime.pack.features,
         language=language,
+        bookable=frozenset(_bookable(runtime)),
     )
 
 
@@ -284,8 +288,10 @@ async def _route(
     if fields.category is Category.EMERGENCY:
         return _handoff(pack, language, FixedTextKey.EMERGENCY, trace)
     notice = _NOTICES.get(fields.category)
+    if fields.intent is Intent.BOOKING and notice is None:
+        return await _booking(fields, state, catalog, runtime, trace)
     if fields.intent in {Intent.HUMAN, Intent.BOOKING}:
-        # Bookings arrive with M6; until then reception takes them. A clinical notice stays.
+        # A booking with symptoms goes to reception with the clinical notice.
         return _handoff(pack, language, notice or FixedTextKey.HANDOFF, trace)
     if notice is None:
         if fields.category is Category.ADMINISTRATIVE and fields.intent in _SMALL_TALK:
@@ -299,6 +305,65 @@ async def _route(
     # A question that was not shown to the person is not a pending one.
     trace = replace(reply.trace, clarify=None)
     return _handoff(pack, language, notice, trace, prefix=prefix, draft=reply.draft)
+
+
+def _bookable(runtime: TurnRuntime) -> dict[str, tuple[str, ...]]:
+    """The doctors whose free slots this runtime can read, with their bookable services."""
+    return runtime.pack.bookable_doctors() if runtime.calendar is not None else {}
+
+
+async def _booking(
+    fields: ValidatedFields,
+    state: ConversationState,
+    catalog: Catalog,
+    runtime: TurnRuntime,
+    trace: TurnTrace,
+) -> TurnResult:
+    """The first free slots of the doctor's calendar, written by code (M4); otherwise how to book."""
+    pack, language = runtime.pack, fields.language
+    bookable = _bookable(runtime)
+    doctors = fields.doctor_ids or state.topic_doctor_ids
+    target = booking_target(bookable, doctors, fields.service_ids) if bookable else None
+    if isinstance(target, ClarifyField):
+        return _clarify(catalog, language, target, trace)
+    if target is None or runtime.calendar is None:
+        return _how_to_book(pack, language, trace)
+    doctor_id, service_id = target
+    read = replace(trace, sources=(f"calendar:{doctor_id}",))
+    try:
+        slots = await asyncio.to_thread(
+            find_slots, runtime.calendar, pack, doctor_id, service_id, runtime.now()
+        )
+    except CalendarUnavailableError as error:
+        log_event(logger, "calendar.unavailable", business_id=pack.id, reason=str(error))
+        return _how_to_book(pack, language, replace(read, rejection="calendar_unavailable"))
+    if not slots:
+        texts = pack.fixed_texts[language]
+        none = texts.get(FixedTextKey.NO_SLOTS) or texts[FixedTextKey.NO_INFORMATION]
+        return _how_to_book(pack, language, read, prefix=none)
+    minutes = next(item.duration_minutes for item in pack.services if item.id == service_id)
+    text = compose_slots(
+        slots,
+        doctor=catalog.doctors.get(doctor_id, doctor_id),
+        service=catalog.services.get(service_id, {}).get(language, service_id),
+        minutes=minutes,
+        language=language,
+    )
+    step = _next_step(pack, fields, state)
+    return TurnResult(f"{text}\n\n{step}" if step else text, TurnOutcome.REPLIED, language, read)
+
+
+def _how_to_book(
+    pack: BusinessPack, language: Language, trace: TurnTrace, *, prefix: str | None = None
+) -> TurnResult:
+    """Reception books it: the pack's next step, which says how and gives the contact, or else the
+    contact alone (the live chat of 2026-10-12: "to talk to a person" read oddly for a booking)."""
+    step = pack.fixed_texts[language].get(FixedTextKey.NEXT_STEP)
+    if step is None:
+        return _handoff(pack, language, FixedTextKey.HANDOFF, trace, prefix=prefix)
+    return TurnResult(
+        "\n\n".join([*([prefix] if prefix else []), step]), TurnOutcome.HANDOFF, language, trace
+    )
 
 
 async def _answer(
