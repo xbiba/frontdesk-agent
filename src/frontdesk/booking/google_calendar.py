@@ -30,8 +30,14 @@ from frontdesk.model_gateway.google_tokens import TokenSource
 
 API: Final = "https://www.googleapis.com/calendar/v3"
 SCOPE: Final = "https://www.googleapis.com/auth/calendar.readonly"
-BLOCK_FIELDS: Final = "items(id,start,end,summary,status,eventType,organizer(self)),nextPageToken"
-BUSY_FIELDS: Final = "items(id,start,end,status,eventType),nextPageToken"
+WRITE_SCOPE: Final = "https://www.googleapis.com/auth/calendar.events"  # M5: appointments
+BLOCK_FIELDS: Final = (
+    "kind,items(id,start,end,summary,status,eventType,organizer(self)),nextPageToken"
+)
+BUSY_FIELDS: Final = "kind,items(id,start,end,status,eventType),nextPageToken"
+# A listing must say what it is: an answer without it (an error page, an empty body) would read as
+# a calendar with no appointments and offer taken times (security review of 2026-10-12).
+_LISTING: Final = "calendar#events"
 MAX_PAGES: Final = 10
 TIMEOUT_SECONDS: Final = 10.0
 _NOT_BUSY: Final = frozenset({"workingLocation"})  # where someone works, not an appointment
@@ -61,11 +67,8 @@ class GoogleCalendar:
         zone: ZoneInfo,
         opening: Opening,
     ) -> CalendarView:
-        try:
-            headers = {"Authorization": f"Bearer {self._token()}"}
-        except Exception as error:  # any credential failure; only its type is kept
-            raise CalendarUnavailableError(f"credentials: {type(error).__name__}") from None
-        url = f"{API}/calendars/{quote(calendar_id, safe='')}/events"
+        headers = self._headers()
+        url = _events_url(calendar_id)
         window = {
             "singleEvents": "true",
             "timeMin": start.isoformat(),
@@ -101,11 +104,61 @@ class GoogleCalendar:
         for _ in range(MAX_PAGES):
             token = {"pageToken": page} if page else {}
             data = self._send(url, headers, params={**params, **token})
+            if data.get("kind") != _LISTING:
+                raise CalendarUnavailableError("malformed listing")
             items += data.get("items") or []
             page = data.get("nextPageToken")
             if not page:
                 return items
         raise CalendarUnavailableError("too many pages of events")
+
+    def book(
+        self,
+        calendar_id: str,
+        start: datetime,
+        end: datetime,
+        *,
+        event_id: str,
+        title: str,
+        description: str,
+    ) -> None:
+        """Inserts the appointment with its own id: a repeated request meets that id (409) and is
+        the same appointment. An answer that is lost or a server error leaves the outcome unknown,
+        so the event's id is read back before anything is said (product spec §8)."""
+        headers = self._headers()
+        url = _events_url(calendar_id)
+        body = {
+            "id": event_id,
+            "summary": title,
+            "description": description,
+            "start": {"dateTime": start.isoformat()},
+            "end": {"dateTime": end.isoformat()},
+            "extendedProperties": {"private": {"frontdesk": "booking"}},
+        }
+        try:
+            response = self._client.post(url, headers=headers, json=body, params={"fields": "id"})
+        except httpx2.HTTPError:
+            self._confirm_written(url, event_id, headers)
+            return
+        if response.status_code == 409 or response.status_code >= 500:
+            # 409: the id exists, but it may be an appointment since cancelled; 5xx: unknown.
+            self._confirm_written(url, event_id, headers)
+        elif response.status_code >= 400:
+            raise CalendarUnavailableError(f"status {response.status_code}")
+
+    def _confirm_written(self, url: str, event_id: str, headers: dict[str, str]) -> None:
+        try:
+            data = self._send(f"{url}/{event_id}", headers, params={"fields": "id,status"})
+        except CalendarUnavailableError:
+            raise CalendarUnavailableError("the appointment may not be written") from None
+        if data.get("status") == "cancelled":
+            raise CalendarUnavailableError("the appointment may not be written")
+
+    def _headers(self) -> dict[str, str]:
+        try:
+            return {"Authorization": f"Bearer {self._token()}"}
+        except Exception as error:  # any credential failure; only its type is kept
+            raise CalendarUnavailableError(f"credentials: {type(error).__name__}") from None
 
     def _send(self, url: str, headers: dict[str, str], **kwargs: Any) -> dict[str, Any]:
         try:
@@ -121,6 +174,10 @@ class GoogleCalendar:
         if not isinstance(data, dict):
             raise CalendarUnavailableError("malformed response")
         return data
+
+
+def _events_url(calendar_id: str) -> str:
+    return f"{API}/calendars/{quote(calendar_id, safe='')}/events"
 
 
 def _is_block(item: dict[str, Any], marker: str) -> bool:

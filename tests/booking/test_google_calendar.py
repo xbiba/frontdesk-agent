@@ -1,6 +1,7 @@
 """Google Calendar as the reader: two listings, blocks organised by the calendar, no event content
 kept or logged (ADR-0003, amended for M4; security review of 2026-10-12)."""
 
+import json
 import logging
 from collections.abc import Callable
 from datetime import date, datetime
@@ -42,7 +43,11 @@ def at(day: int, hour: int) -> datetime:
 
 
 def _page(*items: dict[str, Any], page: str | None = None) -> Page:
-    return {"items": list(items), **({"nextPageToken": page} if page else {})}
+    return {
+        "kind": "calendar#events",
+        "items": list(items),
+        **({"nextPageToken": page} if page else {}),
+    }
 
 
 def _timed(event_id: str, day: int, start: int, end: int, **extra: Any) -> dict[str, Any]:
@@ -201,3 +206,91 @@ def test_the_client_ignores_proxies_and_verifies_with_certifi() -> None:
     client = calendar_http_client()
     assert client.trust_env is False
     assert client.timeout.read == TIMEOUT_SECONDS
+
+
+# --- Writing an appointment (M5) -------------------------------------------------------------------
+
+
+def _writer(handler: Handler) -> GoogleCalendar:
+    return GoogleCalendar(lambda: "tok", httpx2.Client(transport=httpx2.MockTransport(handler)))
+
+
+def _book(writer: GoogleCalendar) -> None:
+    writer.book(
+        "cal-1",
+        at(23, 10),
+        at(23, 11),
+        event_id="abc123",
+        title="Trattamento osteopatico — Mario Rossi",
+        description="Telefono: +355691234567",
+    )
+
+
+def test_an_appointment_is_one_event_with_its_own_id() -> None:
+    seen: list[httpx2.Request] = []
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        return httpx2.Response(200, json={"id": "abc123"})
+
+    _book(_writer(answer))
+    (insert,) = seen
+    assert (insert.method, insert.url.path) == ("POST", "/calendar/v3/calendars/cal-1/events")
+    assert json.loads(insert.content) == {
+        "id": "abc123",
+        "summary": "Trattamento osteopatico — Mario Rossi",
+        "description": "Telefono: +355691234567",
+        "start": {"dateTime": at(23, 10).isoformat()},
+        "end": {"dateTime": at(23, 11).isoformat()},
+        "extendedProperties": {"private": {"frontdesk": "booking"}},
+    }
+
+
+@pytest.mark.parametrize(("status", "written"), [("confirmed", True), ("cancelled", False)])
+def test_a_repeated_request_meets_its_own_id_and_reads_it_back(status: str, written: bool) -> None:
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "POST":
+            return httpx2.Response(409, json={"error": {}})
+        return httpx2.Response(200, json={"id": "abc123", "status": status})
+
+    if written:
+        _book(_writer(answer))
+    else:  # the id is ours, but reception has cancelled that appointment since
+        with pytest.raises(CalendarUnavailableError, match="may not be written"):
+            _book(_writer(answer))
+
+
+@pytest.mark.parametrize(
+    "body", [{}, {"items": []}, {"kind": "calendar#calendarList", "items": []}]
+)
+def test_a_listing_that_does_not_say_what_it_is_cannot_be_read(body: dict[str, Any]) -> None:
+    # An empty or foreign answer would read as no appointments, and offer taken times.
+    with pytest.raises(CalendarUnavailableError, match="malformed listing"):
+        _read(_writer(lambda _: httpx2.Response(200, json=body)))
+
+
+@pytest.mark.parametrize("found", [200, 404])
+def test_a_lost_answer_is_checked_by_the_event_id(found: int) -> None:
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "POST":
+            raise httpx2.ReadTimeout("lost", request=request)
+        assert request.url.path.endswith("/events/abc123")
+        return httpx2.Response(found, json={"id": "abc123", "status": "confirmed"})
+
+    if found == 200:
+        _book(_writer(answer))
+    else:
+        with pytest.raises(CalendarUnavailableError, match="may not be written"):
+            _book(_writer(answer))
+
+
+def test_a_server_error_is_checked_and_a_refusal_raises() -> None:
+    def server_error(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "POST":
+            return httpx2.Response(503)
+        return httpx2.Response(200, json={"id": "abc123", "status": "cancelled"})
+
+    with pytest.raises(CalendarUnavailableError, match="may not be written"):
+        _book(_writer(server_error))
+    with pytest.raises(CalendarUnavailableError, match="status 403"):
+        _book(_writer(lambda _: httpx2.Response(403, json={"error": {}})))
