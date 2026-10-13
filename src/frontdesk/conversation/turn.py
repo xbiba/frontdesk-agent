@@ -12,10 +12,9 @@ import asyncio
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Final
-from zoneinfo import ZoneInfo
 
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import AgentRunError
@@ -27,7 +26,6 @@ from frontdesk.agent.classification import (
     POSTAL_CODE,
     ClassifierOutput,
     Rejection,
-    SlotScope,
     ValidatedFields,
     validate_classification,
 )
@@ -41,24 +39,20 @@ from frontdesk.agent.responder import (
     render_turn_prompt,
 )
 from frontdesk.agent.vocab import ADMINISTRATIVE_INTENTS, Category, ClarifyField, Intent
-from frontdesk.agent.voice import VoiceDeps, rewrite
 from frontdesk.booking.calendar import CalendarUnavailableError
-from frontdesk.booking.reply import SlotWish, booking_target, compose_slots, find_slots
+from frontdesk.booking.reply import booking_target, compose_slots, find_slots
 from frontdesk.booking.scheduler import Scheduler
-from frontdesk.conversation.booking_turn import BookingContext, StepReply
-from frontdesk.conversation.booking_turn import answer as booking_answer
-from frontdesk.conversation.booking_turn import offer as booking_offer
-from frontdesk.conversation.booking_turn import pick as booking_pick
 from frontdesk.conversation.compose import (
     FACT_INTENTS,
     clarify_question,
     compose_facts,
     unanswered,
 )
+from frontdesk.conversation.desk import Desk
 from frontdesk.conversation.preload import document_evidence, fact_evidence
 from frontdesk.conversation.reception import (
     RECEPTION_LIMITS,
-    Desk,
+    SENT_BACK,
     ReceptionReply,
     ReplyKind,
     history_messages,
@@ -91,8 +85,8 @@ _NOTICES: Final = {
     Category.UNCERTAIN: FixedTextKey.HANDOFF,
 }
 _SMALL_TALK: Final = frozenset({Intent.GREETING, Intent.OTHER})
-_PLAIN_HANDOFFS: Final = frozenset({FixedTextKey.HANDOFF, FixedTextKey.NO_INFORMATION})
-_FAILED_RULES: Final = frozenset({"timeout", "error", "too_long"})
+# The part of a turn's time the reception agent may take: the rest answers when it runs out.
+RECEPTION_SHARE: Final = 0.8
 # The clarifying questions each profile's responder prompt offers (agents/<profile>/prompts/
 # responder.md); the shop's prompt has no clarify action. A test pins this table to the prompts.
 RESPONDER_CLARIFY_FIELDS: Final[dict[Profile, frozenset[ClarifyField]]] = {
@@ -106,15 +100,6 @@ class TurnOutcome(StrEnum):
     ASKED = "asked"
     FIXED = "fixed"
     HANDOFF = "handoff"
-
-
-class Rewrite(StrEnum):
-    """Whether the voice may rewrite a reply: never (fixed texts, document answers, bookings), its
-    words around no fact (a greeting, a handoff, a question), or its words around facts."""
-
-    NONE = "none"
-    WORDS = "words"
-    FACTS = "facts"
 
 
 @dataclass(frozen=True)
@@ -141,7 +126,6 @@ class TurnTrace:
     rejection: str | None = None
     clarify: ClarifyField | None = None
     booking: BookingStep | None = None  # a booking under way (M5); metadata only
-    voice: str | None = None  # "rewritten", "failed", or why the code's text was kept
 
 
 @dataclass(frozen=True)
@@ -172,8 +156,6 @@ class TurnResult:
     language: Language
     trace: TurnTrace
     draft: RejectedDraft | None = None
-    rewrite: Rewrite = Rewrite.NONE
-    code_text: str | None = None  # what code wrote, when the voice rewrote it
 
 
 def _utc_now() -> datetime:
@@ -201,8 +183,6 @@ class TurnRuntime:
     now: Callable[[], datetime] = _utc_now
     keep_drafts: bool = False  # the live evaluation keeps refused answers for its reviewer
     scheduler: Scheduler | None = None  # the bookable doctors' free slots and bookings (M4, M5)
-    voice: Agent[VoiceDeps, str] | None = None  # rewrites what code wrote; None: code's words
-    voice_prompt_version: str | None = None
     # The reception agent leads the conversation when set (FRONTDESK_CONVERSATION=agent).
     reception: Agent[Desk, ReceptionReply] | None = None
     reception_prompt_version: str | None = None
@@ -248,42 +228,9 @@ async def _run_turn(text: str, state: ConversationState, runtime: TurnRuntime) -
     except Exception as error:  # any failure becomes a handoff; only its type is logged
         log_event(logger, "turn.failed", business_id=pack.id, reason=type(error).__name__)
         result = _handoff(pack, language, FixedTextKey.HANDOFF, TurnTrace(rule="error"))
-    result = await _voiced(text.strip(), state, result, runtime)
     if state.turns == 0:
-        result = _with_disclosure(pack, language, result)
+        result = _with_disclosure(pack, result.language, result)
     return result
-
-
-async def _voiced(
-    message: str, state: ConversationState, result: TurnResult, runtime: TurnRuntime
-) -> TurnResult:
-    """The reply in the voice's words, when code wrote it and the rewrite keeps its facts; the
-    code's text otherwise."""
-    if result.rewrite is Rewrite.NONE or runtime.voice is None:
-        return result
-    pack, language = runtime.pack, result.language
-    catalog = await asyncio.to_thread(_load_catalog, runtime)
-    names = [] if catalog is None else _names(catalog, language)
-    deps = VoiceDeps(
-        business_name=pack.name,
-        language=language,
-        style=_fixed_text(pack, language, FixedTextKey.GREETING),
-        draft=result.text,
-        previous_reply=state.last_reply,
-    )
-    voiced, status = await rewrite(
-        runtime.voice, message, deps, names=names, facts=result.rewrite is Rewrite.FACTS
-    )
-    trace = replace(result.trace, voice=status)
-    if voiced is None:
-        return replace(result, trace=trace)
-    return replace(result, text=voiced, code_text=result.text, trace=trace)
-
-
-def _names(catalog: Catalog, language: Language) -> list[str]:
-    """The doctors and the services, as a reply in `language` writes them."""
-    services = [names.get(language) or "" for names in catalog.services.values()]
-    return [name for name in (*catalog.doctors.values(), *services) if name]
 
 
 async def _decide(
@@ -310,11 +257,6 @@ async def _decide(
             trace = TurnTrace(rule=f"personal_data:{rule.rule}")
             return _fixed(pack, language, FixedTextKey.PERSONAL_DATA, trace)
         return await _reception(stripped, language, state, runtime)
-    if state.booking is not None and runtime.scheduler is not None:
-        # Ahead of the personal-data rule: here a name and a phone number are what was asked for.
-        step = await _booking_step(stripped, language, state, state.booking, runtime)
-        if step is not None:
-            return step
     if rule.verdict is Verdict.PERSONAL_DATA:
         trace = TurnTrace(rule=f"personal_data:{rule.rule}")
         return _fixed(pack, language, FixedTextKey.PERSONAL_DATA, trace)
@@ -343,17 +285,33 @@ async def _reception(
         return _handoff(pack, language, FixedTextKey.HANDOFF, trace)
     desk = await asyncio.to_thread(_desk, text, language, state, catalog, runtime)
     try:
-        run = await runtime.reception.run(
-            text,
-            deps=desk,
-            message_history=history_messages(state.history),
-            usage_limits=RECEPTION_LIMITS,
-        )
-    except AgentRunError as error:
+        # Within the turn's own limit, so that what the tools did is still known when it runs out.
+        async with asyncio.timeout(runtime.timeout_seconds * RECEPTION_SHARE):
+            run = await runtime.reception.run(
+                text,
+                deps=desk,
+                message_history=history_messages(state.history),
+                usage_limits=RECEPTION_LIMITS,
+            )
+    except (AgentRunError, TimeoutError) as error:
         log_event(logger, "reception.failed", business_id=pack.id, reason=type(error).__name__)
-        failed = TurnTrace(rule="pass", rejection="reception_error", booking=desk.booking)
+        failed = TurnTrace(
+            rule="pass",
+            rejection="reception_error",
+            booking=desk.booking,
+            check_reasons=_sent_back(desk),
+        )
+        if desk.booked and desk.booked_text:
+            # The appointment is in the calendar: the patient reads it, whatever failed after.
+            return TurnResult(desk.booked_text, TurnOutcome.REPLIED, language, failed)
         return _handoff(pack, language, FixedTextKey.HANDOFF, failed)
     reply = run.output
+    # The model reads the language of a short message better than the word lists: "Fate
+    # trattamenti osteopatici?" was taken for Albanian, and the reply came in Albanian (run of
+    # 2026-10-13). Code's own texts follow the model's, unless code already wrote some this turn.
+    spoken = reply.language
+    if spoken is not None and spoken in pack.languages and not (desk.summary or desk.booked_text):
+        language = spoken
     intent = Intent.BOOKING if desk.booking is not None or desk.booked else None
     trace = TurnTrace(
         rule="pass",
@@ -361,23 +319,36 @@ async def _reception(
         intent=intent,
         sources=tuple(dict.fromkeys(desk.sources)),
         booking=desk.booking,
+        check_reasons=_sent_back(desk),
     )
     if reply.kind is ReplyKind.EMERGENCY:
         return _handoff(pack, language, FixedTextKey.EMERGENCY, _as(trace, Category.EMERGENCY))
     if reply.kind is ReplyKind.CLINICAL:
         return _handoff(pack, language, FixedTextKey.CLINICAL, _as(trace, Category.CLINICAL))
+    if reply.kind is ReplyKind.NOTICE:
+        # A practical answer to a message that describes symptoms: then the medical notice and how to
+        # reach a person, as for the pipeline's mixed messages (ADR-0006).
+        noticed = _as(trace, Category.CLINICAL)
+        return _handoff(pack, language, FixedTextKey.CLINICAL, noticed, prefix=reply.text.strip())
     texts = pack.fixed_texts[language]
-    # The patient confirms what code wrote: a summary said in other words is replaced by it.
-    said = reply.text if desk.summary is None or desk.summary in reply.text else desk.summary
-    parts = [said.strip()]
+    # The summary and the confirmation reach the patient as code wrote them: a number checked
+    # against the facts could still be the wrong one ("30" is a duration somewhere).
+    said = reply.text
+    for written in (desk.summary, desk.booked_text):
+        if written and written not in said:
+            said = written
+    if reply.kind is ReplyKind.GREETING and desk.first_turn:
+        said = ""  # the introduction greets and asks how it can help
+    parts = [said.strip()] if said.strip() else []
     privacy = texts.get(FixedTextKey.BOOKING_PRIVACY)
-    if desk.booked and privacy and privacy not in reply.text:
+    if desk.booked and privacy and privacy not in said:
         parts.append(privacy)  # the link to the clinic's privacy page ends every booking
     if reply.kind is ReplyKind.HANDOFF and not _names_the_phone(reply.text, pack):
         parts.append(texts[FixedTextKey.HANDOFF])
     outcome = {
+        ReplyKind.GREETING: TurnOutcome.REPLIED,
         ReplyKind.ANSWER: TurnOutcome.REPLIED,
-        ReplyKind.QUESTION: TurnOutcome.ASKED,
+        ReplyKind.CLARIFY: TurnOutcome.ASKED,
         ReplyKind.HANDOFF: TurnOutcome.HANDOFF,
     }[reply.kind]
     return TurnResult("\n\n".join(parts), outcome, language, trace)
@@ -414,6 +385,12 @@ def _desk(
     )
 
 
+def _sent_back(desk: Desk) -> tuple[str, ...]:
+    """Each reply the check sent back to the model this turn, by the codes of its problems: never a
+    value of the reply, which traces and logs must not hold (security review, 2026-10-12)."""
+    return tuple(f"{SENT_BACK}{codes}" for codes in desk.rejected)
+
+
 def _as(trace: TurnTrace, category: Category) -> TurnTrace:
     return replace(trace, category=category, intent=Intent.OTHER)
 
@@ -427,14 +404,6 @@ async def _classify(
     text: str, language: Language, state: ConversationState, catalog: Catalog, runtime: TurnRuntime
 ) -> ValidatedFields | Rejection:
     bookable = _bookable(runtime)
-    zone = ZoneInfo(runtime.pack.timezone)
-    today = runtime.now().astimezone(zone).date()
-    under_way = state.booking
-    offered = (
-        tuple(item.astimezone(zone) for item in under_way.offered)
-        if under_way is not None and under_way.stage is BookingStage.CHOOSE
-        else ()
-    )
     deps = classifier_deps(
         catalog,
         business_name=runtime.pack.name,
@@ -443,8 +412,6 @@ async def _classify(
         topic_service_ids=state.topic_service_ids,
         topic_doctor_ids=state.topic_doctor_ids,
         pending_clarification=state.pending_clarification,
-        today=today,
-        offered_slots=offered,
         previous_reply=state.last_reply,
     )
     try:
@@ -454,12 +421,6 @@ async def _classify(
             logger, "classifier.failed", business_id=runtime.pack.id, reason=type(error).__name__
         )
         return Rejection(reason="classifier_error")
-    calendar = runtime.pack.integrations.calendar
-    slots = (
-        SlotScope(today, today + timedelta(days=calendar.horizon_days), len(offered))
-        if bookable and calendar is not None and calendar.chat_booking
-        else None
-    )
     return validate_classification(
         run.output,
         message=text,
@@ -469,7 +430,6 @@ async def _classify(
         language=language,
         bookable=frozenset(bookable),
         bookable_services=frozenset(item for services in bookable.values() for item in services),
-        slots=slots,
     )
 
 
@@ -530,26 +490,6 @@ async def _booking(
         return _how_to_book(pack, language, trace)
     doctor_id, service_id = target
     read = replace(trace, sources=(f"calendar:{doctor_id}",))
-    if pack.integrations.calendar is not None and pack.integrations.calendar.chat_booking:
-        context = _booking_context(runtime, catalog, state, language)
-        wish = SlotWish(fields.slot, fields.slot_day, fields.slot_from, fields.slot_part)
-        under_way = state.booking
-        try:
-            if (
-                under_way is not None
-                and under_way.stage is BookingStage.CHOOSE
-                and (under_way.doctor_id, under_way.service_id) == target
-            ):
-                # The slots on offer stay the subject: "Friday is fine", "other times?".
-                offered = await asyncio.to_thread(booking_pick, context, under_way, wish)
-            else:
-                offered = await asyncio.to_thread(
-                    booking_offer, context, doctor_id, service_id, wish=wish
-                )
-        except CalendarUnavailableError as error:
-            log_event(logger, "calendar.unavailable", business_id=pack.id, reason=str(error))
-            return _how_to_book(pack, language, replace(read, rejection="calendar_unavailable"))
-        return _from_step(offered, language, read)
     try:
         slots = await asyncio.to_thread(
             find_slots, runtime.scheduler, pack, doctor_id, service_id, runtime.now()
@@ -573,56 +513,6 @@ async def _booking(
     return TurnResult(f"{text}\n\n{step}" if step else text, TurnOutcome.REPLIED, language, read)
 
 
-async def _booking_step(
-    text: str,
-    language: Language,
-    state: ConversationState,
-    step: BookingStep,
-    runtime: TurnRuntime,
-) -> TurnResult | None:
-    """The next step of a booking under way, or None when the message answers another question."""
-    catalog = await asyncio.to_thread(_load_catalog, runtime)
-    if catalog is None:
-        return None
-    context = _booking_context(runtime, catalog, state, language)
-    reply = await asyncio.to_thread(booking_answer, context, step, text)
-    if reply is None:
-        return None
-    trace = TurnTrace(
-        rule="booking", intent=Intent.BOOKING, sources=(f"calendar:{reply.doctor_id}",)
-    )
-    return _from_step(reply, language, trace)
-
-
-def _booking_context(
-    runtime: TurnRuntime, catalog: Catalog, state: ConversationState, language: Language
-) -> BookingContext:
-    if runtime.scheduler is None:
-        raise ValueError("a booking needs the runtime's calendar")
-    return BookingContext(
-        pack=runtime.pack,
-        catalog=catalog,
-        scheduler=runtime.scheduler,
-        session_factory=runtime.session_factory,
-        conversation_id=state.conversation_id,
-        language=language,
-        now=runtime.now(),
-    )
-
-
-_STEP_OUTCOMES: Final = {
-    "asked": TurnOutcome.ASKED,
-    "replied": TurnOutcome.REPLIED,
-    "handoff": TurnOutcome.HANDOFF,
-}
-
-
-def _from_step(reply: StepReply, language: Language, trace: TurnTrace) -> TurnResult:
-    return TurnResult(
-        reply.text, _STEP_OUTCOMES[reply.outcome], language, replace(trace, booking=reply.next)
-    )
-
-
 def _how_to_book(
     pack: BusinessPack, language: Language, trace: TurnTrace, *, prefix: str | None = None
 ) -> TurnResult:
@@ -632,7 +522,7 @@ def _how_to_book(
     if step is None:
         return _handoff(pack, language, FixedTextKey.HANDOFF, trace, prefix=prefix)
     text = "\n\n".join([*([prefix] if prefix else []), step])
-    return TurnResult(text, TurnOutcome.HANDOFF, language, trace, rewrite=Rewrite.WORDS)
+    return TurnResult(text, TurnOutcome.HANDOFF, language, trace)
 
 
 async def _answer(
@@ -754,9 +644,8 @@ def _facts_reply(
         return _handoff(pack, language, FixedTextKey.NO_INFORMATION, checked)
     if absent:
         # Part of the question has no record: say which part, then how to reach a person.
-        partial = _handoff(pack, language, FixedTextKey.HANDOFF, checked, prefix=text)
-        return replace(partial, rewrite=Rewrite.FACTS)
-    return TurnResult(text, TurnOutcome.REPLIED, language, checked, rewrite=Rewrite.FACTS)
+        return _handoff(pack, language, FixedTextKey.HANDOFF, checked, prefix=text)
+    return TurnResult(text, TurnOutcome.REPLIED, language, checked)
 
 
 def _asked_name(catalog: Catalog, fields: ValidatedFields, item: str) -> str:
@@ -858,8 +747,7 @@ def _clarify(
     catalog: Catalog, language: Language, field: ClarifyField, trace: TurnTrace
 ) -> TurnResult:
     text = clarify_question(field, language, catalog)
-    asked = replace(trace, clarify=field)
-    return TurnResult(text, TurnOutcome.ASKED, language, asked, rewrite=Rewrite.WORDS)
+    return TurnResult(text, TurnOutcome.ASKED, language, replace(trace, clarify=field))
 
 
 def _sources(items: Sequence[Evidence]) -> tuple[str, ...]:
@@ -913,7 +801,6 @@ def _log_turn(result: TurnResult, business_id: str) -> None:
         check_reasons=list(trace.check_reasons),
         reason=trace.rejection,
         language=result.language,
-        voice=trace.voice,
     )
 
 
@@ -935,7 +822,7 @@ def _next_state(
         service_ids=trace.service_ids,
         doctor_ids=trace.doctor_ids,
         clarify=trace.clarify,
-        next_step_shown=step is not None and step in (result.code_text or result.text),
+        next_step_shown=step is not None and step in result.text,
         booking=trace.booking,
         reply=None if summary else result.text,
         exchange=exchange,
@@ -949,10 +836,7 @@ def _fixed_text(pack: BusinessPack, language: Language, key: FixedTextKey) -> st
 def _fixed(
     pack: BusinessPack, language: Language, key: FixedTextKey, trace: TurnTrace
 ) -> TurnResult:
-    # Small talk gets the voice; the other fixed texts are said as written.
-    words = Rewrite.WORDS if key is FixedTextKey.GREETING else Rewrite.NONE
-    text = _fixed_text(pack, language, key)
-    return TurnResult(text, TurnOutcome.FIXED, language, trace, rewrite=words)
+    return TurnResult(_fixed_text(pack, language, key), TurnOutcome.FIXED, language, trace)
 
 
 def _handoff(
@@ -969,10 +853,7 @@ def _handoff(
     if reason is not FixedTextKey.HANDOFF:
         parts.append(_fixed_text(pack, language, reason))
     parts.append(_fixed_text(pack, language, FixedTextKey.HANDOFF))
-    # The voice may say a handoff in its words, unless it carries a notice or follows a failure.
-    plain = reason in _PLAIN_HANDOFFS and not prefix and trace.rule not in _FAILED_RULES
-    words = Rewrite.WORDS if plain else Rewrite.NONE
-    return TurnResult("\n\n".join(parts), TurnOutcome.HANDOFF, language, trace, draft, words)
+    return TurnResult("\n\n".join(parts), TurnOutcome.HANDOFF, language, trace, draft)
 
 
 def _emergency(pack: BusinessPack, language: Language, rule: str) -> TurnResult:
@@ -988,8 +869,7 @@ def _with_disclosure(pack: BusinessPack, language: Language, result: TurnResult)
     if result.trace.category is Category.EMERGENCY and result.text.startswith(emergency):
         contact = result.text.removeprefix(emergency)  # "\n\n" and the contact text
         return replace(result, text=f"{emergency}\n\n{disclosure}{contact}")
-    written = f"{disclosure}\n\n{result.code_text}" if result.code_text is not None else None
-    return replace(result, text=f"{disclosure}\n\n{result.text}", code_text=written)
+    return replace(result, text=f"{disclosure}\n\n{result.text}" if result.text else disclosure)
 
 
 def _expected_fields(state: ConversationState, runtime: TurnRuntime) -> frozenset[PersonalField]:

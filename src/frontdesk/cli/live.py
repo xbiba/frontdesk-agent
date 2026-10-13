@@ -55,12 +55,12 @@ from frontdesk.model_gateway.costs import Budget, BudgetError, load_budget
 from frontdesk.model_gateway.factory import pinned_location
 from frontdesk.model_gateway.metering import (
     BREAKER_ATTEMPTS,
-    MAX_INPUT_TOKENS_PER_REQUEST,
     STOP_BUDGET,
     STOP_LEDGER,
     STOP_RATE_LIMITED,
     STOP_UNAVAILABLE,
     Meter,
+    input_bound,
 )
 from frontdesk.model_gateway.routes import (
     CHAT_PROVIDERS,
@@ -71,7 +71,7 @@ from frontdesk.model_gateway.routes import (
 )
 from frontdesk.settings import Settings, load_settings
 
-REQUESTS_PER_TURN: Final = 5  # two for the classifier, two for the responder, one for the voice
+REQUESTS_PER_TURN: Final = 4  # two for the classifier, two for the responder (RESPONDER_LIMITS)
 AGENT_REQUESTS_PER_TURN: Final = (
     6  # the reception agent's tool calls and its reply (RECEPTION_LIMITS)
 )
@@ -262,7 +262,6 @@ def _manifest(
         knowledge_version=str(version),
         classifier_prompt=runtime.classifier_prompt_version,
         responder_prompt=runtime.responder_prompt_version,
-        voice_prompt=runtime.voice_prompt_version,
         reception_prompt=runtime.reception_prompt_version,
         fixed_texts={language: dict(texts) for language, texts in pack.fixed_texts.items()},
         budget_file=str(budget.path) if budget else None,
@@ -353,11 +352,11 @@ def _show_plan(run: _Run, pending: Sequence[TurnCase]) -> None:
     price = run.budget.price(route.route_id)
     limits = route.output_limits
     agent = run.runtime.reception is not None
-    cap = limits.agent if agent else max(limits.classifier, limits.responder, limits.voice)
+    cap = limits.agent if agent else max(limits.classifier, limits.responder)
     most = (
         turns
         * (AGENT_REQUESTS_PER_TURN if agent else REQUESTS_PER_TURN)
-        * price.cost(input_units=MAX_INPUT_TOKENS_PER_REQUEST, output_units=cap)
+        * price.cost(input_units=input_bound("agent" if agent else ""), output_units=cap)
     )
     left = eur_left(run.budget, spent_usd(run.budget))
     typer.echo(

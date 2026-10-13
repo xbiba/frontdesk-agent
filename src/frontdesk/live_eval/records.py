@@ -73,9 +73,6 @@ class TurnRecord(_Row):
     calls: tuple[CallRow, ...]
     seconds: float
     at: datetime
-    # The voice: what code wrote when the reply is the voice's, and what the voice did.
-    code_text: str | None = None
-    voice: str | None = None
 
     @property
     def usd(self) -> float:
@@ -93,8 +90,6 @@ class RunManifest(_Row):
     knowledge_version: str
     classifier_prompt: str
     responder_prompt: str
-    # The voice's prompt, when the run had the voice (FRONTDESK_VOICE); None otherwise.
-    voice_prompt: str | None = None
     # The reception agent's prompt, when it led the run (FRONTDESK_CONVERSATION=agent).
     reception_prompt: str | None = None
     fixed_texts: dict[Language, dict[FixedTextKey, str]]
@@ -116,7 +111,6 @@ _IDENTITY = (
     "knowledge_version",
     "classifier_prompt",
     "responder_prompt",
-    "voice_prompt",
     "reception_prompt",
     "fixed_texts",
     "min_support_similarity",

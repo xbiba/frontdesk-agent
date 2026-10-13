@@ -18,18 +18,22 @@ from pydantic_ai.models import Model
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.agent.classifier import build_classifier
-from frontdesk.agent.demo_models import demo_classifier_model, demo_responder_model
+from frontdesk.agent.demo_models import (
+    demo_classifier_model,
+    demo_reception_model,
+    demo_responder_model,
+)
 from frontdesk.agent.prompts import read_prompt
 from frontdesk.agent.responder import build_responder
 from frontdesk.agent.tools import ToolServices, build_toolset
-from frontdesk.agent.voice import VoiceDeps, build_voice
 from frontdesk.booking.calcom import CalcomScheduler
 from frontdesk.booking.calendar import FixtureCalendar
 from frontdesk.booking.google_calendar import SCOPE as CALENDAR_SCOPE
 from frontdesk.booking.google_calendar import WRITE_SCOPE as CALENDAR_WRITE_SCOPE
 from frontdesk.booking.google_calendar import GoogleCalendar, calendar_http_client
 from frontdesk.booking.scheduler import CalendarScheduler, Scheduler
-from frontdesk.conversation.reception import Desk, ReceptionReply, build_reception
+from frontdesk.conversation.desk import Desk
+from frontdesk.conversation.reception import ReceptionReply, build_reception
 from frontdesk.conversation.turn import TurnRuntime
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
 from frontdesk.knowledge.embedders import Embedder, build_embedder
@@ -37,6 +41,7 @@ from frontdesk.knowledge.facts import load_catalog
 from frontdesk.knowledge.versions import check_embedder
 from frontdesk.model_gateway.factory import build_live_model, live_model_settings
 from frontdesk.model_gateway.google_tokens import google_token_source
+from frontdesk.model_gateway.hedging import HedgedModel
 from frontdesk.model_gateway.routes import (
     CHAT_PROVIDERS,
     DataClass,
@@ -48,7 +53,7 @@ from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.loader import load_pack
 from frontdesk.tenancy.pack import BusinessPack
 
-AgentRole = Literal["classifier", "responder", "voice", "agent"]
+AgentRole = Literal["classifier", "responder", "agent"]
 ModelWrapper = Callable[[Model, AgentRole], Model]
 
 
@@ -125,7 +130,6 @@ def build_turn_runtime(
     business_today = today or deployment.today
     classifier_prompt = read_prompt(pack.profile, "classifier")
     responder_prompt = read_prompt(pack.profile, "responder")
-    voice_prompt = read_prompt(pack.profile, "voice")
     with business_session(deployment.session_factory, pack.id) as session:
         catalog = load_catalog(session, pack.id)
         check_embedder(session, pack.id, deployment.embedder)
@@ -138,7 +142,7 @@ def build_turn_runtime(
         min_similarity=deployment.settings.min_retrieval_similarity,
     )
     toolset = build_toolset(pack.profile, services)
-    # Offline, and on a live route unless the deployment asks for it, the pipeline leads.
+    # The pipeline leads unless the deployment asks for the agent (FRONTDESK_CONVERSATION=agent).
     reception: Agent[Desk, ReceptionReply] | None = None
     reception_version: str | None = None
     if route.provider == "offline":
@@ -148,7 +152,13 @@ def build_turn_runtime(
         responder = build_responder(
             demo_responder_model(), pack.profile, toolset, instructions=responder_prompt.text
         )
-        voice: Agent[VoiceDeps, str] | None = None  # offline replies keep the code's words
+        if deployment.settings.conversation is Conversation.AGENT:
+            # The offline path of a deployment the agent leads: the rules, then the agent's stand-in.
+            reception_prompt = read_prompt(pack.profile, "reception")
+            reception = build_reception(
+                demo_reception_model(), pack.profile, instructions=reception_prompt.text
+            )
+            reception_version = reception_prompt.version
     else:
         model = build_live_model(route, gcp_project=deployment.settings.gcp_project)
         wrap = wrap_model or _unwrapped
@@ -165,20 +175,10 @@ def build_turn_runtime(
             model_settings=live_model_settings(route, max_tokens=route.output_limits.responder),
             instructions=responder_prompt.text,
         )
-        voice = (
-            build_voice(
-                wrap(model, "voice"),
-                pack.profile,
-                model_settings=live_model_settings(route, max_tokens=route.output_limits.voice),
-                instructions=voice_prompt.text,
-            )
-            if deployment.settings.voice
-            else None
-        )
         if deployment.settings.conversation is Conversation.AGENT:
             reception_prompt = read_prompt(pack.profile, "reception")
             reception = build_reception(
-                wrap(model, "agent"),
+                HedgedModel(wrap(model, "agent")),  # a stuck request gets a twin (Albi, 2026-10-12)
                 pack.profile,
                 model_settings=live_model_settings(route, max_tokens=route.output_limits.agent),
                 instructions=reception_prompt.text,
@@ -190,8 +190,6 @@ def build_turn_runtime(
         responder=responder,
         classifier_prompt_version=classifier_prompt.version,
         responder_prompt_version=responder_prompt.version,
-        voice=voice,
-        voice_prompt_version=voice_prompt.version if voice is not None else None,
         reception=reception,
         reception_prompt_version=reception_version,
         session_factory=deployment.session_factory,

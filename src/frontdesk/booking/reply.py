@@ -21,30 +21,12 @@ from frontdesk.tenancy.pack import BusinessPack, CalendarIntegration, Language
 if TYPE_CHECKING:
     from frontdesk.booking.scheduler import Scheduler
 
-_LEADS: Final[dict[str, dict[str, str]]] = {
-    "first": {
-        "sq": "Oraret e para të lira me {doctor} ({service}, {minutes} minuta):",
-        "it": "Primi orari liberi con {doctor} ({service}, {minutes} minuti):",
-        "en": "First free times with {doctor} ({service}, {minutes} minutes):",
-    },
-    # The times not offered yet, when the patient asks for others.
-    "more": {
-        "sq": "Orare të tjera të lira me {doctor} ({service}, {minutes} minuta):",
-        "it": "Altri orari liberi con {doctor} ({service}, {minutes} minuti):",
-        "en": "More free times with {doctor} ({service}, {minutes} minutes):",
-    },
-    # The times that fit what the patient asked for: a day, from a day on, a part of the day.
-    "wished": {
-        "sq": "Oraret e lira me {doctor} {when} ({service}, {minutes} minuta):",
-        "it": "Orari liberi con {doctor} {when} ({service}, {minutes} minuti):",
-        "en": "Free times with {doctor} {when} ({service}, {minutes} minutes):",
-    },
-}
-_FROM: Final[dict[str, str]] = {"sq": "nga {day}", "it": "dal {day}", "en": "from {day}"}
-_ON: Final[dict[str, str]] = {"sq": "{day}", "it": "{day}", "en": "on {day}"}
-_PARTS: Final[dict[SlotPart, dict[str, str]]] = {
-    SlotPart.MORNING: {"sq": "në mëngjes", "it": "di mattina", "en": "in the morning"},
-    SlotPart.AFTERNOON: {"sq": "pasdite", "it": "di pomeriggio", "en": "in the afternoon"},
+# The pipeline's listing of the first free times (M4), for the packs it still serves. The reception
+# agent writes its times in its own words, checked by code (frontdesk.agent.reply_check).
+_LEAD: Final[dict[str, str]] = {
+    "sq": "Oraret e para të lira me {doctor} ({service}, {minutes} minuta):",
+    "it": "Primi orari liberi con {doctor} ({service}, {minutes} minuti):",
+    "en": "First free times with {doctor} ({service}, {minutes} minutes):",
 }
 AFTERNOON_HOUR: Final = 13
 _WEEKDAYS: Final[dict[str, tuple[str, ...]]] = {
@@ -52,7 +34,7 @@ _WEEKDAYS: Final[dict[str, tuple[str, ...]]] = {
     "it": ("lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"),
     "en": ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"),
 }
-_MONTHS: Final[dict[str, tuple[str, ...]]] = {
+MONTHS: Final[dict[str, tuple[str, ...]]] = {
     "sq": (
         "janar",
         "shkurt",
@@ -167,13 +149,9 @@ def compose_slots(
     minutes: int,
     language: Language,
     numbered: bool = False,
-    lead: str = "first",
-    wish: SlotWish | None = None,
 ) -> str:
-    """The lead-in and one line per slot; numbered when the patient picks one from the chat. `lead`:
-    "first", "more" (the times not offered yet) or "wished" (those that fit `wish`)."""
-    when = wish_words(wish, language) if wish is not None else ""
-    head = _LEADS[lead][language].format(doctor=doctor, service=service, minutes=minutes, when=when)
+    """The lead-in and one line per slot; numbered when the patient picks one from the chat."""
+    head = _LEAD[language].format(doctor=doctor, service=service, minutes=minutes)
     marks = [f"{index})" if numbered else "-" for index in range(1, len(slots) + 1)]
     lines = [
         f"{mark} {slot_time(slot.start, language)}" for mark, slot in zip(marks, slots, strict=True)
@@ -189,7 +167,7 @@ def slot_time(start: datetime, language: Language) -> str:
 def day_words(day: date, language: Language) -> str:
     """A day as the patient reads it: "venerdì 23 ottobre"."""
     weekday = _WEEKDAYS[language][day.weekday()]
-    month = _MONTHS[language][day.month - 1]
+    month = MONTHS[language][day.month - 1]
     return f"{weekday} {day.day} {month}"
 
 
@@ -217,16 +195,3 @@ class SlotWish:
         if self.part is SlotPart.MORNING and afternoon:
             return False
         return not (self.part is SlotPart.AFTERNOON and not afternoon)
-
-
-def wish_words(wish: SlotWish, language: Language) -> str:
-    """The wish as the patient reads it: "lunedì 26 ottobre, di pomeriggio", "dal 26 ottobre"."""
-    parts = []
-    if wish.day is not None:
-        parts.append(_ON[language].format(day=day_words(wish.day, language)))
-    elif wish.start_from is not None:
-        month = _MONTHS[language][wish.start_from.month - 1]
-        parts.append(_FROM[language].format(day=f"{wish.start_from.day} {month}"))
-    if wish.part is not None:
-        parts.append(_PARTS[wish.part][language])
-    return ", ".join(parts)

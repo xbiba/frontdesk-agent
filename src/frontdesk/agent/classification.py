@@ -11,13 +11,11 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass
-from datetime import date
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from frontdesk.agent.vocab import PROFILE_INTENTS, Category, Intent, SlotPart
+from frontdesk.agent.vocab import PROFILE_INTENTS, Category, Intent
 from frontdesk.knowledge.facts import Catalog
 from frontdesk.safety.normalize import normalize
 from frontdesk.safety.rules import Verdict, contains_clinical_terms, evaluate
@@ -53,12 +51,6 @@ class ClassifierOutput(BaseModel):
     doctor_ids: list[str] = Field(default_factory=list, max_length=5)
     problem_category_id: str | None = None
     general_question: str | None = Field(default=None, max_length=400)
-    # A booking: one of the times just offered, by its number; or the times wished for, dates as
-    # YYYY-MM-DD. Kept only for a booking, within the calendar's reach (`SlotScope`).
-    slot: int | None = None
-    slot_day: str | None = Field(default=None, max_length=40)
-    slot_from: str | None = Field(default=None, max_length=40)
-    slot_part: SlotPart | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -84,26 +76,12 @@ class ValidatedFields(BaseModel):
     order_reference: str | None = None
     postal_code: str | None = None
     general_question: str | None = None
-    slot: int | None = None
-    slot_day: date | None = None
-    slot_from: date | None = None
-    slot_part: SlotPart | None = None
 
 
 class Rejection(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     reason: str
-
-
-@dataclass(frozen=True)
-class SlotScope:
-    """The times a booking may ask for: days from today to the calendar's last one, and one of the
-    `offered` times by its number."""
-
-    today: date
-    last_day: date
-    offered: int = 0
 
 
 def check_free_text(text: str) -> str | None:
@@ -152,11 +130,9 @@ def validate_classification(
     language: Language,
     bookable: frozenset[str] = frozenset(),
     bookable_services: frozenset[str] = frozenset(),
-    slots: SlotScope | None = None,
 ) -> ValidatedFields | Rejection:
     """`bookable` and `bookable_services`: the doctors whose free slots the deployment can read,
-    and their bookable services (M4). `slots`: the times a booking may ask for, when the
-    deployment books from the chat; without it, the model's times are dropped."""
+    and their bookable services (M4)."""
     if output.category is Category.EMERGENCY:
         return ValidatedFields(category=Category.EMERGENCY, intent=Intent.OTHER, language=language)
     output = _repaired(
@@ -191,30 +167,7 @@ def validate_classification(
         order_reference=reference,
         postal_code=postal_code,
         general_question=question,
-        **_times(output, slots),
     )
-
-
-def _times(output: ClassifierOutput, scope: SlotScope | None) -> dict[str, object]:
-    """The times of a booking the calendar can answer: an offered time by its number, days within
-    its reach. Anything else is dropped, not refused: the booking goes on without it."""
-    if scope is None or output.intent is not Intent.BOOKING:
-        return {}
-    slot = output.slot if output.slot is not None and 1 <= output.slot <= scope.offered else None
-    return {
-        "slot": slot,
-        "slot_day": _day(output.slot_day, scope),
-        "slot_from": _day(output.slot_from, scope),
-        "slot_part": output.slot_part,
-    }
-
-
-def _day(text: str | None, scope: SlotScope) -> date | None:
-    try:
-        day = date.fromisoformat(text.strip()) if text else None
-    except ValueError:
-        return None
-    return day if day is not None and scope.today <= day <= scope.last_day else None
 
 
 def _repaired(

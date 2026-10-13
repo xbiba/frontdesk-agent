@@ -1,7 +1,7 @@
 """The report's percentages and table cells (Task 7 review, M8).
 
-A percentage that decides a verdict must not be rounded across its threshold: 18 of 19 replies within
-8 seconds is 94.7%, below the 95% that is asked, and must not read 95%. A whole percentage keeps its
+A percentage that decides a verdict must not be rounded across its threshold: 17 of 19 replies within
+10 seconds is 89.5%, below the 90% that is asked, and must not read 90%. A whole percentage keeps its
 short form ("20%", "0%"). A text from a dataset may hold a pipe, which must not split a table row.
 """
 
@@ -16,26 +16,26 @@ from frontdesk.live_eval.report import criteria, render_report, summarize
 from tests.live_eval.helpers import CONTACT, FIXED_TEXTS, TEXTS, case, manifest, record
 
 
-def within_eight_seconds(slow: int, total: int) -> tuple[CaseVerdict, ...]:
+def within_ten_seconds(slow: int, total: int) -> tuple[CaseVerdict, ...]:
     cases = [case(f"c{n}", behaviour="answer") for n in range(total)]
-    records = [record(f"c{n}", "ok", seconds=(9.0 if n < slow else 1.0)) for n in range(total)]
+    records = [record(f"c{n}", "ok", seconds=(12.0 if n < slow else 1.0)) for n in range(total)]
     return judge(cases, records, FIXED_TEXTS, {})
 
 
-def test_18_of_19_replies_within_8_seconds_is_not_shown_as_95_percent() -> None:
-    verdicts = within_eight_seconds(slow=1, total=19)
+def test_17_of_19_replies_within_10_seconds_is_not_shown_as_90_percent() -> None:
+    verdicts = within_ten_seconds(slow=2, total=19)
     found = criteria(summarize(verdicts), spent_eur=None, cap_eur=None)
-    [reply_time] = [c for c in found if c.name == "Replies within 8 seconds"]
-    assert (reply_time.value, reply_time.status) == ("94.7% (p95 9.0 s)", "fail")
-    assert reply_time.threshold == "at least 95%"
+    [reply_time] = [c for c in found if c.name == "Replies within 10 seconds"]
+    assert (reply_time.value, reply_time.status) == ("89.5% (p95 12.0 s)", "fail")
+    assert reply_time.threshold == "at least 90%"
 
 
-def test_the_language_table_shows_the_share_within_8_seconds_to_one_decimal() -> None:
+def test_the_language_table_shows_the_share_within_10_seconds_to_one_decimal() -> None:
     text = render_report(
-        manifest(), within_eight_seconds(slow=1, total=19), total_cases=19, budget=None
+        manifest(), within_ten_seconds(slow=2, total=19), total_cases=19, budget=None
     )
     [row] = [line for line in text.splitlines() if line.startswith("| it ")]
-    assert row.split(" | ")[12] == "94.7%"
+    assert row.split(" | ")[12] == "89.5%"
 
 
 @pytest.mark.parametrize(

@@ -29,3 +29,33 @@ The second option.
 
 ## Exit plan
 The claim checks sit behind one function; a verifier model can be added after them if the live evaluation calls for one.
+
+## Amendment, 2026-10-12: the reception agent
+
+Albi's live chats of 2026-10-12 found the pipeline too rigid for a conversation: replies written from fixed phrases, and a booking flow that read "Friday, what time?" as a pick and "I would like the times" as a name. With `FRONTDESK_CONVERSATION=agent`, a model leads the conversation and writes every reply. The grounding moves from the reply's words to its facts:
+
+- The model reads the clinic's approved records (`conversation/reception_facts.py`), the conversation so far (12 messages, emails and phone numbers masked), and the date.
+- It reaches documents and the calendar only through tools. Bookings go through tools that code checks: a hold on a time that was shown, a validated name and phone, the summary as code writes it, and a booking only after a yes to that summary in the very next message.
+- Every number and link of a reply must come from the facts, the tools or the conversation. A reply that fails this, reads as a diagnosis, promises an action, or announces a booking no tool made, is sent back once with the reasons; a second failure is a handoff (`agent/reply_check.py`).
+- The deterministic rules still answer first (ADR-0006): emergency, medical advice, and personal data, except the name and phone a held booking asks for.
+
+The pipeline stays for the demo packs and the offline evaluations of the engine. The voice, which rewrote the pipeline's replies, and the pipeline's own booking steps are removed. A deployment that books from the chat runs the agent.
+
+### The free times: code validates them, the model writes them (Albi, 2026-10-12)
+
+In Albi's live chat, "Solo questi?" about Friday 23 got "sì, solo questi" with 3 times, while cal.com had 7. The tool had cut the list to `max_options` (3) without saying so, and the model took the cut list for the whole day: a false negation, an invented fact. Since then:
+
+- `free_times` (`conversation/reception_booking.py`) gives every free time of each day it lists: all of a day asked for, or the first days when none is. It also says whether other days have free times. A time not listed for a day is not free.
+- The pipeline's fixed slot texts are gone from the agent. The model writes the times in its own words, by day: "Venerdì 23 ho posto alle 9, 10, 12, 13, 14, 15 e 16, quale preferisce?". A numbered list is used only across several days, and never with the date repeated on each line.
+- Code validates every time the reply names (`agent/reply_check.times_named`): a clock time, or the hours after "alle", "ore", "at", "orën" and the like, alone or in a list. Each must be a time the tools gave in the conversation, or a time of the facts (an opening hour). A reply that names another goes back to the model once (`sent_back:times`).
+- `hold_time` takes the day and the time of a time that was shown, and checks that the calendar still has it free.
+
+Still by code alone: the summary and the confirmation of a booking. Dates are checked as numbers only; a typed check, dates against the slots' dates, is a follow-up.
+
+## Amendment, 2026-10-13: what the facts do not list, and the language of a reply
+
+The review of the run of 2026-10-13 found two invented facts that passed every check. The agent knew only the one service the facts price, so it said the clinic offers nothing else: "Klinika jonë ofron vetëm trajtime osteopatike", "Non disponiamo delle analisi del sangue".
+
+- The facts now list the clinic's departments by name only (pack `data/departments.yaml`, records of kind `department`, approved like any record). Asked about one, the agent says the clinic has it and gives reception's phone for its prices, times and doctors.
+- The prompt says the clinic has more than the facts list. The reply check refuses an exclusive denial of a service ("solo", "vetëm", "only", "non disponiamo", "nuk ofrojmë", "we do not offer"), outside what the chat books or what is free (`sent_back:denies`).
+- The agent names the language of the patient's last message, and code's own texts of the turn follow it. Before, a short Italian question with no listed word ("Fate trattamenti osteopatici?") was taken for Albanian, and the reply came in Albanian. The live evaluation now checks the language of every turn, not only the last.

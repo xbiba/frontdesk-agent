@@ -127,3 +127,13 @@ def test_the_sdk_options_carry_the_context_for_the_sync_and_the_async_client() -
     # The clients themselves are the ones that ignore the environment.
     assert isinstance(options.httpx_client, httpx2.Client)
     assert isinstance(options.httpx_async_client, httpx2.AsyncClient)
+
+
+def test_each_route_has_its_own_request_timeout() -> None:
+    timeout = {
+        route: require_route(route, DataClass.EVALUATION).request_timeout_seconds
+        for route in ("vertex-eu-gemini-flash", "vertex-eu-gemini-flash-lite")
+    }
+    flash = google_http_options("eu", timeout["vertex-eu-gemini-flash"])
+    lite = google_http_options("eu", timeout["vertex-eu-gemini-flash-lite"])
+    assert (flash.timeout, lite.timeout) == (15_000, 30_000)  # milliseconds

@@ -119,6 +119,8 @@ class Location(Frozen):
     address: NonBlankStr
     phone: NonBlankStr
     email: NonBlankStr
+    # Reception's WhatsApp, when it has one: the agent gives it with the phone (Albi, 2026-10-12).
+    whatsapp: NonBlankStr | None = None
     opening_hours: list[OpeningHours] = Field(min_length=1)
 
 
@@ -128,6 +130,14 @@ class Service(Frozen):
     duration_minutes: int = Field(gt=0, le=480)
     bookable_online: bool = False
     requires_consult: bool = False
+
+
+class Department(Frozen):
+    """A department of the clinic, by name only: the agent may say the clinic has it, and gives
+    reception for its prices, times and doctors (Albi, 2026-10-13)."""
+
+    id: str = Field(pattern=_ID)
+    names: dict[Language, NonBlankStr]
 
 
 class Doctor(Frozen):
@@ -209,6 +219,7 @@ class BusinessPack(Frozen):
     fixed_texts: dict[Language, dict[FixedTextKey, str]]
     location: Location
     services: list[Service] = Field(default_factory=list)
+    departments: list[Department] = Field(default_factory=list)
     doctors: list[Doctor] = Field(default_factory=list)
     prices: list[Price] = Field(default_factory=list)
     orientation: list[OrientationEntry] = Field(default_factory=list)
@@ -264,6 +275,12 @@ def _language_problems(pack: BusinessPack) -> list[str]:
         if language not in service.names
     ]
     problems += [
+        f"department '{department.id}' has no name in '{language}'"
+        for department in pack.departments
+        for language in pack.languages
+        if language not in department.names
+    ]
+    problems += [
         f"document '{document.key}' is in unsupported language '{document.language}'"
         for document in pack.documents
         if document.language not in pack.languages
@@ -295,6 +312,7 @@ def _gives_a_contact(text: str, location: Location) -> bool:
 def _reference_problems(pack: BusinessPack) -> list[str]:
     groups = {
         "service": [s.id for s in pack.services],
+        "department": [d.id for d in pack.departments],
         "doctor": [d.id for d in pack.doctors],
         "orientation": [o.id for o in pack.orientation],
         "document": [d.key for d in pack.documents],

@@ -153,6 +153,29 @@ def test_every_turn_of_a_conversation_gets_the_universal_checks() -> None:
     )
 
 
+def test_every_turn_of_a_conversation_is_in_the_case_s_language() -> None:
+    # The first of two replies came in Albanian to an Italian question, and only the last was
+    # checked (review of 2026-10-13).
+    case = _case("Fate trattamenti osteopatici?", "E quanto costa?", language="it")
+    albanian = TurnResult("Po, e ofrojmë.", TurnOutcome.REPLIED, "sq", TurnTrace(rule="pass"))
+    assert check_conversation(case, [albanian, _result("Costa 100 EUR.")], _texts) == (
+        "turn 1: language: sq",
+    )
+
+
+def test_a_case_that_switches_language_is_checked_at_its_last_turn_only() -> None:
+    case = TurnCase.model_validate(
+        {
+            "id": "c",
+            "messages": ["Buongiorno", "Do you speak English?"],
+            "tags": ["language-switch"],
+            "expect": {"language": "en"},
+        }
+    )
+    english = TurnResult("Yes.", TurnOutcome.REPLIED, "en", TurnTrace(rule="pass"))
+    assert check_conversation(case, [_result("Buongiorno!"), english], _texts) == ()
+
+
 def test_the_case_result_records_the_rule_the_kind_and_the_critical_flag() -> None:
     case = _case("Quanto costa?", behaviour="answer", critical=True)
     result = case_result(case, [_result("Fisioterapia: 30 EUR", rule="pass")], _texts)
@@ -448,18 +471,12 @@ def test_the_demo_cases_expect_an_outcome_that_fits_their_behaviour(
     assert checked
 
 
-def test_a_reply_in_the_voice_is_checked_in_what_code_wrote() -> None:
-    voiced = TurnResult(
-        "Certo! Per parlare con una persona chiama pure la reception.",
-        TurnOutcome.HANDOFF,
-        "it",
-        TurnTrace(rule="pass", voice="rewritten"),
-        code_text=CONTACT,
-    )
-    texts = _texts("it")
-    # The handoff still ends with the contact, and the case finds its text, in the code's words.
-    assert check_reply(voiced, texts=texts) == ()
-    assert check_case(_case("operatore", contains=[CONTACT]), voiced, texts=texts) == ()
-    # What must not be said must not be said in either.
-    unexpected = check_case(_case("operatore", not_contains=["chiama pure"]), voiced, texts=texts)
-    assert unexpected == ("unexpected text: chiama pure",)
+def test_a_handoff_in_the_agent_s_words_gives_the_contact_number() -> None:
+    texts = {
+        **TEXTS,
+        FixedTextKey.HANDOFF: "Per parlare con una persona, chiama il +355 69 443 9339.",
+    }
+    said = _result("Può chiamare la reception al +355 69 443 9339.", TurnOutcome.HANDOFF)
+    silent = _result("Si rivolga alla reception.", TurnOutcome.HANDOFF)
+    assert check_reply(said, texts=texts) == ()
+    assert check_reply(silent, texts=texts) == ("handoff without contact",)

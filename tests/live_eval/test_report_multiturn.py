@@ -32,7 +32,7 @@ TURNS = [
         seconds=1.0,
         calls=(call(usd=0.01),),
     ),
-    record("two", "ok", turn=2, turns=2, seconds=9.0, calls=(call(usd=0.02),)),
+    record("two", "ok", turn=2, turns=2, seconds=12.0, calls=(call(usd=0.02),)),
 ]
 
 
@@ -45,15 +45,15 @@ def verdict() -> CaseVerdict:
 def test_the_verdict_reads_its_last_reply_and_sums_every_turn(verdict: CaseVerdict) -> None:
     assert verdict.observed is Behaviour.ANSWER  # not the handoff of turn 1
     assert verdict.language == "it"
-    assert verdict.seconds == (1.0, 9.0)
+    assert verdict.seconds == (1.0, 12.0)
     assert verdict.usd == pytest.approx(0.03)  # both turns, not the last
 
 
 def test_time_counts_turns_and_cases_count_cases(verdict: CaseVerdict) -> None:
     summary = summarize([verdict])["it"]
     assert (summary.cases, summary.turns) == (1, 2)
-    assert summary.within_limit == pytest.approx(0.5)  # 1 of the 2 turns is within 8 seconds
-    assert (summary.p50_seconds, summary.p95_seconds) == (1.0, 9.0)
+    assert summary.within_limit == pytest.approx(0.5)  # 1 of the 2 turns is within 10 seconds
+    assert (summary.p50_seconds, summary.p95_seconds) == (1.0, 12.0)
     assert summary.usd == pytest.approx(0.03)
 
 

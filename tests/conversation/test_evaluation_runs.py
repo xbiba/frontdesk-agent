@@ -184,6 +184,7 @@ async def test_the_handoff_check_uses_the_language_of_the_last_reply(
     switch = _case(  # the person changes language: the last reply is the one that is checked
         id="sq-then-it",
         messages=["Dua të flas me një njeri", "Vorrei parlare con un operatore"],
+        tags=["language-switch"],  # the earlier turns of other cases must keep the case's language
         expect={"language": "it"},
     )
     report = await run_turn_eval(runtime, [albanian, english, switch], route=ROUTE)

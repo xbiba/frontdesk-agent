@@ -236,3 +236,14 @@ async def test_a_metered_model_neither_counts_tokens_nor_compacts_messages(tmp_p
     )
     with pytest.raises(NotImplementedError, match="compact messages"):
         await metered.compact_messages(context)
+
+
+async def test_the_reception_agent_s_requests_have_a_larger_bound(tmp_path: Path) -> None:
+    # 33,000 bytes: past the pipeline's bound, within the agent's, whose requests carry Gemini's
+    # thought signatures (the run of 2026-10-12).
+    model, sent = _counting()
+    meter = Meter(write_budget(tmp_path), route_id=ROUTE, run_id="run-1")
+    await Agent(meter.wrap(model, "agent")).run("\N{EURO SIGN}" * 11_000, model_settings=CAP)
+    assert sent == ["request"]
+    with pytest.raises(UnboundedRequestError, match="96000 tokens"):
+        await Agent(meter.wrap(model, "agent")).run("\N{EURO SIGN}" * 33_000, model_settings=CAP)

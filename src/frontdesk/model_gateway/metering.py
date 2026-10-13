@@ -56,12 +56,19 @@ from pydantic_ai.usage import RequestUsage
 from pydantic_core import to_json
 
 from frontdesk.model_gateway.costs import Budget, BudgetError, BudgetExhaustedError
+from frontdesk.model_gateway.hedging import CURRENT_TWIN
 
 # The reserve assumes a request holds at most this many input tokens. Real requests stay far below
 # it (the prompts are under 3,000 characters, the evidence at most 4,000), and `Meter.admit` checks
 # it: no tokenizer makes more tokens than the UTF-8 bytes of its input, so a request of more bytes
 # is not sent.
 MAX_INPUT_TOKENS_PER_REQUEST: Final = 32_000
+# The reception agent's requests carry the conversation, the facts, its tools' results and Gemini's
+# thought signatures, which this JSON measure counts as bytes though they are not prompt text: one of
+# about 2,000 input tokens measured 32,349 bytes in the run of 2026-10-12. Its role gets a larger
+# bound, and its reserve holds as much.
+AGENT_INPUT_TOKENS_PER_REQUEST: Final = 96_000
+AGENT_ROLE: Final = "agent"
 # The errors that end a request before it reaches the provider, which bills nothing for it: no
 # credentials, no connection. An error status comes back as ModelHTTPError, also unbilled.
 NOT_SENT: Final = (GoogleAuthError, httpx2.ConnectError, httpx2.ConnectTimeout)
@@ -72,6 +79,10 @@ UNBILLED: Final = (ModelHTTPError, *NOT_SENT)
 # `GOOGLE_RETRIES` keeps the same policy, and a test holds the two together.
 RETRY_STATUSES: Final = frozenset({429, 500, 502, 503, 504})
 RETRY_WAITS: Final = (2.0, 4.0, 8.0)
+# The agent answers a patient who waits: a reply within 20 seconds (decision of 2026-10-12), and a
+# twin goes out after 4.5 seconds anyway (frontdesk.model_gateway.hedging). The run of 2026-10-13
+# lost up to 29 seconds of a turn to the waits above.
+AGENT_RETRY_WAITS: Final = (1.0, 2.0, 4.0)
 MAX_ATTEMPTS: Final = len(RETRY_WAITS) + 1
 # Why a run stops (`Meter.stop_reason`); a command maps each to an exit code.
 STOP_BUDGET: Final = "budget"
@@ -191,6 +202,7 @@ class Meter:
         messages: list[ModelMessage],
         parameters: ModelRequestParameters,
         model_settings: ModelSettings | None,
+        role: str = "",
     ) -> int:
         """The output cap of a request, when the reserve can bound what it would cost.
 
@@ -203,11 +215,9 @@ class Meter:
         if not cap:
             self._refuse("has no output cap")
         size = _request_bytes(messages, parameters)
-        if size > MAX_INPUT_TOKENS_PER_REQUEST:
-            self._refuse(
-                f"is {size} bytes long, more than the {MAX_INPUT_TOKENS_PER_REQUEST} tokens the "
-                "reserve assumes"
-            )
+        bound = input_bound(role)
+        if size > bound:
+            self._refuse(f"is {size} bytes long, more than the {bound} tokens the reserve assumes")
         return cap
 
     def _refuse(self, why: str) -> NoReturn:
@@ -215,7 +225,7 @@ class Meter:
         self._stop(STOP_BUDGET, message)
         raise UnboundedRequestError(message)
 
-    def reserve(self, max_tokens: int) -> float:
+    def reserve(self, max_tokens: int, role: str = "") -> float:
         """Refuse a request when the run has stopped or the budget has no room for it and for the
         requests in flight; otherwise hold the most it could cost, and return that.
 
@@ -224,7 +234,7 @@ class Meter:
             raise RunStoppedError(
                 f"the run has stopped ({self._stop_reason}): no further request is sent"
             )
-        most = self._price.cost(input_units=MAX_INPUT_TOKENS_PER_REQUEST, output_units=max_tokens)
+        most = self._price.cost(input_units=input_bound(role), output_units=max_tokens)
         try:
             self._budget.ensure_room(self._held + most)
         except BudgetExhaustedError as error:
@@ -241,11 +251,24 @@ class Meter:
         left) gives its hold back."""
         self._held = max(0.0, self._held - reserved)
 
-    def failed(self, role: str, reserved: float) -> None:
+    def failed(self, role: str, reserved: float, seconds: float, reason: str) -> None:
         """An attempt of `role` that cost nothing (the provider answered with an error status, or
-        the request never left): it gives its hold back, and it is one more failure in a row."""
+        the request never left): it gives its hold back, it is one more failure in a row, and it is
+        a call of the turn with `reason` and its time, which no record showed before."""
         self.release(reserved)
         self._failures[role] = self._failures.get(role, 0) + 1
+        self._calls.append(
+            CallRecord(
+                agent=role,
+                model_version=None,
+                input_tokens=0,
+                output_tokens=0,
+                thoughts_tokens=0,
+                finish_reason=reason,
+                usd=0.0,
+                seconds=seconds,
+            )
+        )
 
     def _append(self, kind: str, usd: float) -> None:
         try:
@@ -323,6 +346,30 @@ class Meter:
             )
         )
 
+    def abandoned(
+        self, role: str, reserved: float, winner: RequestUsage, cap: int, seconds: float
+    ) -> None:
+        """A hedged twin cancelled after the other answered (frontdesk.model_gateway.hedging): the
+        winner's input tokens and at most `cap` output tokens, which may have been billed. It is no
+        failure in a row: its twin answered."""
+        usd = self._price.cost(input_units=winner.input_tokens, output_units=cap)
+        try:
+            self._append("chat-hedged", usd)
+        finally:
+            self.release(reserved)
+        self._calls.append(
+            CallRecord(
+                agent=role,
+                model_version=None,
+                input_tokens=winner.input_tokens,
+                output_tokens=0,
+                thoughts_tokens=0,
+                finish_reason="hedged",
+                usd=usd,
+                seconds=seconds,
+            )
+        )
+
     def rate_limited(self) -> None:
         self._stop(
             STOP_RATE_LIMITED, "Google answered 429 (rate limited) at the last attempt of a request"
@@ -343,6 +390,21 @@ class Meter:
         self._stop(
             STOP_UNAVAILABLE, f"{attempts} of the {role} in a row failed; the last request {how}"
         )
+
+
+def retry_waits(role: str) -> tuple[float, ...]:
+    """The waits between the attempts of a request of this role."""
+    return AGENT_RETRY_WAITS if role == AGENT_ROLE else RETRY_WAITS
+
+
+def _unbilled(error: Exception) -> str:
+    """Why an attempt cost nothing: the error status it was answered with, or that it never left."""
+    return f"error {error.status_code}" if isinstance(error, ModelHTTPError) else "not sent"
+
+
+def input_bound(role: str) -> int:
+    """The most input tokens a request of this role may hold, and its reserve assumes."""
+    return AGENT_INPUT_TOKENS_PER_REQUEST if role == AGENT_ROLE else MAX_INPUT_TOKENS_PER_REQUEST
 
 
 def _request_bytes(messages: list[ModelMessage], parameters: ModelRequestParameters) -> int:
@@ -385,7 +447,7 @@ class MeteredModel(WrapperModel):
         """The request in up to `MAX_ATTEMPTS` attempts. The last attempt ends it with what it
         ended with, which is what the runner's stop logic reads (a 429, a refusal by the budget).
         However it ends, the meter is told, for the breaker."""
-        cap = self._meter.admit(messages, model_request_parameters, model_settings)
+        cap = self._meter.admit(messages, model_request_parameters, model_settings, self._role)
         try:
             response = await self._attempts(messages, model_settings, model_request_parameters, cap)
         except BaseException as error:
@@ -412,7 +474,7 @@ class MeteredModel(WrapperModel):
                     if isinstance(error, ModelHTTPError) and error.status_code == 429:
                         self._meter.rate_limited()  # it outlived the attempts
                     raise
-            await self._meter.sleep(RETRY_WAITS[attempt])
+            await self._meter.sleep(retry_waits(self._role)[attempt])
         raise AssertionError("the last attempt returns or raises")  # pragma: no cover
 
     async def _attempt(
@@ -423,20 +485,27 @@ class MeteredModel(WrapperModel):
         cap: int,
     ) -> ModelResponse:
         """One attempt: held while it is away, settled as soon as it ends."""
-        reserved = self._meter.reserve(cap)
+        reserved = self._meter.reserve(cap, self._role)
         started = self._meter.clock()
         try:
             response = await super().request(messages, model_settings, model_request_parameters)
-        except UNBILLED:
+        except UNBILLED as error:
             # An error status, or a request that never left: the provider billed nothing.
-            self._meter.failed(self._role, reserved)
+            seconds = self._meter.clock() - started
+            self._meter.failed(self._role, reserved, seconds, _unbilled(error))
             raise
         except BaseException:
             # Sent, but no usage came back: the provider may have billed it. If the ledger cannot
             # take the line, the meter has stopped the run; what ended the attempt still goes on
-            # (a cancellation must stay one).
+            # (a cancellation must stay one). A hedged twin that lost is an identical request to
+            # the winner's: its input, at most its output cap, and no failure of the provider.
+            seconds = self._meter.clock() - started
+            twin = CURRENT_TWIN.get()
             with suppress(BudgetError, OSError):
-                self._meter.unconfirmed(self._role, reserved, self._meter.clock() - started)
+                if twin is not None and twin.abandoned and twin.winner is not None:
+                    self._meter.abandoned(self._role, reserved, twin.winner, cap, seconds)
+                else:
+                    self._meter.unconfirmed(self._role, reserved, seconds)
             raise
         self._meter.record(self._role, response, self._meter.clock() - started, reserved=reserved)
         return response

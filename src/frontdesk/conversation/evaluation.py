@@ -12,6 +12,7 @@ which gives the few normalized words that matched the promise rule.
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
@@ -36,6 +37,8 @@ from frontdesk.safety.rules import contains_diagnostic_language, promise_phrase
 from frontdesk.tenancy.pack import FixedTextKey, Language
 
 FixedTexts = Mapping[FixedTextKey, str]
+# A phone number in a fixed text: a "+" or a digit, then digits with spaces, dots or dashes.
+_CONTACT = re.compile(r"\+?\d[\d .\-]{5,}\d")
 
 
 class TurnDatasetError(ValueError):
@@ -198,9 +201,9 @@ def check_reply(
     endings = tuple(
         text for key in (FixedTextKey.HANDOFF, FixedTextKey.NEXT_STEP) if (text := texts.get(key))
     )
-    # What code wrote: the voice may say it in other words, never with other facts (voice_check).
-    written = result.code_text or result.text
-    if result.outcome is TurnOutcome.HANDOFF and not written.endswith(endings):
+    if result.outcome is TurnOutcome.HANDOFF and not (
+        result.text.endswith(endings) or _gives_the_contact(result.text, texts)
+    ):
         failures.append("handoff without contact")
     failure = pipeline_failure(result.trace)
     if failure is not None and failure != expected_rule:
@@ -224,15 +227,11 @@ def check_case(case: TurnCase, result: TurnResult, *, texts: FixedTexts) -> tupl
         failures.append(f"rule: {result.trace.rule}")
     if expect.intent is not None and result.trace.intent is not expect.intent:
         failures.append(f"intent: {result.trace.intent}")
-    # The facts are checked in what code wrote; what the person reads may say them in other words.
-    written = result.code_text or result.text
     failures += [
-        f"missing text: {_one_line(text)}" for text in expect.contains if text not in written
+        f"missing text: {_one_line(text)}" for text in expect.contains if text not in result.text
     ]
     failures += [
-        f"unexpected text: {_one_line(text)}"
-        for text in expect.not_contains
-        if text in written or text in result.text
+        f"unexpected text: {_one_line(text)}" for text in expect.not_contains if text in result.text
     ]
     failures += [
         f"missing source: {source}"
@@ -245,15 +244,28 @@ def check_case(case: TurnCase, result: TurnResult, *, texts: FixedTexts) -> tupl
 def check_conversation(
     case: TurnCase, results: Sequence[TurnResult], texts: Callable[[Language], FixedTexts]
 ) -> tuple[str, ...]:
-    """Every turn's reply gets the universal checks, named by its turn; the last also the
-    expectation. `texts` gives the pack's fixed texts in a language."""
+    """Every turn's reply gets the universal checks, named by its turn, and is in the case's
+    language unless the case switches language; the last also gets the expectation. `texts` gives
+    the pack's fixed texts in a language."""
     *earlier, last = results
     failures = [
         f"turn {number}: {failure}"
         for number, result in enumerate(earlier, start=1)
-        for failure in check_reply(result, texts=texts(result.language))
+        for failure in (
+            *_language(case, result),
+            *check_reply(result, texts=texts(result.language)),
+        )
     ]
     return (*failures, *check_case(case, last, texts=texts(last.language)))
+
+
+def _language(case: TurnCase, result: TurnResult) -> tuple[str, ...]:
+    """An earlier reply in another language than the case's: the first of two replies came in
+    Albanian to an Italian question, and only the last was checked (review of 2026-10-13)."""
+    expected = case.expect.language
+    if expected is None or "language-switch" in case.tags or result.language == expected:
+        return ()
+    return (f"language: {result.language}",)
 
 
 def case_runtime(runtime: TurnRuntime, case: TurnCase) -> TurnRuntime:
@@ -431,3 +443,12 @@ def _describe(error: ValidationError) -> str:
 def _problem(problem: ErrorDetails) -> str:
     field = ".".join(str(part) for part in problem["loc"])
     return f"{field}: {problem['msg']}" if field else problem["msg"]
+
+
+def _gives_the_contact(text: str, texts: FixedTexts) -> bool:
+    """The reply names the phone number of the pack's handoff text: the reception agent writes the
+    contact in its own words rather than ending with the fixed text."""
+    handoff = texts.get(FixedTextKey.HANDOFF) or ""
+    numbers = ["".join(char for char in run if char.isdigit()) for run in _CONTACT.findall(handoff)]
+    said = "".join(char for char in text if char.isdigit())
+    return any(len(number) >= 6 and number in said for number in numbers)

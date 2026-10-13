@@ -34,7 +34,6 @@ MAX_CONVERSATION_ID_CHARS: Final = 64
 class BookingStage(StrEnum):
     CHOOSE = "choose"  # the free slots were offered
     NAME = "name"
-    PHONE = "phone"
     CONFIRM = "confirm"
 
 
@@ -50,7 +49,6 @@ class BookingStep(BaseModel):
     offered: tuple[datetime, ...] = ()
     shown: tuple[datetime, ...] = ()  # every time offered so far: "other times" are the rest
     hold_id: uuid.UUID | None = None
-    retries: int = 0
     # The reception agent: the turn whose reply showed the summary; only the next message may say yes.
     summary_turn: int | None = None
 

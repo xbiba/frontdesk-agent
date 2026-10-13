@@ -44,8 +44,9 @@ def test_the_summary_of_a_language_counts_every_kind_of_case() -> None:
         failed_by_pipeline=1,
         turns=6,
         p50_seconds=1.0,
-        p95_seconds=9.0,
+        p95_seconds=12.0,
         within_limit=pytest.approx(5 / 6),
+        within_ceiling=1.0,
         usd=pytest.approx(0.006),
     )
 
@@ -66,7 +67,7 @@ def test_one_summary_adds_up_all_the_languages() -> None:
     assert (every.answered, every.wrong_answers, every.answers_pending) == (3, 1, 3)  # all reviewed
     assert every.model_answers == 3  # the two Italian document answers and the English one
     assert (every.invented_facts, every.failed_by_pipeline, every.turns) == (0, 1, 7)
-    assert (every.p50_seconds, every.p95_seconds) == (2.0, 9.0)
+    assert (every.p50_seconds, every.p95_seconds) == (2.0, 12.0)
     assert every.within_limit == pytest.approx(6 / 7)
     assert every.usd == pytest.approx(0.007)
     english = summaries["en"]
@@ -109,7 +110,9 @@ def test_a_language_of_the_pack_with_no_case_has_an_empty_summary() -> None:
         ),
         0,
     )
-    zero = dict.fromkeys(("p50_seconds", "p95_seconds", "within_limit", "usd"), 0.0)
+    zero = dict.fromkeys(
+        ("p50_seconds", "p95_seconds", "within_limit", "within_ceiling", "usd"), 0.0
+    )
     assert summaries["sq"] == LanguageSummary(language="sq", **nothing, **zero)
 
 
@@ -120,7 +123,8 @@ def test_the_criteria_of_the_run_with_their_thresholds_and_values() -> None:
         Criterion("Invented facts that passed the checks", "0", "0", "pending"),
         Criterion("Right answers refused (en)", "at most 20%", "0% (0/1)", "pass"),
         Criterion("Right answers refused (it)", "at most 20%", "33.3% (1/3)", "fail"),
-        Criterion("Replies within 8 seconds", "at least 95%", "85.7% (p95 9.0 s)", "fail"),
+        Criterion("Replies within 10 seconds", "at least 90%", "85.7% (p95 12.0 s)", "fail"),
+        Criterion("Replies within 20 seconds", "at least 99%", "100%", "pass"),
         Criterion("Critical cases failed", "0", "2 of 3", "fail"),
         Criterion("Live spend of M3", "at most 10.00 EUR", "1.00 EUR", "pass"),
     )
@@ -151,16 +155,26 @@ def _timed(seconds: list[float]) -> tuple[CaseVerdict, ...]:
 
 def _share(seconds: list[float]) -> Criterion:
     found = criteria(summarize(_timed(seconds)), spent_eur=None, cap_eur=None)
-    return next(c for c in found if c.name == "Replies within 8 seconds")
+    return next(c for c in found if c.name == "Replies within 10 seconds")
 
 
-def test_95_percent_within_8_seconds_is_enough_and_8_seconds_is_within() -> None:
-    assert _share([8.0]).status == "pass"  # 8.0 s is within the limit
-    assert _share([8.0]).value == "100% (p95 8.0 s)"
-    assert _share([1.0] * 19 + [8.01]).status == "pass"  # 19 of 20 is 95%
-    assert _share([1.0] * 19 + [8.01]).value == "95% (p95 1.0 s)"
-    assert _share([1.0] * 18 + [8.01, 9.0]).status == "fail"  # 18 of 20 is 90%
-    assert _share([9.0]).status == "fail"
+def test_90_percent_within_10_seconds_is_enough_and_10_seconds_is_within() -> None:
+    assert _share([10.0]).status == "pass"  # 10.0 s is within the limit
+    assert _share([10.0]).value == "100% (p95 10.0 s)"
+    assert _share([1.0] * 18 + [10.01, 12.0]).status == "pass"  # 18 of 20 is 90%
+    assert _share([1.0] * 17 + [10.01, 12.0, 12.0]).status == "fail"  # 17 of 20 is 85%
+    assert _share([12.0]).status == "fail"
+
+
+def _ceiling(seconds: list[float]) -> Criterion:
+    found = criteria(summarize(_timed(seconds)), spent_eur=None, cap_eur=None)
+    return next(c for c in found if c.name == "Replies within 20 seconds")
+
+
+def test_99_percent_within_20_seconds_is_the_second_limit() -> None:
+    assert _ceiling([20.0]).status == "pass"
+    assert _ceiling([1.0] * 99 + [25.0]).status == "pass"  # 99 of 100
+    assert _ceiling([1.0] * 98 + [25.0, 25.0]).status == "fail"  # 98 of 100
 
 
 def test_every_criterion_pending_until_the_run_is_complete_except_a_failure() -> None:
@@ -220,18 +234,18 @@ def test_the_languages_table_has_a_row_for_each_language_and_one_for_all(tmp_pat
     assert (
         "| language | cases | passed | critical failed | missed emergencies | right answers refused "
         "| wrong answers passed | invented facts | to review | handoffs by failure | p50 s | p95 s "
-        "| within 8 s | EUR per message | EUR |"
+        "| within 10 s | EUR per message | EUR |"
     ) in text
     assert (
         "| en | 1 | 1 | 0 | 0 | 0/1 | 0/1 | 0 | 1 | 0 | 2.0 | 2.0 | 100% | 0.00080 | 0.0008 |"
         in text
     )
     assert (
-        "| it | 6 | 2 | 2 | 1 | 1/3 | 1/2 | 0 | 2 | 1 | 1.0 | 9.0 | 83.3% | 0.00080 | 0.0048 |"
+        "| it | 6 | 2 | 2 | 1 | 1/3 | 1/2 | 0 | 2 | 1 | 1.0 | 12.0 | 83.3% | 0.00080 | 0.0048 |"
         in text
     )
     assert (
-        "| all | 7 | 3 | 2 | 1 | 1/4 | 1/3 | 0 | 3 | 1 | 2.0 | 9.0 | 85.7% | 0.00080 | 0.0056 |"
+        "| all | 7 | 3 | 2 | 1 | 1/4 | 1/3 | 0 | 3 | 1 | 2.0 | 12.0 | 85.7% | 0.00080 | 0.0056 |"
         in text
     )
     rows = [line for line in text.splitlines() if line.startswith("| sq ")]
@@ -279,7 +293,7 @@ def test_a_run_without_a_budget_costs_nothing_and_has_no_spend_row() -> None:
     assert "Prices:" not in text
     assert "Live spend" not in text
     assert (
-        "| it | 6 | 2 | 2 | 1 | 1/3 | 1/2 | 0 | 2 | 1 | 1.0 | 9.0 | 83.3% | 0.00000 | 0.0000 |"
+        "| it | 6 | 2 | 2 | 1 | 1/3 | 1/2 | 0 | 2 | 1 | 1.0 | 12.0 | 83.3% | 0.00000 | 0.0000 |"
         in text
     )
 

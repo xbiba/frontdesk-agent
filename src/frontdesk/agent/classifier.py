@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict
@@ -38,8 +37,6 @@ class ClassifierDeps(BaseModel):
     topic_services: tuple[CatalogEntry, ...] = ()
     topic_doctors: tuple[CatalogEntry, ...] = ()
     pending_clarification: ClarifyField | None = None
-    today: date | None = None
-    offered_slots: tuple[datetime, ...] = ()  # in the business's time zone
     previous_reply: str | None = None
 
 
@@ -52,8 +49,6 @@ def classifier_deps(
     topic_service_ids: tuple[str, ...] = (),
     topic_doctor_ids: tuple[str, ...] = (),
     pending_clarification: ClarifyField | None = None,
-    today: date | None = None,
-    offered_slots: tuple[datetime, ...] = (),
     previous_reply: str | None = None,
 ) -> ClassifierDeps:
     services = {
@@ -88,8 +83,6 @@ def classifier_deps(
             if key in catalog.doctors
         ),
         pending_clarification=pending_clarification,
-        today=today,
-        offered_slots=offered_slots,
         previous_reply=previous_reply,
     )
 
@@ -115,14 +108,6 @@ def render_catalog(deps: ClassifierDeps) -> str:
     ]
     if deps.pending_clarification is not None:
         lines.append(f"The assistant has just asked the person for: {deps.pending_clarification}.")
-    if deps.today is not None:
-        lines.append(f"Today: {deps.today:%A} {deps.today.isoformat()}.")
-    if deps.offered_slots:
-        times = "; ".join(
-            f"{number}) {start:%A} {start:%Y-%m-%d %H:%M}"
-            for number, start in enumerate(deps.offered_slots, start=1)
-        )
-        lines.append(f"Times the assistant has just offered: {times}.")
     if deps.previous_reply:
         lines.append(f"The assistant's previous message:\n<<<\n{deps.previous_reply}\n>>>")
     return "\n\n".join(

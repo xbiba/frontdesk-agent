@@ -44,8 +44,6 @@ class Settings(BaseSettings):
     temporal_namespace: str = "default"
     model_route: str = "offline-demo"
     gcp_project: str | None = None
-    # The voice rewrites what code wrote, on live routes only (Albi's live chat, 2026-10-12).
-    voice: bool = False
     # The reception agent leads the conversation on live routes; offline stays the pipeline.
     conversation: Conversation = Conversation.PIPELINE
     embedding_backend: EmbeddingBackend = EmbeddingBackend.HASH

@@ -29,10 +29,9 @@ from tests.cli.live_eval_helpers import (
 from tests.model_gateway.budget_helpers import ROUTE, write_budget
 
 pytestmark = pytest.mark.db
-# Five requests per turn at most (classifier, responder, voice), each held at its reserve: 32,000
-# tokens in and a cap of 1,200 out (the responder's, the largest) cost 0.044 USD at the test prices
-# of 1 and 10 USD per million.
-CEILING_PER_TURN_USD = 5 * 0.044
+# Four requests per turn at most, each held at its reserve: 32,000 tokens in and a cap of 1,200 out
+# (the responder's, the larger) cost 0.044 USD at the test prices of 1 and 10 USD per million.
+CEILING_PER_TURN_USD = 4 * 0.044
 
 
 def test_a_live_run_shows_what_it_could_cost_pays_from_the_budget_and_records_everything(
@@ -59,7 +58,7 @@ def test_a_live_run_shows_what_it_could_cost_pays_from_the_budget_and_records_ev
     ceiling = 3 * CEILING_PER_TURN_USD / 1.25
     assert lines[1] == (
         f"at most {ceiling:.2f} EUR; the budget has 8.00 of 10.00 EUR left"
-    )  # 0.53: the ceiling is shown before the first call
+    )  # 0.42: the ceiling is shown before the first call
     assert f"cases recorded: 3/3 in {run_dir}" in lines
     assert any(line.startswith("PASS     Live spend of M3: 2.02 EUR") for line in lines)
     assert sent == ["classifier", "classifier"]  # the emergency is decided by the rules alone
@@ -188,8 +187,8 @@ def test_tags_choose_the_cases_and_the_report_is_judged_over_the_same_cases(
     assert recorded_cases(run_dir) == ["price-tagged"]
     # Recomputed with the tag the run was started with it is the same report; without, the cases
     # the run never meant to run are missing from it.
-    assert "PASS     Replies within 8 seconds" in eval_report(run_dir, "--tag", "pricing").stdout
-    assert "PENDING  Replies within 8 seconds" in eval_report(run_dir).stdout
+    assert "PASS     Replies within 10 seconds" in eval_report(run_dir, "--tag", "pricing").stdout
+    assert "PENDING  Replies within 10 seconds" in eval_report(run_dir).stdout
 
 
 def test_a_tag_no_case_has_is_an_error_before_anything_is_written(

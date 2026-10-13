@@ -7,7 +7,7 @@ from collections.abc import Callable, Sequence
 from datetime import date
 from typing import Any
 
-from pydantic_ai import ModelResponse, TextPart, ToolCallPart
+from pydantic_ai import ModelResponse, ToolCallPart
 from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -66,23 +66,6 @@ def classifier_turns(outputs: list[dict[str, Any]], instructions: list[str]) -> 
         seen = request.instructions if isinstance(request, ModelRequest) else None
         instructions.append(seen or "")
         return _output(info, remaining.pop(0))
-
-    return FunctionModel(model)
-
-
-def voice_model(
-    reply: str | Callable[[str], str], calls: list[tuple[str, str]] | None = None
-) -> FunctionModel:
-    """The voice: answers `reply` (or `reply(message)`); records each call's message and
-    instructions."""
-
-    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        request = messages[-1]
-        seen = request.instructions if isinstance(request, ModelRequest) else None
-        message = first_prompt(messages)
-        if calls is not None:
-            calls.append((message, seen or ""))
-        return ModelResponse(parts=[TextPart(reply(message) if callable(reply) else reply)])
 
     return FunctionModel(model)
 
