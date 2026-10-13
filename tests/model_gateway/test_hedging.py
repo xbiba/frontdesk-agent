@@ -120,3 +120,20 @@ async def test_an_error_that_is_no_failure_of_the_provider_does_not_fall_back() 
     with pytest.raises(ValueError, match="no room"):
         await Agent(hedged).run("hi")
     assert spare == []
+
+
+async def test_a_slow_first_model_races_the_fallback_and_keeps_the_turn() -> None:
+    # Albi, 2026-10-13: a request still unanswered after 6 seconds also goes to the fallback, and
+    # the first answer wins. Slowness is no failure: the turn's next request is the first model's.
+    first: list[int] = []
+    spare: list[int] = []
+    hedged = HedgedModel(
+        _model([5.0, 5.0, 0.0], first),
+        fallback=_model([0.0, 0.0], spare),
+        after=AFTER,
+        spare_after=0.1,
+    )
+    with fallback_turn():
+        assert (await Agent(hedged).run("hi")).output == "answer 0"  # the fallback's first
+        assert (first, spare) == ([0, 1], [0])
+        assert (await Agent(hedged).run("hi")).output == "answer 2"  # the first model's third
