@@ -318,3 +318,19 @@ async def test_a_failure_worth_retrying_ends_the_request_at_once_when_the_run_ha
     assert model.requests == 1
     assert sleeps.waits == []
     assert meter.stop_reason == "ledger"
+
+
+async def test_a_model_with_a_fallback_makes_one_attempt_and_a_429_stops_nothing(
+    tmp_path: Path,
+) -> None:
+    # With a fallback the hedger answers a failure at once (frontdesk.model_gateway.hedging): no
+    # attempt more on a model that is stuck, and no stop of the run for a rate limit it answers.
+    sleeps = Sleeps()
+    meter = Meter(write_budget(tmp_path), route_id=ROUTE, run_id="run-1", sleep=sleeps)
+    for code in (504, 429):
+        model = ScriptedModel(status(code), answer())
+        with pytest.raises(ModelHTTPError):
+            await Agent(meter.wrap(model, "agent", retries=False)).run("x", model_settings=CAP)
+        assert model.requests == 1
+    assert sleeps.waits == []
+    assert meter.stop_reason is None

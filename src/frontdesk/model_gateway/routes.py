@@ -48,6 +48,8 @@ class ModelRoute:
     thinking: str = "minimal"
     # How long one request may take before it is cut and retried (frontdesk.model_gateway.factory).
     request_timeout_seconds: float = 30.0
+    # The route that answers a request this one fails (frontdesk.model_gateway.hedging).
+    fallback: str | None = None
 
 
 ROUTES: Final[dict[str, ModelRoute]] = {
@@ -91,6 +93,9 @@ ROUTES: Final[dict[str, ModelRoute]] = {
         # 25 was tried on 2026-10-13 and the 504s came at 22: the requests were stuck, not slow, so
         # they are cut sooner and retried, with a twin after 4.5 seconds.
         request_timeout_seconds=15.0,
+        # Served in no other European region (probe of 2026-10-13); 2.5 Flash, served on
+        # europe-west1, -west4, -west8 and -west9, retires on 2026-10-20.
+        fallback="vertex-eu-gemini-flash-lite",
     ),
     # The embedding candidates of the M3 experiment (design §4.5). Neither is served on the eu
     # multi-region; both are on europe-west1 (Belgium).

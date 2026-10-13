@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from pydantic_ai import Agent, ModelResponse, TextPart
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.usage import RequestUsage
@@ -79,3 +80,54 @@ async def test_a_meter_records_the_lost_twin_at_its_bound_and_no_failure(tmp_pat
     assert lines[1]["usd"] == pytest.approx(price.cost(input_units=1000, output_units=600))
     assert meter.stop_reason is None  # a lost twin is no failure: the breaker of one did not trip
     assert [call.finish_reason for call in meter.drain()] == [None, "hedged"]
+
+
+def _failing(code: int, calls: list[int], *, after: float = 0.0) -> FunctionModel:
+    """Answers every request with an error status, after a while."""
+
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        calls.append(len(calls))
+        await asyncio.sleep(after)
+        raise ModelHTTPError(code, "gemini-3.8-flash", body={"error": {"code": code}})
+
+    return FunctionModel(respond)
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def test_a_failure_of_the_first_model_goes_to_the_fallback_and_rests_it() -> None:
+    # Vertex left requests of 3.8 Flash hanging until a 504 (2026-10-13), and 3.8 Flash is served
+    # in no other European region: the request goes to the fallback model, and so do the next ones
+    # for a while (Albi, 2026-10-13: stability before Instagram).
+    first: list[int] = []
+    spare: list[int] = []
+    clock = Clock()
+    hedged = HedgedModel(
+        _failing(504, first), fallback=_model([0.0, 0.0, 0.0], spare), after=AFTER, clock=clock
+    )
+    assert (await Agent(hedged).run("hi")).output == "answer 0"
+    assert (first, spare) == ([0], [0])
+    clock.now = 60.0  # resting: straight to the fallback
+    assert (await Agent(hedged).run("hi")).output == "answer 1"
+    assert first == [0]
+    clock.now = 121.0  # rested: the first model again
+    with pytest.raises(ModelHTTPError):
+        await Agent(HedgedModel(_failing(504, first), after=AFTER, clock=clock)).run("hi")
+
+
+async def test_an_error_that_is_no_failure_of_the_provider_does_not_fall_back() -> None:
+    spare: list[int] = []
+
+    async def refuse(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        raise ValueError("the budget has no room")
+
+    hedged = HedgedModel(FunctionModel(refuse), fallback=_model([0.0], spare), after=AFTER)
+    with pytest.raises(ValueError, match="no room"):
+        await Agent(hedged).run("hi")
+    assert spare == []

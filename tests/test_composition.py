@@ -26,7 +26,13 @@ from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, handle_message
 from frontdesk.knowledge.embedders import HashEmbedder
 from frontdesk.model_gateway import google_tokens
-from frontdesk.model_gateway.routes import ROUTES, DataClass, OutputLimits, UnapprovedRouteError
+from frontdesk.model_gateway.routes import (
+    ROUTES,
+    DataClass,
+    ModelRoute,
+    OutputLimits,
+    UnapprovedRouteError,
+)
 from frontdesk.settings import CalendarBackend, EmbeddingBackend, Settings
 from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.pack import BusinessPack, CalendarIntegration, Integrations, Profile
@@ -412,7 +418,7 @@ def test_evaluation_data_reaches_the_gemini_route_through_the_given_wrapper(
     factory = activate_pack(clinic_pack)
     wrapped: list[tuple[str, str]] = []
 
-    def wrap(model: Model, role: str) -> Model:
+    def wrap(model: Model, role: str, *, retries: bool = True) -> Model:
         wrapped.append((model.model_name, role))
         return model
 
@@ -555,3 +561,38 @@ def test_the_reception_agent_leads_on_a_live_route_when_the_deployment_asks(
     assert (runtime.reception is not None) is built
     expected = prompt_version(Profile.RECEPTIONIST, "reception") if built else None
     assert runtime.reception_prompt_version == expected
+
+
+@pytest.mark.db
+def test_the_agent_on_3_8_flash_falls_back_to_flash_lite(
+    activate_pack: Activate,
+    app_url: str,
+    clinic_pack: BusinessPack,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Stability before Instagram (Albi, 2026-10-13): 3.8 Flash is served in no other European
+    # region, so a failure goes to 3.1 Flash-Lite. The first model makes one attempt: the fallback
+    # answers its failure, not a retry on a model that is stuck.
+    def build(route: ModelRoute, *, gcp_project: str) -> Model:
+        return FunctionModel(
+            lambda messages, info: ModelResponse(parts=[]), model_name=route.model_name
+        )
+
+    monkeypatch.setattr("frontdesk.composition.build_live_model", build)
+    wrapped: list[tuple[str, str, bool]] = []
+
+    def wrap(model: Model, role: str, *, retries: bool = True) -> Model:
+        wrapped.append((model.model_name, role, retries))
+        return model
+
+    deployment = _deployment(
+        clinic_pack,
+        activate_pack(clinic_pack),
+        app_url=app_url,
+        model_route="vertex-eu-gemini-flash",
+        conversation="agent",
+        gcp_project="p",
+    )
+    build_turn_runtime(deployment, data_class=DataClass.EVALUATION, wrap_model=wrap)
+    assert ("gemini-3.8-flash", "agent", False) in wrapped
+    assert ("gemini-3.1-flash-lite", "agent", True) in wrapped
