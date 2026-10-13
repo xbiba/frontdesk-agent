@@ -522,11 +522,27 @@ async def test_free_times_gives_every_time_of_each_day_and_whether_other_days_ha
     assert "- 2026-10-23 (venerdì 23 ottobre): 09:00, 09:30" in first
     assert "- 2026-10-26 (lunedì 26 ottobre): 09:00, 09:30" in first
     assert "Every free time of each day below is listed" in first
-    assert "Other days with free times: none in the calendar's reach." in first
+    # The calendar is read for 14 days from Thursday 22 at 08:00: whole days until Wednesday 4.
+    # A list it cut is never complete (review of agent-4: the 27th was cut, and the reply said
+    # the 26th was the only time left).
+    assert (
+        "Other days with free times: none until 2026-11-04 (mercoledì 4 novembre), the last day "
+        "the calendar is read here." in first
+    )
+    assert "never say there are no times after it" in first
     # A day asked for: all of it, and the other days are said to exist.
     assert "- 2026-10-23 (venerdì 23 ottobre): 09:00, 09:30" in friday
     assert "2026-10-26" not in friday.splitlines()[1]
     assert "Other days with free times: yes, from 2026-10-26" in friday
+
+
+async def test_a_day_after_the_calendar_s_reach_is_said_to_be_unknown(base: TurnRuntime) -> None:
+    script = Script([[("free_times", {"day": "2026-11-10"})], _final("Non lo so ancora.")])
+    await Chat(base, script).say("Il 10 novembre c'è posto?")
+    assert script.tool_results() == [
+        "2026-11-10 is after 2026-11-04 (mercoledì 4 novembre), the last day the calendar is read "
+        "here: say its times are not known here, and give reception's phone for later dates."
+    ]
 
 
 async def test_a_time_no_tool_gave_is_sent_back(base: TurnRuntime) -> None:
