@@ -12,7 +12,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from typing import Final
 
@@ -88,6 +88,16 @@ _NOTICES: Final = {
 _SMALL_TALK: Final = frozenset({Intent.GREETING, Intent.OTHER})
 # The part of a turn's time the reception agent may take: the rest answers when it runs out.
 RECEPTION_SHARE: Final = 0.8
+# Limits per Instagram user (Albi, 2026-10-13): more messages than this within a minute get a short
+# reply and no model call. One held slot at a time and its release come from the holds
+# (frontdesk.booking.holds: a new hold drops the conversation's earlier one, and any lasts 15 minutes).
+MESSAGES_PER_MINUTE: Final = 10
+RATE_WINDOW: Final = timedelta(minutes=1)
+SLOW_DOWN: Final[dict[str, str]] = {
+    "sq": "Mora shumë mesazhe në pak kohë: provoni përsëri pas një minute.",
+    "it": "Ho ricevuto molti messaggi in poco tempo: riprovi tra un minuto.",
+    "en": "I received many messages in a short time: please try again in a minute.",
+}
 # The clarifying questions each profile's responder prompt offers (agents/<profile>/prompts/
 # responder.md); the shop's prompt has no clarify action. A test pins this table to the prompts.
 RESPONDER_CLARIFY_FIELDS: Final[dict[Profile, frozenset[ClarifyField]]] = {
@@ -192,6 +202,21 @@ class TurnRuntime:
 async def handle_message(
     text: str, state: ConversationState, runtime: TurnRuntime
 ) -> tuple[TurnResult, ConversationState]:
+    now = runtime.now()
+    recent = (*(at for at in state.recent if now - at < RATE_WINDOW), now)
+    if len(recent) > MESSAGES_PER_MINUTE:
+        # Limits per Instagram user (Albi, 2026-10-13): no model call, and nothing remembered.
+        language = detect_language(
+            text,
+            current=state.language,
+            supported=runtime.pack.languages,
+            default=runtime.pack.default_language,
+        )
+        slowed = TurnResult(
+            SLOW_DOWN[language], TurnOutcome.REPLIED, language, TurnTrace(rule="rate_limit")
+        )
+        _log_turn(slowed, runtime.pack.id)
+        return slowed, state.model_copy(update={"recent": recent})
     with turn_span(runtime.pack.id) as span:
         result = await _run_turn(text, state, runtime)
         trace = result.trace
@@ -213,7 +238,8 @@ async def handle_message(
         record_content(span, enabled=runtime.capture_content, message=text, reply=result.text)
     _log_turn(result, runtime.pack.id)
     exchange = (text, result.text) if _kept(result, runtime) else None
-    return result, _next_state(state, result, runtime.pack, exchange=exchange)
+    following = _next_state(state, result, runtime.pack, exchange=exchange)
+    return result, following.model_copy(update={"recent": recent})
 
 
 async def _run_turn(text: str, state: ConversationState, runtime: TurnRuntime) -> TurnResult:

@@ -3,7 +3,7 @@ code checks the calendar, the hold, the patient's yes and every number of the re
 
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -768,3 +768,43 @@ async def test_a_clinic_that_confirms_its_appointments_gets_a_request(
         "reception conferma l'appuntamento"
     )
     assert "confermata" not in reply.text
+
+
+async def test_a_conversation_sends_ten_messages_a_minute_at_most(base: TurnRuntime) -> None:
+    # Limits per Instagram user (Albi, 2026-10-13): past ten messages within a minute, a short
+    # reply and no model call; a minute later, the conversation goes on.
+    script = Script([_final("Va bene.") for _ in range(11)])
+    chat = Chat(base, script)
+    for _ in range(10):
+        assert (await chat.say("Vorrei sapere una cosa")).text == "Va bene."
+    slowed = await chat.say("Vorrei sapere una cosa")
+    assert slowed.trace.rule == "rate_limit"
+    assert slowed.text == "Ho ricevuto molti messaggi in poco tempo: riprovi tra un minuto."
+    assert len(script.calls) == 10
+    chat.runtime = replace(chat.runtime, now=lambda: NOW + timedelta(seconds=61))
+    assert (await chat.say("Vorrei sapere una cosa")).text == "Va bene."
+
+
+async def test_two_conversations_share_no_memory(base: TurnRuntime) -> None:
+    # (Albi, 2026-10-13): one agent serves every conversation; a patient's words, name, phone and
+    # booking reach no other conversation's requests.
+    script = Script(
+        [
+            *HOLD_AND_NAME,
+            [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
+            _final(SUMMARY),
+            _final("Buongiorno, come posso aiutarla?"),
+        ]
+    )
+    runtime = replace(base, reception=build_reception(script.model(), base.pack.profile))
+    first = ConversationState(conversation_id="first", turns=1)
+    for message in ("Venerdì che orari ci sono?", "alle 9", "Mario Rossi, +355 69 123 4567"):
+        _, first = await handle_message(message, first, runtime)
+    assert first.booking is not None
+    other = ConversationState(conversation_id="other", turns=1)
+    _, other = await handle_message("Vorrei sapere una cosa", other, runtime)
+    seen = repr(script.calls[-1])  # everything the model got for the other conversation
+    for trace in ("Mario Rossi", "4567", "Riepilogo", "Booking under way", "Venerdì che orari"):
+        assert trace not in seen
+    assert other.booking is None
+    assert other.history[0].text == "Vorrei sapere una cosa"
