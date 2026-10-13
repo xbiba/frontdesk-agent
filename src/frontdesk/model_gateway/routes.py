@@ -86,9 +86,11 @@ ROUTES: Final[dict[str, ModelRoute]] = {
         region="eu",
         approved_for=frozenset({DataClass.EVALUATION}),
         thinking="low",
-        # Its replies take 2 seconds at the median and 11 at the 95th percentile; a few stuck for
-        # 15 to 36 seconds on 2026-10-12 and spent the whole turn. Cut at 15 and retried instead.
-        request_timeout_seconds=15.0,
+        # Its replies take 2 seconds at the median. The SDK sends the timeout to Vertex
+        # (X-Server-Timeout), which answers 504 when it runs out. Cut at 15, the runs of 2026-10-13
+        # had 34 504s at 12.1 to 12.9 seconds, while the slowest answers took 13.0: slow replies were
+        # cut, not only stuck ones. A twin after 4.5 seconds and the turn's own limit stay.
+        request_timeout_seconds=25.0,
     ),
     # The embedding candidates of the M3 experiment (design §4.5). Neither is served on the eu
     # multi-region; both are on europe-west1 (Belgium).
