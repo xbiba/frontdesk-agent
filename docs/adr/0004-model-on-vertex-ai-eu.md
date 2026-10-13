@@ -42,3 +42,14 @@ The reception agent runs on Gemini 3.8 Flash (`vertex-eu-gemini-flash`, eu multi
 - **Shorter waits for the agent** (2026-10-13). The run of 2026-10-13 had turns of 27 to 36 seconds whose model calls took 7 to 19: the rest went to attempts answered with an error status, which no record showed, and to the waits of 2, 4 and 8 seconds between attempts. The agent now waits 1, 2 and 4 seconds, and every attempt is a call of the turn, an unbilled one with its status ("error 429") or "not sent".
 
 The latency criterion of the live runs becomes 90% of replies within 10 seconds and 99% within 20 (Albi). A turn of the agent that uses a tool takes two model calls, the tool's and the reply.
+
+## Amendment, 2026-10-13: a fallback model
+
+Vertex's eu multi-region left requests of 3.8 Flash hanging until a 504 for whole windows, twins included: the run of 2026-10-13 was stopped twelve times. Albi asked for a twin in another European region, or a fallback model, before Instagram.
+
+- **No other region.** A probe of 2026-10-13 found 3.8 Flash only on the `eu` multi-region (404 on europe-west1, -west3, -west4, -west8, -west9, -north1, -central2, -southwest1; 501 on -west10; 400 on -west12). 2.5 Flash answers on europe-west1, -west4, -west8 and -west9, but retires on 2026-10-20, with 2.5 Pro and 2.5 Flash-Lite.
+- **3.1 Flash-Lite as fallback.** It is on the `eu` multi-region and retires "May 7, 2027 or later". The route of 3.8 Flash names it (`fallback`).
+  - The first model makes one attempt, without the meter's retries. When it fails with an error status, a timeout or a broken connection, the request goes to the fallback at once (`model_gateway/hedging.py`).
+  - So do the next requests of the same turn, so that the turn does not wait out the stuck window again. The next turn tries 3.8 Flash again. The twin after 4.5 seconds stays on 3.8 Flash.
+  - A rest of 120 seconds was measured first (`runs/2026-10-13-agent-6`). After 3 failures of 3.8 Flash in an 11-minute run, Flash-Lite answered 204 of 293 requests, and 11 cases failed on its answers, against 1 before. The time criteria passed (95.9% within 10 s, 99.5% within 20). So the rest is the turn's only.
+  - The report counts the requests the fallback answered.

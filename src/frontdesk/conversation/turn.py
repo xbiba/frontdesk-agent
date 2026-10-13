@@ -63,6 +63,7 @@ from frontdesk.db.engine import business_session
 from frontdesk.knowledge.embedders import Embedder
 from frontdesk.knowledge.evidence import Evidence, EvidenceKind
 from frontdesk.knowledge.facts import Catalog, load_catalog
+from frontdesk.model_gateway.hedging import fallback_turn
 from frontdesk.observability.logs import log_event
 from frontdesk.observability.tracing import record_content, record_metadata, turn_span
 from frontdesk.safety.language import detect_language
@@ -287,12 +288,13 @@ async def _reception(
     try:
         # Within the turn's own limit, so that what the tools did is still known when it runs out.
         async with asyncio.timeout(runtime.timeout_seconds * RECEPTION_SHARE):
-            run = await runtime.reception.run(
-                text,
-                deps=desk,
-                message_history=history_messages(state.history),
-                usage_limits=RECEPTION_LIMITS,
-            )
+            with fallback_turn():  # a failure of the model goes to its fallback for this turn
+                run = await runtime.reception.run(
+                    text,
+                    deps=desk,
+                    message_history=history_messages(state.history),
+                    usage_limits=RECEPTION_LIMITS,
+                )
     except (AgentRunError, TimeoutError) as error:
         log_event(logger, "reception.failed", business_id=pack.id, reason=type(error).__name__)
         failed = TurnTrace(

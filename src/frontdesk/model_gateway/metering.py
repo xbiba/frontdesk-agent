@@ -189,8 +189,10 @@ class Meter:
         """What the requests in flight hold against the cap until they are settled."""
         return self._held
 
-    def wrap(self, model: Model, role: str) -> Model:
-        return MeteredModel(model, meter=self, role=role)
+    def wrap(self, model: Model, role: str, *, retries: bool = True) -> Model:
+        """`model` metered for `role`. Without retries, one attempt and no stop for a rate limit:
+        a fallback answers the failure (frontdesk.model_gateway.hedging)."""
+        return MeteredModel(model, meter=self, role=role, retries=retries)
 
     def drain(self) -> tuple[CallRecord, ...]:
         """The requests since the last drain, oldest first."""
@@ -433,10 +435,11 @@ def _worth_retrying(error: Exception) -> bool:
 
 
 class MeteredModel(WrapperModel):
-    def __init__(self, wrapped: Model, *, meter: Meter, role: str) -> None:
+    def __init__(self, wrapped: Model, *, meter: Meter, role: str, retries: bool = True) -> None:
         super().__init__(wrapped)
         self._meter = meter
         self._role = role
+        self._retries = retries
 
     async def request(
         self,
@@ -463,15 +466,17 @@ class MeteredModel(WrapperModel):
         model_request_parameters: ModelRequestParameters,
         cap: int,
     ) -> ModelResponse:
-        for attempt in range(MAX_ATTEMPTS):
+        attempts = MAX_ATTEMPTS if self._retries else 1
+        for attempt in range(attempts):
             try:
                 return await self._attempt(messages, model_settings, model_request_parameters, cap)
             except Exception as error:
-                last = attempt == MAX_ATTEMPTS - 1
+                last = attempt == attempts - 1
                 # Once the run has stopped (a ledger that failed under this very attempt) nothing
                 # more is sent, so there is nothing to wait for.
                 if last or self._meter.stop_reason is not None or not _worth_retrying(error):
-                    if isinstance(error, ModelHTTPError) and error.status_code == 429:
+                    rate_limited = isinstance(error, ModelHTTPError) and error.status_code == 429
+                    if rate_limited and self._retries:
                         self._meter.rate_limited()  # it outlived the attempts
                     raise
             await self._meter.sleep(retry_waits(self._role)[attempt])

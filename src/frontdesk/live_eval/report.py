@@ -22,7 +22,7 @@ from typing import Final, Literal
 from frontdesk.conversation.evaluation import TurnCase
 from frontdesk.conversation.reception import SENT_BACK
 from frontdesk.live_eval.judging import CaseVerdict, judge, load_labels
-from frontdesk.live_eval.records import RunFiles, RunManifest, read_turns
+from frontdesk.live_eval.records import RunFiles, RunManifest, TurnRecord, read_turns
 from frontdesk.live_eval.review import render_review_page
 from frontdesk.model_gateway.costs import Budget
 
@@ -523,5 +523,23 @@ def _agent_replies(manifest: RunManifest, verdicts: Sequence[CaseVerdict]) -> li
         f"{len(sent_back) - len(refused)} then passed the check.",
         f"- Ended in the fixed text: {len(fixed)} turns; {len(refused)} after a second refused "
         f"reply, {len(fixed) - len(refused)} after a model failure or the time limit.",
+        _fallback_line(manifest, turns),
         "",
     ]
+
+
+def _fallback_line(manifest: RunManifest, turns: Sequence[TurnRecord]) -> str:
+    """The requests another model than the route's answered: the fallback of a model that failed
+    (Albi, 2026-10-13: stability before Instagram)."""
+    answered, spare, spared = 0, [], 0
+    for turn in turns:
+        versions = [call.model_version for call in turn.calls if call.model_version is not None]
+        others = [version for version in versions if not version.startswith(manifest.model_name)]
+        answered += len(versions)
+        spare += others
+        spared += 1 if others else 0
+    names = ", ".join(sorted(set(spare))) or "none"
+    return (
+        f"- Answered by the fallback model ({names}): {len(spare)} of {answered} answered "
+        f"requests, in {spared} of {len(turns)} turns."
+    )

@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import Literal
+from typing import Literal, Protocol
 from zoneinfo import ZoneInfo
 
 from pydantic_ai import Agent
@@ -45,6 +45,7 @@ from frontdesk.model_gateway.hedging import HedgedModel
 from frontdesk.model_gateway.routes import (
     CHAT_PROVIDERS,
     DataClass,
+    ModelRoute,
     UnapprovedRouteError,
     require_route,
 )
@@ -54,15 +55,38 @@ from frontdesk.tenancy.loader import load_pack
 from frontdesk.tenancy.pack import BusinessPack
 
 AgentRole = Literal["classifier", "responder", "agent"]
-ModelWrapper = Callable[[Model, AgentRole], Model]
+
+
+class ModelWrapper(Protocol):
+    """What meters a model for an agent's role; without retries when a fallback answers its
+    failures (frontdesk.model_gateway.metering)."""
+
+    def __call__(self, model: Model, role: AgentRole, *, retries: bool = True) -> Model: ...
 
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _unwrapped(model: Model, role: AgentRole) -> Model:
+def _unwrapped(model: Model, role: AgentRole, *, retries: bool = True) -> Model:
     return model
+
+
+def _hedged(
+    route: ModelRoute,
+    model: Model,
+    wrap: ModelWrapper,
+    deployment: Deployment,
+    data_class: DataClass,
+) -> Model:
+    """The agent's model: a stuck request gets a twin (Albi, 2026-10-12), and a failure goes to the
+    route's fallback, when it names one (Albi, 2026-10-13)."""
+    if route.fallback is None:
+        return HedgedModel(wrap(model, "agent"))
+    spare = build_live_model(
+        require_route(route.fallback, data_class), gcp_project=deployment.settings.gcp_project
+    )
+    return HedgedModel(wrap(model, "agent", retries=False), fallback=wrap(spare, "agent"))
 
 
 @dataclass(frozen=True)
@@ -178,7 +202,7 @@ def build_turn_runtime(
         if deployment.settings.conversation is Conversation.AGENT:
             reception_prompt = read_prompt(pack.profile, "reception")
             reception = build_reception(
-                HedgedModel(wrap(model, "agent")),  # a stuck request gets a twin (Albi, 2026-10-12)
+                _hedged(route, model, wrap, deployment, data_class),
                 pack.profile,
                 model_settings=live_model_settings(route, max_tokens=route.output_limits.agent),
                 instructions=reception_prompt.text,
