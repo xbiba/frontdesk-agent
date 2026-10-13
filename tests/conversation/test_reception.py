@@ -695,9 +695,10 @@ async def test_the_same_phone_has_one_appointment_at_a_time(
     chat = Chat(runtime, script)
     for message in ("Venerdì che orari ci sono?", "alle 9", "Mario Rossi, +355 69 123 4567"):
         await chat.say(message)
-    assert script.tool_results()[-1].startswith(
-        "The patient already has an appointment: lunedì 26 ottobre, 09:00. Book no other"
-    )
+    said = script.tool_results()[-1]
+    assert said.startswith("There is already an appointment under this phone number.")
+    assert "26" not in said  # whoever types a number may not own it: no day
+    assert "09:00" not in said  # and no time
     assert chat.state.booking is None
     with business_session(base.session_factory, base.pack.id) as session:
         assert list(session.scalars(select(BookingHold))) == []

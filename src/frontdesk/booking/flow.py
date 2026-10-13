@@ -33,7 +33,7 @@ _PHRASES: Final[dict[str, dict[str, str]]] = {
         "en": "Summary: {when}, {service} with {doctor}.\nName: {name}\nPhone: {phone}\nShall I send the booking request? Please answer yes or no.",
     },
     "requested": {
-        "sq": "Kërkesa u dërgua: {when}, {service} me {doctor}. Recepsioni e konfirmon takimin; për ta anuluar ose zhvendosur, telefononi recepsionin në {contact}.",
+        "sq": "Kërkesa për rezervim u dërgua: {when}, {service} me {doctor}. Recepsioni e konfirmon takimin; për ta anuluar ose zhvendosur, telefononi recepsionin në {contact}.",
         "it": "Richiesta inviata: {when}, {service} con {doctor}. La reception conferma l'appuntamento; per annullarlo o spostarlo, chiami la reception al {contact}.",
         "en": "Request sent: {when}, {service} with {doctor}. Reception confirms the appointment; to cancel or move it, call reception on {contact}.",
     },
