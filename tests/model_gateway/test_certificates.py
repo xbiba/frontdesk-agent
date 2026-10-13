@@ -136,4 +136,4 @@ def test_each_route_has_its_own_request_timeout() -> None:
     }
     flash = google_http_options("eu", timeout["vertex-eu-gemini-flash"])
     lite = google_http_options("eu", timeout["vertex-eu-gemini-flash-lite"])
-    assert (flash.timeout, lite.timeout) == (15_000, 30_000)  # milliseconds
+    assert (flash.timeout, lite.timeout) == (25_000, 30_000)  # milliseconds
