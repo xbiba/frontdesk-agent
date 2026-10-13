@@ -126,8 +126,19 @@ class FixtureCalendar:
             )
         ]
         busy = [_timed(item, zone) for item in entry.get("busy") or []]
+        busy += [interval for interval, _ in self.appointments(calendar_id, zone)]
         busy += list(self.booked.get(calendar_id, {}).values())
         return CalendarView(_within(blocks, start, end), _within(busy, start, end))
+
+    def appointments(self, calendar_id: str, zone: ZoneInfo) -> list[tuple[Interval, str | None]]:
+        """The appointments the fixture declares that are not cancelled, with their phone: those
+        reception made, which a patient may already have (one per person at a time)."""
+        entry = self._calendars.get(calendar_id) or {}
+        return [
+            (_timed(item, zone), item.get("phone"))
+            for item in entry.get("appointments") or []
+            if item.get("status", "accepted") != "cancelled"
+        ]
 
     def book(
         self,

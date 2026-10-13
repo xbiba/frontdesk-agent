@@ -118,6 +118,21 @@ def mark_booked(session: Session, hold_id: uuid.UUID, event_id: str) -> None:
     )
 
 
+def booked_events(session: Session, conversation_id: str, now: datetime) -> list[str]:
+    """The calendar's references of the conversation's appointments still to come."""
+    return [
+        event_id
+        for event_id in session.scalars(
+            select(BookingHold.event_id).where(
+                BookingHold.conversation_id == conversation_id,
+                BookingHold.status == "booked",
+                BookingHold.expires_at > now,
+            )
+        )
+        if event_id is not None
+    ]
+
+
 def release(session: Session, hold_id: uuid.UUID) -> None:
     session.execute(
         delete(BookingHold).where(BookingHold.id == hold_id, BookingHold.status == "held")

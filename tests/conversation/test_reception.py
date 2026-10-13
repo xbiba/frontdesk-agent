@@ -656,3 +656,114 @@ async def test_hold_time_needs_a_time_that_was_shown(base: TurnRuntime) -> None:
     assert "is not among the times shown" in script.tool_results()[-1]
     with business_session(base.session_factory, base.pack.id) as session:
         assert list(session.scalars(select(BookingHold))) == []
+
+
+ONE_EACH = """
+cal-arben:
+  blocks:
+    - {start: "2026-10-23 09:00", end: "2026-10-23 10:00"}
+    - {start: "2026-10-26 09:00", end: "2026-10-26 10:00"}
+  busy: []
+  appointments:
+    - {start: "2026-10-26 09:00", end: "2026-10-26 09:30", phone: "+355691234567"}
+    - {start: "2026-10-26 09:30", end: "2026-10-26 10:00", phone: "+355697654321", status: cancelled}
+"""
+HOLD_AND_NAME: list[Step] = [
+    [("free_times", {"day": "2026-10-23"})],
+    _final(FRIDAY),
+    [("hold_time", {"day": "2026-10-23", "time": "09:00"})],
+    _final("Nome, cognome e telefono?"),
+]
+
+
+def _one_each(base: TurnRuntime, tmp_path: Path) -> TurnRuntime:
+    path = tmp_path / "one-each.yaml"
+    path.write_text(ONE_EACH, encoding="utf-8")
+    return replace(base, scheduler=CalendarScheduler(FixtureCalendar(path)))
+
+
+async def test_the_same_phone_has_one_appointment_at_a_time(
+    base: TurnRuntime, tmp_path: Path
+) -> None:
+    # One appointment per person at a time, under the same phone too, made by reception or in
+    # another chat (Albi, 2026-10-13): the time goes back to the others.
+    runtime = _one_each(base, tmp_path)
+    phone = {"name": "Mario Rossi", "phone": "+355 69 123 4567"}
+    script = Script(
+        [*HOLD_AND_NAME, [("prepare_booking", phone)], _final("Ha già un appuntamento.")]
+    )
+    chat = Chat(runtime, script)
+    for message in ("Venerdì che orari ci sono?", "alle 9", "Mario Rossi, +355 69 123 4567"):
+        await chat.say(message)
+    assert script.tool_results()[-1].startswith(
+        "The patient already has an appointment: lunedì 26 ottobre, 09:00. Book no other"
+    )
+    assert chat.state.booking is None
+    with business_session(base.session_factory, base.pack.id) as session:
+        assert list(session.scalars(select(BookingHold))) == []
+
+
+async def test_a_cancelled_appointment_does_not_count(base: TurnRuntime, tmp_path: Path) -> None:
+    runtime = _one_each(base, tmp_path)
+    phone = {"name": "Anna Bianchi", "phone": "+355 69 765 4321"}
+    script = Script([*HOLD_AND_NAME, [("prepare_booking", phone)], _final("Riepilogo")])
+    chat = Chat(runtime, script)
+    for message in ("Venerdì che orari ci sono?", "alle 9", "Anna Bianchi, +355 69 765 4321"):
+        await chat.say(message)
+    assert script.tool_results()[-1].startswith("Riepilogo: venerdì 23 ottobre, 09:00")
+
+
+async def test_a_second_appointment_of_the_same_conversation_is_not_made(
+    base: TurnRuntime,
+) -> None:
+    script = Script(
+        [
+            *HOLD_AND_NAME,
+            [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
+            _final(SUMMARY),
+            [("confirm_booking", {})],
+            _final(BOOKED),
+            [("free_times", {})],
+            _final("Ha già un appuntamento."),
+        ]
+    )
+    chat = Chat(base, script)
+    for message in ("Venerdì che orari ci sono?", "alle 9", "Mario Rossi, +355 69 123 4567", "sì"):
+        await chat.say(message)
+    await chat.say("Vorrei prenotare un'altra seduta")
+    assert script.tool_results()[-1].startswith(
+        "The patient already has an appointment: venerdì 23 ottobre, 09:00. Book no other"
+    )
+
+
+async def test_a_clinic_that_confirms_its_appointments_gets_a_request(
+    base: TurnRuntime, calendar: FixtureCalendar
+) -> None:
+    # cal.com's "requires confirmation" (Albi, 2026-10-13): never "prenotazione confermata".
+    pack = base.pack
+    assert pack.integrations.calendar is not None
+    confirming = pack.integrations.calendar.model_copy(update={"requires_confirmation": True})
+    runtime = replace(
+        base,
+        pack=pack.model_copy(update={"integrations": Integrations(calendar=confirming)}),
+    )
+    script = Script(
+        [
+            *HOLD_AND_NAME,
+            [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
+            _final("Riepilogo"),
+            [("confirm_booking", {})],
+            _final("Fatto"),
+        ]
+    )
+    chat = Chat(runtime, script)
+    for message in ("Venerdì che orari ci sono?", "alle 9", "Mario Rossi, +355 69 123 4567"):
+        await chat.say(message)
+    summary = script.tool_results()[-1]
+    assert summary.endswith("Invio la richiesta di prenotazione? Risponda sì o no.")
+    reply = await chat.say("sì")
+    assert reply.text.startswith(
+        "Richiesta inviata: venerdì 23 ottobre, 09:00, Visita ortopedica con Dr. Arben Demo. La "
+        "reception conferma l'appuntamento"
+    )
+    assert "confermata" not in reply.text

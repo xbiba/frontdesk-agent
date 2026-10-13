@@ -20,8 +20,9 @@ from typing import Final
 from frontdesk.agent.vocab import ClarifyField, SlotPart
 from frontdesk.booking.calendar import CalendarUnavailableError
 from frontdesk.booking.flow import affirms, phrase, valid_name, valid_phone
-from frontdesk.booking.holds import attach, held
+from frontdesk.booking.holds import attach, booked_events, held
 from frontdesk.booking.reply import SlotWish, booking_target, day_words, slot_time
+from frontdesk.booking.scheduler import Appointment
 from frontdesk.booking.slots import Slot
 from frontdesk.conversation.booking_turn import StepReply, cancel, confirm, country_code, take
 from frontdesk.conversation.desk import Desk
@@ -55,6 +56,12 @@ def free_times(
         return desk.said("That cannot be booked in the chat: give reception's phone number.")
     doctor, service = target
     desk.sources.append(f"calendar:{doctor}")
+    try:
+        existing = _existing(desk, phone=None)
+    except CalendarUnavailableError:
+        return desk.said("The calendar cannot be read now: give reception's phone number.")
+    if existing is not None:
+        return _has_one(desk, existing)
     reach = calendar_reach(desk)
     for asked in (parsed_day(day), parsed_day(from_day)):
         if asked is not None and asked > reach:
@@ -243,6 +250,14 @@ def prepare_booking(desk: Desk, name: str, phone: str) -> str:
         return desk.said(
             f"That phone number is not valid: ask for it with the international prefix ({code}…)."
         )
+    try:
+        existing = _existing(desk, phone=number)
+    except CalendarUnavailableError:
+        return desk.said("The calendar cannot be read now: give reception's phone number.")
+    if existing is not None:
+        cancel(desk.context(), step)  # the time goes back to the others
+        desk.booking = None
+        return _has_one(desk, existing)
     with business_session(desk.session_factory, desk.pack.id) as session:
         current = held(session, step.hold_id, desk.now)
         if current is not None:
@@ -253,8 +268,9 @@ def prepare_booking(desk: Desk, name: str, phone: str) -> str:
     desk.booking = step.model_copy(
         update={"stage": BookingStage.CONFIRM, "summary_turn": desk.turn}
     )
+    calendar = desk.pack.integrations.calendar
     summary = phrase(
-        "summary",
+        "summary_request" if calendar and calendar.requires_confirmation else "summary",
         desk.language,
         when=slot_time(current.start.astimezone(desk.zone), desk.language),
         service=desk.catalog.services.get(step.service_id, {}).get(desk.language, step.service_id),
@@ -286,6 +302,34 @@ def confirm_booking(desk: Desk) -> str:
     if not reply.booked:
         return desk.said(f"Not booked: {reply.text} Say so, and call free_times for other times.")
     return desk.said(reply.text)
+
+
+def _existing(desk: Desk, phone: str | None) -> Appointment | None:
+    """The patient's appointment still to come, if any: one this conversation made, or one under
+    the same phone, made in the chat or by reception (Albi, 2026-10-13: one per person at a time).
+    Raises CalendarUnavailableError."""
+    with business_session(desk.session_factory, desk.pack.id) as session:
+        mine = set(booked_events(session, desk.conversation_id, desk.now))
+    if desk.scheduler is None or not (mine or phone):
+        return None
+    digits = _digits(phone)
+    for appointment in desk.scheduler.upcoming(desk.pack, desk.now):
+        if appointment.reference in mine or (digits and _digits(appointment.phone) == digits):
+            return appointment
+    return None
+
+
+def _digits(phone: str | None) -> str:
+    return "".join(char for char in phone or "" if char.isdigit())
+
+
+def _has_one(desk: Desk, appointment: Appointment) -> str:
+    when = slot_time(appointment.start.astimezone(desk.zone), desk.language)
+    return desk.said(
+        f'The patient already has an appointment: {when}. Book no other: say so, as in "Ha già '
+        "un appuntamento il … alle …; per cambiarlo o aggiungerne un altro, la reception la aiuta "
+        "al …\", with reception's phone (kind handoff)."
+    )
 
 
 def cancel_booking(desk: Desk) -> str:

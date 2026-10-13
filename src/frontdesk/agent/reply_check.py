@@ -21,7 +21,8 @@ from frontdesk.safety.rules import contains_diagnostic_language, promise_phrase
 _BOOKED: Final = re.compile(
     r"prenotazione (?:è )?confermata|ho prenotato|è stat[oa] prenotat"
     r"|booking (?:is )?confirmed|(?:i have|i've) booked|you are booked|you're booked"
-    r"|rezervimi (?:u )?konfirmua|kam rezervuar|u rezervua",
+    r"|rezervimi (?:u )?konfirmua|kam rezervuar|u rezervua"
+    r"|richiesta (?:è stata )?inviata|request (?:has been )?sent|kërkesa u dërgua",
     re.IGNORECASE,
 )
 

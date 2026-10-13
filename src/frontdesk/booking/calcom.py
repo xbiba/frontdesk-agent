@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 import httpx2
 
 from frontdesk.booking.calendar import CalendarUnavailableError
+from frontdesk.booking.scheduler import Appointment
 from frontdesk.booking.slots import Interval, Slot
 from frontdesk.tenancy.pack import BusinessPack, CalendarIntegration, Language
 
@@ -29,6 +30,8 @@ LIST_VERSION: Final = "2024-08-13"
 EVENT_TYPES_VERSION: Final = "2026-06-12"
 SCHEDULES_VERSION: Final = "2024-06-11"
 _WEEKDAYS: Final = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+_PAGE: Final = 100  # bookings per page of the list
+_PAGES: Final = 20  # pages read at most: 2,000 appointments to come
 _BOOKED: Final = frozenset({"accepted", "pending"})
 
 
@@ -102,7 +105,7 @@ class CalcomScheduler:
         phone: str,
         reference: str,
         language: Language,
-    ) -> None:
+    ) -> str:
         event_type = int(_calendar(pack).calendars[doctor_id])
         body = {
             "start": _utc(start),
@@ -113,13 +116,39 @@ class CalcomScheduler:
         try:
             data = self._call("POST", "/v2/bookings", BOOKINGS_VERSION, json=body, unsure=True)
         except _UnsureError:
-            self._confirm(event_type, start, end, reference)
-            return
+            return self._confirm(event_type, start, end, reference)
         booking = data.get("data")
         if not isinstance(booking, dict) or booking.get("status") not in _BOOKED:
             raise CalendarUnavailableError("the booking was not accepted")
+        return str(booking["status"])
 
-    def _confirm(self, event_type: int, start: datetime, end: datetime, reference: str) -> None:
+    def upcoming(self, pack: BusinessPack, now: datetime) -> tuple[Appointment, ...]:
+        """Every appointment of the clinic's event types still to come, accepted or waiting for
+        the clinic's confirmation, whoever made it."""
+        ids = ",".join(sorted(set(_calendar(pack).calendars.values())))
+        found: list[Appointment] = []
+        for page in range(_PAGES):
+            data = self._call(
+                "GET",
+                "/v2/bookings",
+                LIST_VERSION,
+                params={
+                    "eventTypeIds": ids,
+                    "status": "upcoming,unconfirmed",
+                    "take": _PAGE,
+                    "skip": page * _PAGE,
+                },
+            )
+            items = data.get("data")
+            if not isinstance(items, list):
+                raise CalendarUnavailableError("malformed bookings")
+            found += [item for item in map(_appointment, items) if item and item.start > now]
+            paging = data.get("pagination")
+            if not items or not isinstance(paging, dict) or not paging.get("hasNextPage"):
+                break
+        return tuple(sorted(found, key=lambda item: item.start))
+
+    def _confirm(self, event_type: int, start: datetime, end: datetime, reference: str) -> str:
         """After a lost answer or a server error: the booking exists if cal.com lists it with our
         reference."""
         try:
@@ -136,13 +165,16 @@ class CalcomScheduler:
         except CalendarUnavailableError:
             raise CalendarUnavailableError("the appointment may not be booked") from None
         bookings = data.get("data")
-        if not isinstance(bookings, list) or not any(
-            isinstance(item, dict)
+        found = [
+            str(item["status"])
+            for item in (bookings if isinstance(bookings, list) else [])
+            if isinstance(item, dict)
             and (item.get("metadata") or {}).get("frontdesk") == reference
             and item.get("status") in _BOOKED
-            for item in bookings
-        ):
+        ]
+        if not found:
             raise CalendarUnavailableError("the appointment may not be booked")
+        return found[0]
 
     def _call(
         self, method: str, path: str, version: str, *, unsure: bool = False, **kwargs: Any
@@ -209,6 +241,21 @@ def _schedule_days(
 
 def _local(day: date, clock: str, zone: ZoneInfo) -> datetime:
     return datetime.combine(day, time.fromisoformat(clock), tzinfo=zone)
+
+
+def _appointment(item: Any) -> Appointment | None:
+    """A booking of the list, if it is accepted or waits for the clinic's confirmation."""
+    if not isinstance(item, dict) or item.get("status") not in _BOOKED:
+        return None
+    try:
+        start = datetime.fromisoformat(item["start"])
+    except (KeyError, TypeError, ValueError):
+        raise CalendarUnavailableError("malformed bookings") from None
+    attendees = item.get("attendees") or [{}]
+    fields = item.get("bookingFieldsResponses") or {}
+    phone = (attendees[0] or {}).get("phoneNumber") or fields.get("attendeePhoneNumber")
+    reference = (item.get("metadata") or {}).get("frontdesk")
+    return Appointment(start, phone if isinstance(phone, str) else None, reference)
 
 
 def _calendar(pack: BusinessPack) -> CalendarIntegration:

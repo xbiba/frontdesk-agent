@@ -101,6 +101,9 @@ class CalendarIntegration(Frozen):
     min_notice_minutes: int = Field(default=120, ge=0, le=10080)
     buffer_minutes: int = Field(default=0, ge=0, le=120)
     max_options: int = Field(default=3, ge=1, le=5)
+    # The clinic confirms each appointment (cal.com's "requires confirmation", Albi, 2026-10-13):
+    # the chat sends a request, and never says an appointment is confirmed.
+    requires_confirmation: bool = False
     # M5: the patient books one of the free slots from the chat, at once (Albi, 2026-10-12).
     chat_booking: bool = False
 

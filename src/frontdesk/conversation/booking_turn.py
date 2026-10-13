@@ -20,7 +20,7 @@ from frontdesk.booking.calendar import CalendarUnavailableError
 from frontdesk.booking.flow import phrase
 from frontdesk.booking.holds import held, hold, mark_booked, release
 from frontdesk.booking.reply import slot_time
-from frontdesk.booking.scheduler import Scheduler
+from frontdesk.booking.scheduler import ACCEPTED, Scheduler
 from frontdesk.conversation.state import BookingStage, BookingStep
 from frontdesk.db.engine import business_session
 from frontdesk.knowledge.facts import Catalog
@@ -82,7 +82,7 @@ def confirm(context: BookingContext, step: BookingStep) -> StepReply:
         return StepReply(_say(context, "taken"), "replied", None, step.doctor_id)
     event_id = current.id.hex
     try:
-        context.scheduler.book(
+        status = context.scheduler.book(
             context.pack,
             step.doctor_id,
             step.service_id,
@@ -99,7 +99,7 @@ def confirm(context: BookingContext, step: BookingStep) -> StepReply:
     with business_session(context.session_factory, context.pack.id) as session:
         mark_booked(session, current.id, event_id)
     booked = phrase(
-        "booked",
+        "booked" if status == ACCEPTED else "requested",  # the clinic confirms a pending one
         context.language,
         when=slot_time(current.start.astimezone(ZoneInfo(context.pack.timezone)), context.language),
         service=_service(context, step.service_id),

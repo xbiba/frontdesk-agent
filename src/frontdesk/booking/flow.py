@@ -26,6 +26,17 @@ _PHRASES: Final[dict[str, dict[str, str]]] = {
         "it": "Riepilogo: {when}, {service} con {doctor}.\nNome: {name}\nTelefono: {phone}\nConfermo la prenotazione? Risponda sì o no.",
         "en": "Summary: {when}, {service} with {doctor}.\nName: {name}\nPhone: {phone}\nShall I confirm the booking? Please answer yes or no.",
     },
+    # When the clinic confirms each appointment (cal.com's "requires confirmation"): a request.
+    "summary_request": {
+        "sq": "Përmbledhje: {when}, {service} me {doctor}.\nEmri: {name}\nTelefoni: {phone}\nTa dërgoj kërkesën për rezervim? Përgjigjuni po ose jo.",
+        "it": "Riepilogo: {when}, {service} con {doctor}.\nNome: {name}\nTelefono: {phone}\nInvio la richiesta di prenotazione? Risponda sì o no.",
+        "en": "Summary: {when}, {service} with {doctor}.\nName: {name}\nPhone: {phone}\nShall I send the booking request? Please answer yes or no.",
+    },
+    "requested": {
+        "sq": "Kërkesa u dërgua: {when}, {service} me {doctor}. Recepsioni e konfirmon takimin; për ta anuluar ose zhvendosur, telefononi recepsionin në {contact}.",
+        "it": "Richiesta inviata: {when}, {service} con {doctor}. La reception conferma l'appuntamento; per annullarlo o spostarlo, chiami la reception al {contact}.",
+        "en": "Request sent: {when}, {service} with {doctor}. Reception confirms the appointment; to cancel or move it, call reception on {contact}.",
+    },
     "booked": {
         "sq": "Rezervimi u konfirmua: {when}, {service} me {doctor}. Për ta anuluar ose zhvendosur, telefononi recepsionin në {contact}.",
         "it": "Prenotazione confermata: {when}, {service} con {doctor}. Per annullarla o spostarla, chiami la reception al {contact}.",
