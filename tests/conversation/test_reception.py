@@ -545,6 +545,49 @@ async def test_a_day_after_the_calendar_s_reach_is_said_to_be_unknown(base: Turn
     ]
 
 
+@pytest.mark.parametrize(
+    ("day", "said"),
+    [
+        pytest.param(
+            {"day": "2026-10-23"},
+            "On 2026-10-23 (venerdì 23 ottobre) the clinic receives patients: Dr. Arben Demo, from "
+            "09:00 to 10:00. Offer a time (free_times).",
+            id="a-day-a-doctor-is-in",
+        ),
+        pytest.param(
+            {"day": "2026-10-24"},
+            "No doctor receives patients on 2026-10-24 (sabato 24 ottobre): say no visits are "
+            "received that day, and give reception's phone and WhatsApp.",
+            id="a-day-nobody-is-in",
+        ),
+        pytest.param(
+            {},
+            "The clinic has no fixed hours: it receives patients when a doctor is in. The next "
+            "days:\n- 2026-10-23 (venerdì 23 ottobre): Dr. Arben Demo, from 09:00 to 10:00\n"
+            "- 2026-10-26 (lunedì 26 ottobre): Dr. Arben Demo, from 09:00 to 10:00\n"
+            "No other days until 2026-11-04 (mercoledì 4 novembre), the last day the calendar is "
+            "read here.",
+            id="the-next-days",
+        ),
+        pytest.param(
+            {"day": "2026-11-10"},
+            "2026-11-10 is after 2026-11-04 (mercoledì 4 novembre), the last day the calendar is "
+            "read here: say its hours are not known here, and give reception's phone for later "
+            "dates.",
+            id="after-the-reach",
+        ),
+    ],
+)
+async def test_the_clinic_receives_when_a_doctor_is_in(
+    base: TurnRuntime, day: dict[str, Any], said: str
+) -> None:
+    # No fixed hours: open when a doctor has availability in the calendar, weekends included
+    # (Albi, 2026-10-13).
+    script = Script([[("clinic_hours", day)], _final("Le dico subito.")])
+    await Chat(base, script).say("Vorrei sapere quando siete aperti")
+    assert script.tool_results() == [said]
+
+
 async def test_a_time_no_tool_gave_is_sent_back(base: TurnRuntime) -> None:
     script = Script(
         [

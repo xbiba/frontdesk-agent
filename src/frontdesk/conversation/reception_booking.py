@@ -55,11 +55,11 @@ def free_times(
         return desk.said("That cannot be booked in the chat: give reception's phone number.")
     doctor, service = target
     desk.sources.append(f"calendar:{doctor}")
-    reach = _reach(desk)
-    for asked in (_parsed(day), _parsed(from_day)):
+    reach = calendar_reach(desk)
+    for asked in (parsed_day(day), parsed_day(from_day)):
         if asked is not None and asked > reach:
             return desk.said(
-                f"{asked.isoformat()} is after {_reach_words(desk, reach)}: say its times are not "
+                f"{asked.isoformat()} is after {reach_words(desk, reach)}: say its times are not "
                 "known here, and give reception's phone for later dates."
             )
     try:
@@ -86,7 +86,7 @@ def free_times(
     if not fitting:
         return desk.said(
             f"No free time{' after those shown' if more else ''} until "
-            f"{_reach_words(desk, reach)}: say so and give reception's phone number (kind handoff)."
+            f"{reach_words(desk, reach)}: say so and give reception's phone number (kind handoff)."
         )
     fell_back = bool(lines)  # nothing fitted the wish: the first free days instead
     listed = list(fitting)[: 1 if wish.day and not fell_back else calendar.max_options]
@@ -139,7 +139,7 @@ def _listing(
 def _other_days(desk: Desk, later: list[date]) -> str:
     if not later:
         return (
-            f"Other days with free times: none until {_reach_words(desk, _reach(desk))}. Later "
+            f"Other days with free times: none until {reach_words(desk, calendar_reach(desk))}. Later "
             "days are not known here: never say there are no times after it; reception knows them."
         )
     return (
@@ -162,25 +162,25 @@ def _wish_text(desk: Desk, wish: SlotWish) -> str:
 
 def _day(desk: Desk, text: str | None) -> date | None:
     """A day within the calendar's reach, or None."""
-    day = _parsed(text)
-    return day if day is not None and desk.today <= day <= _reach(desk) else None
+    day = parsed_day(text)
+    return day if day is not None and desk.today <= day <= calendar_reach(desk) else None
 
 
-def _parsed(text: str | None) -> date | None:
+def parsed_day(text: str | None) -> date | None:
     try:
         return date.fromisoformat(text.strip()) if text else None
     except ValueError:
         return None
 
 
-def _reach(desk: Desk) -> date:
+def calendar_reach(desk: Desk) -> date:
     """The last whole day the calendar is read for (the pack's horizon from now)."""
     calendar = desk.pack.integrations.calendar
     end = desk.now + timedelta(days=calendar.horizon_days if calendar else 0)
     return end.astimezone(desk.zone).date() - timedelta(days=1)
 
 
-def _reach_words(desk: Desk, reach: date) -> str:
+def reach_words(desk: Desk, reach: date) -> str:
     return (
         f"{reach.isoformat()} ({day_words(reach, desk.language)}), the last day the calendar is "
         "read here"

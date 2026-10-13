@@ -27,6 +27,7 @@ from frontdesk.agent.prompts import instructions_for
 from frontdesk.agent.reply_check import Problem, reply_problems
 from frontdesk.agent.vocab import SlotPart
 from frontdesk.conversation import reception_booking as booking
+from frontdesk.conversation import reception_hours as hours
 from frontdesk.conversation.desk import Desk
 from frontdesk.conversation.state import BookingStage, BookingStep, HistoryEntry
 from frontdesk.db.engine import business_session
@@ -152,6 +153,16 @@ def build_reception(
             question: A short practical question, without names, numbers, contact or health details.
         """
         return _search(ctx.deps, question)
+
+    @agent.tool
+    def clinic_hours(ctx: RunContext[Desk], day: str | None = None) -> str:
+        """When the clinic receives patients, read from the calendar: it has no fixed hours and is
+        open when a doctor is in, weekends included. Without a day: the next days.
+
+        Args:
+            day: The day asked about, as YYYY-MM-DD ("domani" is Tomorrow in the situation).
+        """
+        return hours.clinic_hours(ctx.deps, day)
 
     @agent.tool
     def free_times(
