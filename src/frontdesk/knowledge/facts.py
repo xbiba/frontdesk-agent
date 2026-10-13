@@ -116,7 +116,7 @@ def location_evidence(session: Session, business_id: str, language: Language) ->
         "phone": location.phone,
         **({"whatsapp": location.whatsapp} if location.whatsapp else {}),
         "email": location.email,
-        "hours": hours,
+        **({"hours": hours} if hours else {}),
     }
     content = "\n".join(f"{_LABELS[key][language]}: {value}" for key, value in values.items())
     return _record("location:main", version_id, _LABELS["location"][language], content, values)

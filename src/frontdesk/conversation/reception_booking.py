@@ -3,7 +3,8 @@ the words.
 
 `free_times` gives every free time of each day it lists, and says whether other days have free
 times: "Solo questi?" got "sì, solo questi" on 3 times of a day that had 7, when the list was cut to
-3 without the model knowing (live chat, 2026-10-12). `hold_time` holds a time the patient was
+3 without the model knowing (live chat, 2026-10-12). It also says until which day the calendar is
+read: a list the reach cut was presented as complete (review of agent-4, 2026-10-13). `hold_time` holds a time the patient was
 shown, by its day and time, once the calendar shows it still free. `prepare_booking` checks name and
 phone and writes the summary; `confirm_booking` books only on a yes, in the patient's own message,
 to the summary of the reply just before. Every time the agent names is checked against the times
@@ -54,6 +55,13 @@ def free_times(
         return desk.said("That cannot be booked in the chat: give reception's phone number.")
     doctor, service = target
     desk.sources.append(f"calendar:{doctor}")
+    reach = calendar_reach(desk)
+    for asked in (parsed_day(day), parsed_day(from_day)):
+        if asked is not None and asked > reach:
+            return desk.said(
+                f"{asked.isoformat()} is after {reach_words(desk, reach)}: say its times are not "
+                "known here, and give reception's phone for later dates."
+            )
     try:
         every = desk.scheduler.free_slots(desk.pack, doctor, service, desk.now)
     except CalendarUnavailableError:
@@ -76,10 +84,9 @@ def free_times(
         lines.append(f"No free time {_wish_text(desk, wish)}. The first free days instead:")
         fitting = days
     if not fitting:
-        horizon = calendar.horizon_days
         return desk.said(
-            f"No free time in the next {horizon} days{' after those shown' if more else ''}: "
-            "say so and give reception's phone number (kind handoff)."
+            f"No free time{' after those shown' if more else ''} until "
+            f"{reach_words(desk, reach)}: say so and give reception's phone number (kind handoff)."
         )
     fell_back = bool(lines)  # nothing fitted the wish: the first free days instead
     listed = list(fitting)[: 1 if wish.day and not fell_back else calendar.max_options]
@@ -131,7 +138,10 @@ def _listing(
 
 def _other_days(desk: Desk, later: list[date]) -> str:
     if not later:
-        return "Other days with free times: none in the calendar's reach."
+        return (
+            f"Other days with free times: none until {reach_words(desk, calendar_reach(desk))}. Later "
+            "days are not known here: never say there are no times after it; reception knows them."
+        )
     return (
         f"Other days with free times: yes, from {later[0].isoformat()} "
         f"({day_words(later[0], desk.language)}). Call free_times with a day, or with more, for "
@@ -152,13 +162,29 @@ def _wish_text(desk: Desk, wish: SlotWish) -> str:
 
 def _day(desk: Desk, text: str | None) -> date | None:
     """A day within the calendar's reach, or None."""
-    calendar = desk.pack.integrations.calendar
+    day = parsed_day(text)
+    return day if day is not None and desk.today <= day <= calendar_reach(desk) else None
+
+
+def parsed_day(text: str | None) -> date | None:
     try:
-        day = date.fromisoformat(text.strip()) if text else None
+        return date.fromisoformat(text.strip()) if text else None
     except ValueError:
         return None
-    last = desk.today + timedelta(days=calendar.horizon_days if calendar else 0)
-    return day if day is not None and desk.today <= day <= last else None
+
+
+def calendar_reach(desk: Desk) -> date:
+    """The last whole day the calendar is read for (the pack's horizon from now)."""
+    calendar = desk.pack.integrations.calendar
+    end = desk.now + timedelta(days=calendar.horizon_days if calendar else 0)
+    return end.astimezone(desk.zone).date() - timedelta(days=1)
+
+
+def reach_words(desk: Desk, reach: date) -> str:
+    return (
+        f"{reach.isoformat()} ({day_words(reach, desk.language)}), the last day the calendar is "
+        "read here"
+    )
 
 
 def hold_time(desk: Desk, day: str, time: str) -> str:

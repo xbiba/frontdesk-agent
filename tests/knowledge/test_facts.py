@@ -592,3 +592,18 @@ def test_other_businesses_are_invisible(
     assert location is not None
     assert location.values["address"] == shop_pack.location.address
     assert location.values["hours"] == "mar-sab 10:00-19:30"
+
+
+@pytest.mark.db
+def test_a_clinic_without_fixed_hours_shows_none(
+    activate_pack: Activate, clinic_pack: BusinessPack
+) -> None:
+    # Clinica MCU receives when a doctor has availability in the calendar (Albi, 2026-10-13).
+    location = {**clinic_pack.location.model_dump(), "opening_hours": []}
+    pack = _edited(clinic_pack, location=location)
+    factory = activate_pack(pack)
+    with business_session(factory, pack.id) as session:
+        evidence = location_evidence(session, pack.id, "it")
+    assert evidence is not None
+    assert "Orari" not in evidence.content
+    assert "hours" not in evidence.values

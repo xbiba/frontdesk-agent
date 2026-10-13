@@ -11,7 +11,13 @@ from zoneinfo import ZoneInfo
 import httpx2
 import pytest
 
-from frontdesk.booking.calcom import BOOKINGS_VERSION, SLOTS_VERSION, CalcomScheduler
+from frontdesk.booking.calcom import (
+    BOOKINGS_VERSION,
+    EVENT_TYPES_VERSION,
+    SCHEDULES_VERSION,
+    SLOTS_VERSION,
+    CalcomScheduler,
+)
 from frontdesk.booking.calendar import CalendarUnavailableError, FixtureCalendar
 from frontdesk.booking.scheduler import CalendarScheduler
 from frontdesk.booking.slots import Interval
@@ -23,7 +29,9 @@ Handler = Callable[[httpx2.Request], httpx2.Response]
 
 
 def at(day: int, hour: int) -> datetime:
-    return datetime(2026, 10, day, hour, tzinfo=TIRANE)
+    """A day of October 2026; past the 31st, of November."""
+    month, day = (10, day) if day <= 31 else (11, day - 31)
+    return datetime(2026, month, day, hour, tzinfo=TIRANE)
 
 
 @pytest.fixture
@@ -211,3 +219,47 @@ def test_the_calendar_scheduler_writes_the_entry_reception_reads(
         }
     ]
     assert calendar.booked["7441781"] == {"hold1": Interval(at(23, 10), at(23, 11))}
+
+
+def test_the_hours_the_doctor_receives_come_from_the_event_type_s_schedule(
+    pack: BusinessPack,
+) -> None:
+    # A full day is no closed day: the hours come from the availability set in cal.com, not from
+    # the free slots (Albi, 2026-10-13). A date override replaces the week's hours; one of no
+    # length marks the day off.
+    seen: list[httpx2.Request] = []
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        if request.url.path == "/v2/event-types/7441781":
+            return httpx2.Response(200, json={"data": {"id": 7441781, "scheduleId": 2487067}})
+        schedule = {
+            "timeZone": "Europe/Rome",
+            "availability": [{"days": ["Monday"], "startTime": "14:00", "endTime": "18:00"}],
+            "overrides": [
+                {"date": "2026-10-23", "startTime": "09:00", "endTime": "17:00"},
+                {"date": "2026-10-26", "startTime": "00:00", "endTime": "00:00"},
+            ],
+        }
+        return httpx2.Response(200, json={"data": schedule})
+
+    days = _scheduler(answer).receiving(pack, "dr-arben-demo", NOW)
+    assert days == {
+        at(23, 9).date(): (Interval(at(23, 9), at(23, 17)),),
+        at(2 + 31, 14).date(): (Interval(at(2 + 31, 14), at(2 + 31, 18)),),
+    }
+    assert [(r.url.path, r.headers["cal-api-version"]) for r in seen] == [
+        ("/v2/event-types/7441781", EVENT_TYPES_VERSION),
+        ("/v2/schedules/2487067", SCHEDULES_VERSION),
+    ]
+
+
+def test_the_hours_of_a_fixture_calendar_are_its_blocks(pack: BusinessPack, tmp_path: Path) -> None:
+    path = tmp_path / "calendar.yaml"
+    path.write_text(
+        '"7441781":\n  blocks:\n    - {start: "2026-10-23 09:00", end: "2026-10-23 11:00"}\n'
+        '  busy:\n    - {start: "2026-10-23 09:00", end: "2026-10-23 11:00"}\n',
+        encoding="utf-8",
+    )
+    days = CalendarScheduler(FixtureCalendar(path)).receiving(pack, "dr-arben-demo", NOW)
+    assert days == {at(23, 9).date(): (Interval(at(23, 9), at(23, 11)),)}  # full, yet he receives

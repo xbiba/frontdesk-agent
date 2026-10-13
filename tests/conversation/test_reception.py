@@ -522,11 +522,110 @@ async def test_free_times_gives_every_time_of_each_day_and_whether_other_days_ha
     assert "- 2026-10-23 (venerdì 23 ottobre): 09:00, 09:30" in first
     assert "- 2026-10-26 (lunedì 26 ottobre): 09:00, 09:30" in first
     assert "Every free time of each day below is listed" in first
-    assert "Other days with free times: none in the calendar's reach." in first
+    # The calendar is read for 14 days from Thursday 22 at 08:00: whole days until Wednesday 4.
+    # A list it cut is never complete (review of agent-4: the 27th was cut, and the reply said
+    # the 26th was the only time left).
+    assert (
+        "Other days with free times: none until 2026-11-04 (mercoledì 4 novembre), the last day "
+        "the calendar is read here." in first
+    )
+    assert "never say there are no times after it" in first
     # A day asked for: all of it, and the other days are said to exist.
     assert "- 2026-10-23 (venerdì 23 ottobre): 09:00, 09:30" in friday
     assert "2026-10-26" not in friday.splitlines()[1]
     assert "Other days with free times: yes, from 2026-10-26" in friday
+
+
+async def test_a_day_after_the_calendar_s_reach_is_said_to_be_unknown(base: TurnRuntime) -> None:
+    script = Script([[("free_times", {"day": "2026-11-10"})], _final("Non lo so ancora.")])
+    await Chat(base, script).say("Il 10 novembre c'è posto?")
+    assert script.tool_results() == [
+        "2026-11-10 is after 2026-11-04 (mercoledì 4 novembre), the last day the calendar is read "
+        "here: say its times are not known here, and give reception's phone for later dates."
+    ]
+
+
+@pytest.mark.parametrize(
+    ("day", "said"),
+    [
+        pytest.param(
+            {"day": "2026-10-23"},
+            "On 2026-10-23 (venerdì 23 ottobre) the clinic receives patients: Dr. Arben Demo, from "
+            "09:00 to 10:00. Offer a time (free_times).",
+            id="a-day-a-doctor-is-in",
+        ),
+        pytest.param(
+            {"day": "2026-10-24"},
+            "No doctor receives patients on 2026-10-24 (sabato 24 ottobre): say no visits are "
+            "received that day, and give reception's phone and WhatsApp.",
+            id="a-day-nobody-is-in",
+        ),
+        pytest.param(
+            {},
+            'Visits are by appointment ("si riceve su appuntamento"). The next days a doctor is in '
+            "the clinic:\n- 2026-10-23 (venerdì 23 ottobre): Dr. Arben Demo, from 09:00 to 10:00\n"
+            "- 2026-10-26 (lunedì 26 ottobre): Dr. Arben Demo, from 09:00 to 10:00\n"
+            "No other days until 2026-11-04 (mercoledì 4 novembre), the last day the calendar is "
+            "read here.",
+            id="the-next-days",
+        ),
+        pytest.param(
+            {"day": "2026-11-10"},
+            "2026-11-10 is after 2026-11-04 (mercoledì 4 novembre), the last day the calendar is "
+            "read here: say its hours are not known here, and give reception's phone for later "
+            "dates.",
+            id="after-the-reach",
+        ),
+    ],
+)
+async def test_the_clinic_receives_when_a_doctor_is_in(
+    base: TurnRuntime, day: dict[str, Any], said: str
+) -> None:
+    # No fixed hours: open when a doctor has availability in the calendar, weekends included
+    # (Albi, 2026-10-13).
+    script = Script([[("clinic_hours", day)], _final("Le dico subito.")])
+    await Chat(base, script).say("Vorrei sapere quando siete aperti")
+    assert script.tool_results() == [said]
+
+
+FULL = """
+cal-arben:
+  blocks:
+    - {start: "2026-10-23 09:00", end: "2026-10-23 11:00"}
+    - {start: "2026-10-24 09:00", end: "2026-10-24 10:00"}
+  busy:
+    - {start: "2026-10-23 09:00", end: "2026-10-23 10:00"}
+    - {start: "2026-10-24 09:00", end: "2026-10-24 10:00"}
+"""
+
+
+async def test_a_full_day_is_no_closed_day_and_a_full_morning_keeps_its_start(
+    base: TurnRuntime, tmp_path: Path
+) -> None:
+    # The hours come from the availability set in the calendar, not from the free times (Albi,
+    # 2026-10-13): a booked first hour does not move the start, and a day with no time left is a
+    # day the doctor receives.
+    path = tmp_path / "full.yaml"
+    path.write_text(FULL, encoding="utf-8")
+    runtime = replace(base, scheduler=CalendarScheduler(FixtureCalendar(path)))
+    script = Script(
+        [
+            [("clinic_hours", {"day": "2026-10-23"})],
+            [("clinic_hours", {"day": "2026-10-24"})],
+            _final("Le dico subito."),
+        ]
+    )
+    await Chat(runtime, script).say("Vorrei sapere quando siete aperti")
+    friday, saturday = script.tool_results()
+    assert friday == (
+        "On 2026-10-23 (venerdì 23 ottobre) the clinic receives patients: Dr. Arben Demo, from "
+        "09:00 to 11:00. Offer a time (free_times)."
+    )
+    assert saturday == (
+        "On 2026-10-24 (sabato 24 ottobre) the doctor receives patients, but no free time is "
+        'left: Dr. Arben Demo, from 09:00 to 10:00 (no free time left). Say so ("riceve, ma non '
+        "ci sono più posti liberi\"), and give reception's phone and WhatsApp."
+    )
 
 
 async def test_a_time_no_tool_gave_is_sent_back(base: TurnRuntime) -> None:
