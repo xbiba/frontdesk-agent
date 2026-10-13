@@ -15,7 +15,7 @@ from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.usage import RequestUsage
 
-from frontdesk.model_gateway.hedging import HedgedModel
+from frontdesk.model_gateway.hedging import HedgedModel, fallback_turn
 from frontdesk.model_gateway.metering import Meter
 from tests.model_gateway.budget_helpers import ROUTE, write_budget
 
@@ -93,32 +93,21 @@ def _failing(code: int, calls: list[int], *, after: float = 0.0) -> FunctionMode
     return FunctionModel(respond)
 
 
-class Clock:
-    def __init__(self) -> None:
-        self.now = 0.0
-
-    def __call__(self) -> float:
-        return self.now
-
-
-async def test_a_failure_of_the_first_model_goes_to_the_fallback_and_rests_it() -> None:
+async def test_a_failure_of_the_first_model_goes_to_the_fallback_for_the_rest_of_the_turn() -> None:
     # Vertex left requests of 3.8 Flash hanging until a 504 (2026-10-13), and 3.8 Flash is served
-    # in no other European region: the request goes to the fallback model, and so do the next ones
-    # for a while (Albi, 2026-10-13: stability before Instagram).
+    # in no other European region: the request goes to the fallback model, and so do the turn's
+    # next ones. Resting it for 120 seconds gave the fallback 204 of 293 requests of a run, and the
+    # weaker model failed 11 cases (agent-6): the next turn tries the first model again.
     first: list[int] = []
     spare: list[int] = []
-    clock = Clock()
-    hedged = HedgedModel(
-        _failing(504, first), fallback=_model([0.0, 0.0, 0.0], spare), after=AFTER, clock=clock
-    )
-    assert (await Agent(hedged).run("hi")).output == "answer 0"
-    assert (first, spare) == ([0], [0])
-    clock.now = 60.0  # resting: straight to the fallback
-    assert (await Agent(hedged).run("hi")).output == "answer 1"
-    assert first == [0]
-    clock.now = 121.0  # rested: the first model again
-    with pytest.raises(ModelHTTPError):
-        await Agent(HedgedModel(_failing(504, first), after=AFTER, clock=clock)).run("hi")
+    hedged = HedgedModel(_failing(504, first), fallback=_model([0.0, 0.0, 0.0], spare), after=AFTER)
+    with fallback_turn():
+        assert (await Agent(hedged).run("hi")).output == "answer 0"
+        assert (await Agent(hedged).run("hi")).output == "answer 1"  # straight to the fallback
+    assert (first, spare) == ([0], [0, 1])
+    with fallback_turn():  # the next turn: the first model again
+        assert (await Agent(hedged).run("hi")).output == "answer 2"
+    assert first == [0, 1]
 
 
 async def test_an_error_that_is_no_failure_of_the_provider_does_not_fall_back() -> None:

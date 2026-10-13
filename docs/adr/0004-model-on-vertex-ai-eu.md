@@ -50,5 +50,6 @@ Vertex's eu multi-region left requests of 3.8 Flash hanging until a 504 for whol
 - **No other region.** A probe of 2026-10-13 found 3.8 Flash only on the `eu` multi-region (404 on europe-west1, -west3, -west4, -west8, -west9, -north1, -central2, -southwest1; 501 on -west10; 400 on -west12). 2.5 Flash answers on europe-west1, -west4, -west8 and -west9, but retires on 2026-10-20, with 2.5 Pro and 2.5 Flash-Lite.
 - **3.1 Flash-Lite as fallback.** It is on the `eu` multi-region and retires "May 7, 2027 or later". The route of 3.8 Flash names it (`fallback`).
   - The first model makes one attempt, without the meter's retries. When it fails with an error status, a timeout or a broken connection, the request goes to the fallback at once (`model_gateway/hedging.py`).
-  - So do the next requests for 120 seconds, so that a stuck window is not waited out again. The twin after 4.5 seconds stays on 3.8 Flash.
+  - So do the next requests of the same turn, so that the turn does not wait out the stuck window again. The next turn tries 3.8 Flash again. The twin after 4.5 seconds stays on 3.8 Flash.
+  - A rest of 120 seconds was measured first (`runs/2026-10-13-agent-6`). After 3 failures of 3.8 Flash in an 11-minute run, Flash-Lite answered 204 of 293 requests, and 11 cases failed on its answers, against 1 before. The time criteria passed (95.9% within 10 s, 99.5% within 20). So the rest is the turn's only.
   - The report counts the requests the fallback answered.

@@ -10,16 +10,17 @@ input and at most its output cap, and it is no failure of the provider.
 A fallback model (Albi, 2026-10-13: stability before Instagram). Vertex sometimes leaves the requests
 of 3.8 Flash hanging until a 504, twins included, and 3.8 Flash is served in no other European
 region. When the first model fails with an error status or a broken connection, the request goes to
-the fallback at once, and so do the next ones for REST_SECONDS: the same stuck window is not waited
-out again.
+the fallback at once, and so do the next requests of the same turn (`fallback_turn`): the turn does
+not wait out the same stuck window again. The next turn tries the first model again. Resting it for
+120 seconds instead gave the weaker fallback 204 of 293 requests of a run (agent-6).
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextvars
-import time
-from collections.abc import Callable
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Final
 
@@ -32,7 +33,6 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RequestUsage
 
 HEDGE_AFTER_SECONDS: Final = 4.5
-REST_SECONDS: Final = 120.0  # how long the first model rests after a failure
 # The failures of the provider that the fallback answers: what the meter would have retried.
 FALLBACK_STATUSES: Final = frozenset({429, 500, 502, 503, 504})
 
@@ -51,6 +51,27 @@ CURRENT_TWIN: Final[contextvars.ContextVar[Twin | None]] = contextvars.ContextVa
 )
 
 
+@dataclass
+class _Turn:
+    fallen: bool = False  # the first model failed in this turn
+
+
+_TURN: Final[contextvars.ContextVar[_Turn | None]] = contextvars.ContextVar(
+    "frontdesk_fallback_turn", default=None
+)
+
+
+@contextmanager
+def fallback_turn() -> Iterator[None]:
+    """One turn of the conversation: once its first model has failed, its next requests go to the
+    fallback. Outside a turn, only the request that failed does."""
+    token = _TURN.set(_Turn())
+    try:
+        yield
+    finally:
+        _TURN.reset(token)
+
+
 class HedgedModel(WrapperModel):
     def __init__(
         self,
@@ -58,13 +79,10 @@ class HedgedModel(WrapperModel):
         *,
         fallback: Model | None = None,
         after: float = HEDGE_AFTER_SECONDS,
-        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         super().__init__(wrapped)
         self._fallback = fallback
         self._after = after
-        self._clock = clock
-        self._rests_until = float("-inf")
 
     async def request(
         self,
@@ -74,7 +92,8 @@ class HedgedModel(WrapperModel):
     ) -> ModelResponse:
         """The first answer of the request, of its twin, or of the fallback. An error ends the race
         only when no request is left to answer."""
-        resting = self._fallback is not None and self._clock() < self._rests_until
+        turn = _TURN.get()
+        resting = self._fallback is not None and turn is not None and turn.fallen
         model = self._fallback if resting and self._fallback is not None else self.wrapped
         spare = None if resting else self._fallback
         twins: dict[asyncio.Task[ModelResponse], Twin] = {}
@@ -105,7 +124,8 @@ class HedgedModel(WrapperModel):
                         return _won(twins, task)
                     error = error or failure
                     if spare is not None and _falls_back(failure):
-                        self._rests_until = self._clock() + REST_SECONDS
+                        if turn is not None:
+                            turn.fallen = True
                         start(spare)
                         spare = None
         finally:
