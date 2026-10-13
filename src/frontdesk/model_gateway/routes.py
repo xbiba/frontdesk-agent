@@ -87,10 +87,10 @@ ROUTES: Final[dict[str, ModelRoute]] = {
         approved_for=frozenset({DataClass.EVALUATION}),
         thinking="low",
         # Its replies take 2 seconds at the median. The SDK sends the timeout to Vertex
-        # (X-Server-Timeout), which answers 504 when it runs out. Cut at 15, the runs of 2026-10-13
-        # had 34 504s at 12.1 to 12.9 seconds, while the slowest answers took 13.0: slow replies were
-        # cut, not only stuck ones. A twin after 4.5 seconds and the turn's own limit stay.
-        request_timeout_seconds=25.0,
+        # (X-Server-Timeout), which answers 504 when it runs out: at about 12.5 seconds with 15.
+        # 25 was tried on 2026-10-13 and the 504s came at 22: the requests were stuck, not slow, so
+        # they are cut sooner and retried, with a twin after 4.5 seconds.
+        request_timeout_seconds=15.0,
     ),
     # The embedding candidates of the M3 experiment (design §4.5). Neither is served on the eu
     # multi-region; both are on europe-west1 (Belgium).
