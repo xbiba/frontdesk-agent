@@ -85,7 +85,9 @@ def test_an_evening_hour_is_read_whole() -> None:
     "reply",
     [
         pytest.param("Klinika jonë ofron vetëm trajtime osteopatike.", id="sq-only"),
-        pytest.param("Non disponiamo delle analisi del sangue tra i nostri servizi.", id="it-not-had"),
+        pytest.param(
+            "Non disponiamo delle analisi del sangue tra i nostri servizi.", id="it-not-had"
+        ),
         pytest.param("Al momento offriamo solo il trattamento osteopatico.", id="it-only"),
         pytest.param("We only offer osteopathic treatment.", id="en-only"),
         pytest.param("We do not offer blood tests.", id="en-not-offered"),
