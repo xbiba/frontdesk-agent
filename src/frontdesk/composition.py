@@ -51,6 +51,7 @@ from frontdesk.model_gateway.routes import (
     UnapprovedRouteError,
     require_route,
 )
+from frontdesk.secrets import CLOUD_SCOPE, read_secret
 from frontdesk.settings import CalendarBackend, Conversation, Settings
 from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.loader import load_pack
@@ -274,8 +275,14 @@ def build_scheduler(settings: Settings, *, write: bool = False) -> Scheduler | N
         token = google_token_source([scope], impersonate=settings.calendar_impersonate)
         return CalendarScheduler(GoogleCalendar(token, calendar_http_client()))
     if settings.calendar_backend is CalendarBackend.CALCOM:
-        if settings.calcom_api_key is None:
+        client = calendar_http_client()
+        key = read_secret(
+            settings,
+            "calcom_api_key",
+            token=google_token_source([CLOUD_SCOPE], impersonate=None),
+            client=client,
+        )
+        if key is None:
             raise ValueError("FRONTDESK_CALCOM_API_KEY is not set for the cal.com scheduler")
-        key = settings.calcom_api_key.get_secret_value()
-        return CalcomScheduler(key, calendar_http_client(), base_url=settings.calcom_base_url)
+        return CalcomScheduler(key, client, base_url=settings.calcom_base_url)
     return None

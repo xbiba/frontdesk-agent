@@ -24,6 +24,14 @@ class CalendarBackend(StrEnum):
     CALCOM = "calcom"  # cal.com keeps the availability and writes to Google Calendar
 
 
+class SecretsBackend(StrEnum):
+    """Where the engine reads its secrets (Albi, 2026-10-13): the environment in development, Google
+    Secret Manager in production (frontdesk.secrets)."""
+
+    ENV = "env"
+    GCP = "gcp"
+
+
 class Conversation(StrEnum):
     """Who leads a conversation: the pipeline (rules, classifier, code's replies) or the reception
     agent, a model with the clinic's facts and tools that code checks (Albi, 2026-10-12)."""
@@ -57,6 +65,8 @@ class Settings(BaseSettings):
     calendar_impersonate: str | None = None
     # cal.com's API key: in the environment only, never in a committed env file.
     calcom_api_key: SecretStr | None = None
+    secrets_backend: SecretsBackend = SecretsBackend.ENV
+    secrets_project: str | None = None  # the project of Secret Manager; else gcp_project
     calcom_base_url: str = "https://api.cal.com"
     telemetry_capture_content: bool = False
     # Production's guards on the model (Albi, 2026-10-13): a cap on each day's spend, priced from
