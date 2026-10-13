@@ -8,7 +8,18 @@ from decimal import Decimal
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Computed, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import (
+    Computed,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    SmallInteger,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, TSTZRANGE, TSVECTOR, UUID, Range
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -126,3 +137,4 @@ class DailySpend(Base):
     business_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     day: Mapped[date] = mapped_column(Date, primary_key=True)
     usd: Mapped[Decimal] = mapped_column(Numeric(12, 6))
+    alerted: Mapped[int] = mapped_column(SmallInteger, default=0)

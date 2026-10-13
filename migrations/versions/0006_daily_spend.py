@@ -25,6 +25,8 @@ def upgrade() -> None:
         sa.Column("business_id", sa.String(64), primary_key=True),
         sa.Column("day", sa.Date(), primary_key=True),
         sa.Column("usd", sa.Numeric(12, 6), nullable=False, server_default="0"),
+        # The highest alert logged that day: 0 none, 1 the alert share, 2 the cap.
+        sa.Column("alerted", sa.SmallInteger(), nullable=False, server_default="0"),
         sa.CheckConstraint("business_id <> ''", name="ck_daily_spend_business_id_not_blank"),
         sa.CheckConstraint("usd >= 0", name="ck_daily_spend_usd_not_negative"),
     )
