@@ -8,14 +8,15 @@ clinic's Google Calendar (Albi, 2026-10-12). The conversation sees only this pro
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from collections import defaultdict
+from datetime import date, datetime, time, timedelta
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
 from frontdesk.booking.calendar import Calendar, FixtureCalendar
 from frontdesk.booking.flow import entry_description
 from frontdesk.booking.reply import read_calendar
-from frontdesk.booking.slots import Slot, free_slots
+from frontdesk.booking.slots import Interval, Slot, free_slots
 from frontdesk.tenancy.pack import BusinessPack, Language
 
 
@@ -24,6 +25,14 @@ class Scheduler(Protocol):
         self, pack: BusinessPack, doctor_id: str, service_id: str, now: datetime
     ) -> tuple[Slot, ...]:
         """Every free slot of the doctor for the service, from now to the pack's horizon. Raises
+        CalendarUnavailableError."""
+        ...
+
+    def receiving(
+        self, pack: BusinessPack, doctor_id: str, now: datetime
+    ) -> dict[date, tuple[Interval, ...]]:
+        """The hours the doctor receives patients, as set in the calendar, by day from today to the
+        pack's horizon: booked or not (Albi, 2026-10-13: a full day is no closed day). Raises
         CalendarUnavailableError."""
         ...
 
@@ -43,6 +52,16 @@ class Scheduler(Protocol):
         """Books the slot once: the same `reference` never makes a second appointment. Raises
         CalendarUnavailableError when it cannot say that the appointment exists."""
         ...
+
+
+def by_day(
+    intervals: tuple[Interval, ...] | list[Interval], zone: ZoneInfo
+) -> dict[date, tuple[Interval, ...]]:
+    """Intervals grouped by the local day they start on, in time order."""
+    days: dict[date, list[Interval]] = defaultdict(list)
+    for item in sorted(intervals, key=lambda each: each.start):
+        days[item.start.astimezone(zone).date()].append(item)
+    return {day: tuple(items) for day, items in days.items()}
 
 
 class CalendarScheduler:
@@ -76,6 +95,14 @@ class CalendarScheduler:
             zone=ZoneInfo(pack.timezone),
             limit=10_000,
         )
+
+    def receiving(
+        self, pack: BusinessPack, doctor_id: str, now: datetime
+    ) -> dict[date, tuple[Interval, ...]]:
+        """The doctor's "Disponibile" blocks, by day, from the start of today."""
+        zone = ZoneInfo(pack.timezone)
+        today = datetime.combine(now.astimezone(zone).date(), time(), tzinfo=zone)
+        return by_day(read_calendar(self.calendar, pack, doctor_id, today).blocks, zone)
 
     def book(
         self,

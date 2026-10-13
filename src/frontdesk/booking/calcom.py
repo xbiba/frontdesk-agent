@@ -1,28 +1,34 @@
 """cal.com as the scheduler (Albi, 2026-10-12): it keeps each doctor's availability, checks the
 clinic's Google Calendar for conflicts, and writes the appointments there.
 
-Two calls: the free slots of the doctor's event type, and the booking, with the patient's name and
-phone (cal.com's event type asks for a phone in international format; the email is optional). A
+Three calls: the free slots of the doctor's event type; the hours the doctor receives, from the
+schedule of the event type (a full day is no closed day, Albi, 2026-10-13); and the booking, with the
+patient's name and phone (cal.com's event type asks for a phone in international format; the email
+is optional). A
 booking whose answer is lost or fails on the server is looked up by its reference before anything
 is said. Errors carry a status, never a body; the API key never appears in one.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from collections import defaultdict
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Final
 from zoneinfo import ZoneInfo
 
 import httpx2
 
 from frontdesk.booking.calendar import CalendarUnavailableError
-from frontdesk.booking.slots import Slot
+from frontdesk.booking.slots import Interval, Slot
 from frontdesk.tenancy.pack import BusinessPack, CalendarIntegration, Language
 
 API: Final = "https://api.cal.com"
 SLOTS_VERSION: Final = "2024-09-04"
 BOOKINGS_VERSION: Final = "2026-02-25"
 LIST_VERSION: Final = "2024-08-13"
+EVENT_TYPES_VERSION: Final = "2026-06-12"
+SCHEDULES_VERSION: Final = "2024-06-11"
+_WEEKDAYS: Final = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 _BOOKED: Final = frozenset({"accepted", "pending"})
 
 
@@ -64,6 +70,25 @@ class CalcomScheduler:
         except (KeyError, TypeError, ValueError) as error:
             raise CalendarUnavailableError(f"malformed slot: {type(error).__name__}") from None
         return tuple(sorted(slots, key=lambda slot: slot.start))
+
+    def receiving(
+        self, pack: BusinessPack, doctor_id: str, now: datetime
+    ) -> dict[date, tuple[Interval, ...]]:
+        calendar = _calendar(pack)
+        event = self._call(
+            "GET", f"/v2/event-types/{calendar.calendars[doctor_id]}", EVENT_TYPES_VERSION
+        )
+        found = event.get("data")
+        schedule_id = found.get("scheduleId") if isinstance(found, dict) else None
+        path = f"/v2/schedules/{schedule_id}" if schedule_id else "/v2/schedules/default"
+        schedule = self._call("GET", path, SCHEDULES_VERSION).get("data")
+        zone = ZoneInfo(pack.timezone)
+        try:
+            return _schedule_days(
+                schedule, now.astimezone(zone).date(), calendar.horizon_days, zone
+            )
+        except (AttributeError, KeyError, TypeError, ValueError):
+            raise CalendarUnavailableError("malformed schedule") from None
 
     def book(
         self,
@@ -146,6 +171,44 @@ class CalcomScheduler:
 
 class _UnsureError(Exception):
     """The request may have been carried out: its answer was lost, or the server failed."""
+
+
+def _schedule_days(
+    schedule: Any, first: date, days: int, zone: ZoneInfo
+) -> dict[date, tuple[Interval, ...]]:
+    """A cal.com schedule's hours, by day: a date override replaces the week's hours of its day,
+    and one of no length leaves the day without any."""
+    own = ZoneInfo(schedule["timeZone"])
+    overrides: dict[date, list[tuple[str, str]]] = defaultdict(list)
+    for item in schedule.get("overrides") or []:
+        overrides[date.fromisoformat(item["date"])].append((item["startTime"], item["endTime"]))
+    weekly = schedule.get("availability") or []
+    found: dict[date, tuple[Interval, ...]] = {}
+    for offset in range(days + 1):
+        day = first + timedelta(days=offset)
+        spans = (
+            overrides[day]
+            if day in overrides
+            else [
+                (item["startTime"], item["endTime"])
+                for item in weekly
+                if _WEEKDAYS[day.weekday()] in item["days"]
+            ]
+        )
+        hours = tuple(
+            Interval(
+                _local(day, start, own).astimezone(zone), _local(day, end, own).astimezone(zone)
+            )
+            for start, end in sorted(spans)
+            if start < end
+        )
+        if hours:
+            found[day] = hours
+    return found
+
+
+def _local(day: date, clock: str, zone: ZoneInfo) -> datetime:
+    return datetime.combine(day, time.fromisoformat(clock), tzinfo=zone)
 
 
 def _calendar(pack: BusinessPack) -> CalendarIntegration:
