@@ -153,6 +153,29 @@ def test_every_turn_of_a_conversation_gets_the_universal_checks() -> None:
     )
 
 
+def test_every_turn_of_a_conversation_is_in_the_case_s_language() -> None:
+    # The first of two replies came in Albanian to an Italian question, and only the last was
+    # checked (review of 2026-10-13).
+    case = _case("Fate trattamenti osteopatici?", "E quanto costa?", language="it")
+    albanian = TurnResult("Po, e ofrojmë.", TurnOutcome.REPLIED, "sq", TurnTrace(rule="pass"))
+    assert check_conversation(case, [albanian, _result("Costa 100 EUR.")], _texts) == (
+        "turn 1: language: sq",
+    )
+
+
+def test_a_case_that_switches_language_is_checked_at_its_last_turn_only() -> None:
+    case = TurnCase.model_validate(
+        {
+            "id": "c",
+            "messages": ["Buongiorno", "Do you speak English?"],
+            "tags": ["language-switch"],
+            "expect": {"language": "en"},
+        }
+    )
+    english = TurnResult("Yes.", TurnOutcome.REPLIED, "en", TurnTrace(rule="pass"))
+    assert check_conversation(case, [_result("Buongiorno!"), english], _texts) == ()
+
+
 def test_the_case_result_records_the_rule_the_kind_and_the_critical_flag() -> None:
     case = _case("Quanto costa?", behaviour="answer", critical=True)
     result = case_result(case, [_result("Fisioterapia: 30 EUR", rule="pass")], _texts)

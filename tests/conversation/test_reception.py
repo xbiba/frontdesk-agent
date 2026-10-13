@@ -252,6 +252,25 @@ async def test_the_agent_reads_the_clinic_s_facts(base: TurnRuntime) -> None:
     assert "Dr. Arben Demo" in instructions
     assert "Bookable here in the chat" in instructions
     assert "Now: Thursday 2026-10-22 08:00 (Europe/Tirane)" in instructions
+    # "Domani" is the next weekday by name: asked on a Friday, it is a Saturday (review, 2026-10-13).
+    assert "Tomorrow: Friday 2026-10-23." in instructions
+
+
+async def test_the_reply_is_in_the_language_the_model_reads_in_the_message(
+    base: TurnRuntime,
+) -> None:
+    # No listed word in "Fate trattamenti osteopatici?": code took it for Albanian, and the agent
+    # answered in Albanian (run of 2026-10-13). The model names the language it writes in, and
+    # code's own texts follow it.
+    reply = {"text": "Sì, ne parli con la reception.", "kind": "handoff", "language": "it"}
+    chat = Chat(base, Script([reply]))
+    chat.state = ConversationState(conversation_id="c1", language="sq")
+    result = await chat.say("Fate trattamenti osteopatici?")
+    texts = base.pack.fixed_texts["it"]
+    assert result.language == "it"
+    assert result.text.startswith(texts[FixedTextKey.DISCLOSURE])  # the first message
+    assert result.text.endswith(texts[FixedTextKey.HANDOFF])
+    assert chat.state.language == "it"
 
 
 async def test_a_tool_never_holds_a_time_that_was_not_shown(base: TurnRuntime) -> None:

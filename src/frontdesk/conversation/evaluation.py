@@ -244,15 +244,28 @@ def check_case(case: TurnCase, result: TurnResult, *, texts: FixedTexts) -> tupl
 def check_conversation(
     case: TurnCase, results: Sequence[TurnResult], texts: Callable[[Language], FixedTexts]
 ) -> tuple[str, ...]:
-    """Every turn's reply gets the universal checks, named by its turn; the last also the
-    expectation. `texts` gives the pack's fixed texts in a language."""
+    """Every turn's reply gets the universal checks, named by its turn, and is in the case's
+    language unless the case switches language; the last also gets the expectation. `texts` gives
+    the pack's fixed texts in a language."""
     *earlier, last = results
     failures = [
         f"turn {number}: {failure}"
         for number, result in enumerate(earlier, start=1)
-        for failure in check_reply(result, texts=texts(result.language))
+        for failure in (
+            *_language(case, result),
+            *check_reply(result, texts=texts(result.language)),
+        )
     ]
     return (*failures, *check_case(case, last, texts=texts(last.language)))
+
+
+def _language(case: TurnCase, result: TurnResult) -> tuple[str, ...]:
+    """An earlier reply in another language than the case's: the first of two replies came in
+    Albanian to an Italian question, and only the last was checked (review of 2026-10-13)."""
+    expected = case.expect.language
+    if expected is None or "language-switch" in case.tags or result.language == expected:
+        return ()
+    return (f"language: {result.language}",)
 
 
 def case_runtime(runtime: TurnRuntime, case: TurnCase) -> TurnRuntime:

@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from frontdesk.tenancy.pack import BusinessPack
 
-_DATA_FILES = ("location", "services", "doctors", "prices", "orientation", "orders")
+_DATA_FILES = ("location", "services", "departments", "doctors", "prices", "orientation", "orders")
 
 
 class PackError(ValueError):

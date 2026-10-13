@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from frontdesk.knowledge.facts import (
     Catalog,
+    department_names,
     doctor_evidence,
     location_evidence,
     orientation_evidence,
@@ -42,6 +43,13 @@ def render_facts(
     if any(prices):
         lines = (item.content for item in prices if item is not None)
         sections.append("Prices:\n" + "\n".join(f"- {line}" for line in lines))
+    departments = department_names(session, pack.id, language)
+    if departments:
+        sections.append(
+            "Departments of the clinic (by name only: it has them, and more services than those "
+            "priced above; for their prices, times and doctors, reception):\n"
+            + "\n".join(f"- {name}" for name in departments)
+        )
     doctors = doctor_evidence(session, pack.id, sorted(catalog.doctors), language)
     if doctors:
         sections.append("Doctors:\n" + "\n".join(f"- {item.content}" for item in doctors))

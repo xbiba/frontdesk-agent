@@ -51,3 +51,11 @@ In Albi's live chat, "Solo questi?" about Friday 23 got "sì, solo questi" with 
 - `hold_time` takes the day and the time of a time that was shown, and checks that the calendar still has it free.
 
 Still by code alone: the summary and the confirmation of a booking. Dates are checked as numbers only; a typed check, dates against the slots' dates, is a follow-up.
+
+## Amendment, 2026-10-13: what the facts do not list, and the language of a reply
+
+The review of the run of 2026-10-13 found two invented facts that passed every check. The agent knew only the one service the facts price, so it said the clinic offers nothing else: "Klinika jonë ofron vetëm trajtime osteopatike", "Non disponiamo delle analisi del sangue".
+
+- The facts now list the clinic's departments by name only (pack `data/departments.yaml`, records of kind `department`, approved like any record). Asked about one, the agent says the clinic has it and gives reception's phone for its prices, times and doctors.
+- The prompt says the clinic has more than the facts list. The reply check refuses an exclusive denial of a service ("solo", "vetëm", "only", "non disponiamo", "nuk ofrojmë", "we do not offer"), outside what the chat books or what is free (`sent_back:denies`).
+- The agent names the language of the patient's last message, and code's own texts of the turn follow it. Before, a short Italian question with no listed word ("Fate trattamenti osteopatici?") was taken for Albanian, and the reply came in Albanian. The live evaluation now checks the language of every turn, not only the last.

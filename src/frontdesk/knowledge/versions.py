@@ -33,6 +33,7 @@ from frontdesk.tenancy.pack import BusinessPack
 _KNOWLEDGE_FIELDS = {
     "location",
     "services",
+    "departments",
     "doctors",
     "prices",
     "orientation",
@@ -300,6 +301,7 @@ def _add_records(session: Session, pack: BusinessPack, version_id: uuid.UUID) ->
         ("location", "main", pack.location.model_dump(mode="json"))
     ]
     rows += [("service", s.id, s.model_dump(mode="json")) for s in pack.services]
+    rows += [("department", d.id, d.model_dump(mode="json")) for d in pack.departments]
     rows += [("doctor", d.id, d.model_dump(mode="json")) for d in pack.doctors]
     rows += [("price", p.service_id, p.model_dump(mode="json")) for p in pack.prices]
     rows += [("orientation", o.id, o.model_dump(mode="json")) for o in pack.orientation]

@@ -26,6 +26,40 @@ _BOOKED: Final = re.compile(
 )
 
 
+# Saying the clinic offers only some services, or not one: the agent knows the services it prices,
+# and the clinic has more ("Klinika jonë ofron vetëm trajtime osteopatike", "Non disponiamo delle
+# analisi del sangue", run of 2026-10-13). What the chat books, or what is free, may be "only" that.
+_SENTENCE: Final = re.compile(r"(?<=[.!?;:])\s+|\n+")
+_ONLY: Final = re.compile(r"\b(?:solo|soltanto|unicamente|esclusivamente|vetëm|only)\b", re.I)
+_OFFERS: Final = re.compile(
+    r"\b(?:offr|forni|esegu|effettu|facciamo|dispon|serviz|trattament|prestazion"
+    r"|ofr|kryej|bëjmë|shërbim|trajtim|offer|provid|perform|service|treatment)",
+    re.IGNORECASE,
+)
+_NOT_OFFERED: Final = re.compile(
+    r"\bnon\s+(?:\w+\s+){0,2}?(?:offriamo|forniamo|eseguiamo|effettuiamo|facciamo|disponiamo)\b"
+    r"|\bnon\s+(?:è|sono)\s+tra\s+i\s+(?:nostri\s+)?servizi"
+    r"|\bnuk\s+(?:\w+\s+){0,2}?(?:ofrojmë|kryejmë|bëjmë|disponojmë)\b"
+    r"|\b(?:do|does)\s*n[o']t\s+(?:offer|provide|perform|do)\b"
+    r"|\bnot\s+(?:among|one\s+of)\s+our\s+services\b",
+    re.IGNORECASE,
+)
+_BOOKS_OR_FREE: Final = re.compile(
+    r"prenot|book|rezerv|\bchat\b|orar|\btimes?\b|or[ae]r|\bposti?\b|slot|availab|disponibilit"
+    r"|\bfree\b|liber|consig|advice|këshill|diagnos",
+    re.IGNORECASE,
+)
+
+
+def _denies_a_service(reply: str) -> bool:
+    for sentence in _SENTENCE.split(reply):
+        if _BOOKS_OR_FREE.search(sentence):
+            continue
+        if _NOT_OFFERED.search(sentence) or (_ONLY.search(sentence) and _OFFERS.search(sentence)):
+            return True
+    return False
+
+
 # The times a reply names (Albi, 2026-10-12: the model writes the times, code checks them): a clock
 # time ("10:00", "9.30"), and the hours after a word that brings them, alone or in a list ("alle 9,
 # 10, 12 e 16", "at 9 and 10", "në orën 9").
@@ -128,4 +162,10 @@ def reply_problems(
     if not booked and _BOOKED.search(reply):
         detail = "it says a booking is confirmed, but confirm_booking made none"
         problems.append(Problem("booking", detail))
+    if _denies_a_service(reply):
+        detail = (
+            "it says the clinic offers only some services, or not one; the clinic has more than "
+            "the facts list: say you have no details on it here and give reception's phone"
+        )
+        problems.append(Problem("denies", detail))
     return tuple(problems)

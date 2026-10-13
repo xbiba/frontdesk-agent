@@ -12,6 +12,7 @@ answers instead.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from enum import StrEnum
 from typing import Final
 
@@ -32,7 +33,7 @@ from frontdesk.db.engine import business_session
 from frontdesk.knowledge.evidence import neutralized
 from frontdesk.knowledge.retrieval import RetrievedChunk, chunk_evidence, hybrid_search
 from frontdesk.safety.rules import contains_clinical_terms
-from frontdesk.tenancy.pack import Profile
+from frontdesk.tenancy.pack import Language, Profile
 
 RECEPTION_LIMITS: Final = UsageLimits(request_limit=6)
 # How a reply the check refused is named in the turn's check reasons, for the run's report.
@@ -55,12 +56,19 @@ class ReplyKind(StrEnum):
 
 
 class ReceptionReply(BaseModel):
-    text: str = Field(description="The message to send the patient, in the conversation's language")
+    text: str = Field(
+        description="The message to send the patient, in the language of their last message"
+    )
     kind: ReplyKind = Field(
         description="greeting (only a greeting or small talk), answer (you answered, showed "
         "times or asked for the next booking step), clarify (you cannot answer before they say what "
         "they mean), handoff (you send them to reception), notice (you answered the practical part of "
         "a message that describes symptoms), clinical (they ask for medical advice) or emergency"
+    )
+    language: Language | None = Field(
+        default=None,
+        description="The language of the patient's last message, which the text is written in: "
+        "sq, it or en",
     )
 
 
@@ -77,9 +85,11 @@ def history_messages(history: tuple[HistoryEntry, ...]) -> list[ModelMessage]:
 
 def render_situation(desk: Desk) -> str:
     local = desk.now.astimezone(desk.zone)
+    tomorrow = local + timedelta(days=1)
     lines = [
         f"Now: {local:%A} {local:%Y-%m-%d %H:%M} ({desk.pack.timezone}). "
-        f"Conversation language: {desk.language}.",
+        f"Tomorrow: {tomorrow:%A} {tomorrow:%Y-%m-%d}. "
+        f"Language of the conversation so far: {desk.language}.",
     ]
     if desk.first_turn:
         lines.append(

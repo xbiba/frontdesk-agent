@@ -14,7 +14,15 @@ from sqlalchemy.orm import Session
 from frontdesk.db.models import Record
 from frontdesk.knowledge.evidence import Evidence, EvidenceKind
 from frontdesk.knowledge.versions import active_version_id
-from frontdesk.tenancy.pack import Doctor, Language, Location, OrientationEntry, Price, Service
+from frontdesk.tenancy.pack import (
+    Department,
+    Doctor,
+    Language,
+    Location,
+    OrientationEntry,
+    Price,
+    Service,
+)
 
 _LABELS: dict[str, dict[str, str]] = {
     "location": {
@@ -202,6 +210,17 @@ def doctor_evidence(
             _record(f"doctor:{doctor.id}", version_id, _LABELS["doctor"][language], content, {})
         )
     return found
+
+
+def department_names(session: Session, business_id: str, language: Language) -> list[str]:
+    """The names of the clinic's departments in the active version, by id."""
+    version_id = active_version_id(session, business_id)
+    if version_id is None:
+        return []
+    return [
+        Department.model_validate(row.payload).names[language]
+        for row in _rows(session, version_id, "department")
+    ]
 
 
 def orientation_evidence(

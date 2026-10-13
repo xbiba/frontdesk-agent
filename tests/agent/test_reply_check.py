@@ -79,3 +79,36 @@ def test_an_evening_hour_is_read_whole() -> None:
     assert not list(
         reply_problems("Venerdì 23 alle 20?", TOOL, booked=False, times=frozenset({"20:00"}))
     )
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        pytest.param("Klinika jonë ofron vetëm trajtime osteopatike.", id="sq-only"),
+        pytest.param("Non disponiamo delle analisi del sangue tra i nostri servizi.", id="it-not-had"),
+        pytest.param("Al momento offriamo solo il trattamento osteopatico.", id="it-only"),
+        pytest.param("We only offer osteopathic treatment.", id="en-only"),
+        pytest.param("We do not offer blood tests.", id="en-not-offered"),
+        pytest.param("Nuk ofrojmë analiza gjaku.", id="sq-not-offered"),
+    ],
+)
+def test_the_clinic_is_never_said_to_offer_only_what_the_facts_list(reply: str) -> None:
+    # Knowing the one service it prices, the agent said the clinic had no other (run of 2026-10-13).
+    assert {problem.code for problem in reply_problems(reply, KNOWN, booked=False)} == {"denies"}
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "In chat posso prenotare solo il trattamento osteopatico; per il resto, la reception.",
+        "Bookings in the chat are only for osteopathy.",
+        "Venerdì ci sono solo posti di mattina.",
+        "We do not have free times on Friday.",
+        "Non posso darle consigli medici.",
+        "Non ho informazioni sulle analisi del sangue: la reception può aiutarla.",
+        "I don't have information on blood tests here.",
+        "Nuk kam informacion për analizat e gjakut.",
+    ],
+)
+def test_what_the_chat_books_or_what_is_free_may_be_only_that(reply: str) -> None:
+    assert "denies" not in {problem.code for problem in reply_problems(reply, KNOWN, booked=False)}

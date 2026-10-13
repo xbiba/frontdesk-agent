@@ -229,7 +229,7 @@ async def _run_turn(text: str, state: ConversationState, runtime: TurnRuntime) -
         log_event(logger, "turn.failed", business_id=pack.id, reason=type(error).__name__)
         result = _handoff(pack, language, FixedTextKey.HANDOFF, TurnTrace(rule="error"))
     if state.turns == 0:
-        result = _with_disclosure(pack, language, result)
+        result = _with_disclosure(pack, result.language, result)
     return result
 
 
@@ -306,6 +306,12 @@ async def _reception(
             return TurnResult(desk.booked_text, TurnOutcome.REPLIED, language, failed)
         return _handoff(pack, language, FixedTextKey.HANDOFF, failed)
     reply = run.output
+    # The model reads the language of a short message better than the word lists: "Fate
+    # trattamenti osteopatici?" was taken for Albanian, and the reply came in Albanian (run of
+    # 2026-10-13). Code's own texts follow the model's, unless code already wrote some this turn.
+    spoken = reply.language
+    if spoken is not None and spoken in pack.languages and not (desk.summary or desk.booked_text):
+        language = spoken
     intent = Intent.BOOKING if desk.booking is not None or desk.booked else None
     trace = TurnTrace(
         rule="pass",
