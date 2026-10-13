@@ -45,7 +45,7 @@ LIST = "1) venerdì 23: alle 9 e alle 9:30\n2) lunedì 26: alle 9 e alle 9:30"
 FRIDAY = "Venerdì 23 ho posto alle 9 e alle 9:30: quale preferisce?"
 SUMMARY = (
     "Riepilogo: venerdì 23 ottobre, 09:30, Visita ortopedica con Dr. Arben Demo.\n"
-    "Nome: Mario Rossi\nTelefono: +355691234567\n"
+    "Nome: Mario Rossi\nTelefono: +355 69 123 4567\n"
     "Confermo la prenotazione? Risponda sì o no."
 )
 BOOKED = (
@@ -831,3 +831,34 @@ async def test_past_the_daily_cap_the_patient_gets_reception(base: TurnRuntime) 
         "Vorrei sapere una cosa", ConversationState(conversation_id="c1", turns=1), runtime
     )
     assert (reply.trace.rule, reply.outcome) == ("spend_cap", TurnOutcome.HANDOFF)
+
+
+@pytest.mark.parametrize(
+    ("phone", "said"),
+    [
+        pytest.param({"phone": "333 1234567"}, "Telefono: +39 333 123 4567", id="italian-mobile"),
+        pytest.param({"phone": "69 123 4567"}, "Telefono: +355 69 123 4567", id="albanian-mobile"),
+        pytest.param(
+            {"phone": "02 1234567"},
+            "That phone number could be +39 02 123 4567 or +355 212 34567: ask which one",
+            id="two-countries",
+        ),
+        pytest.param(
+            {"phone": "02 1234567", "country": "it"},
+            "Telefono: +39 02 123 4567",
+            id="the-country-the-patient-named",
+        ),
+    ],
+)
+async def test_a_phone_without_its_prefix_is_recognized(
+    base: TurnRuntime, phone: dict[str, str], said: str
+) -> None:
+    # Albi, 2026-10-14: a number without its prefix is read for the likely countries (the one the
+    # patient named, their language's, the clinic's); one that fits two is asked about.
+    script = Script(
+        [*HOLD_AND_NAME, [("prepare_booking", {"name": "Mario Rossi", **phone})], _final("Ok")]
+    )
+    chat = Chat(base, script)
+    for message in ("Venerdì che orari ci sono?", "alle 9", f"Mario Rossi, {phone['phone']}"):
+        await chat.say(message)
+    assert said in script.tool_results()[-1]

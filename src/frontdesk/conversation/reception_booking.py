@@ -17,14 +17,16 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Final
 
+import phonenumbers
+
 from frontdesk.agent.vocab import ClarifyField, SlotPart
 from frontdesk.booking.calendar import CalendarUnavailableError
-from frontdesk.booking.flow import affirms, phrase, valid_name, valid_phone
+from frontdesk.booking.flow import affirms, format_phone, phrase, read_phone, valid_name
 from frontdesk.booking.holds import attach, booked_events, held
 from frontdesk.booking.reply import SlotWish, booking_target, day_words, slot_time
 from frontdesk.booking.scheduler import Appointment
 from frontdesk.booking.slots import Slot
-from frontdesk.conversation.booking_turn import StepReply, cancel, confirm, country_code, take
+from frontdesk.conversation.booking_turn import StepReply, cancel, confirm, take
 from frontdesk.conversation.desk import Desk
 from frontdesk.conversation.state import BookingStage, BookingStep
 from frontdesk.db.engine import business_session
@@ -237,18 +239,27 @@ def shown_times(desk: Desk) -> frozenset[str]:
     return frozenset(f"{start.astimezone(desk.zone):%H:%M}" for start in step.shown)
 
 
-def prepare_booking(desk: Desk, name: str, phone: str) -> str:
+def prepare_booking(desk: Desk, name: str, phone: str, country: str | None = None) -> str:
     step = desk.booking
     _calendar_source(desk, step)
     if step is None or step.hold_id is None:
         return desk.said("No time is held: call hold_time first.")
-    code = country_code(desk.pack)
-    full_name, number = valid_name(name), valid_phone(phone, code)
+    full_name = valid_name(name)
+    named = (country or "").strip().upper()
+    reading = read_phone(phone, [named]) if len(named) == 2 else read_phone("", [])
+    if reading.number is None:  # the country the patient named first, if the number fits it
+        reading = read_phone(phone, _phone_regions(desk, named))
     if full_name is None:
         return desk.said("That is not a first and last name: ask for it again.")
+    if reading.options:
+        return desk.said(
+            f"That phone number could be {' or '.join(reading.options)}: ask which one is theirs."
+        )
+    number = reading.number
     if number is None:
         return desk.said(
-            f"That phone number is not valid: ask for it with the international prefix ({code}…)."
+            "That phone number fits no country: ask for it again, with its prefix if it is not "
+            "Albanian or Italian."
         )
     try:
         existing = _existing(desk, phone=number)
@@ -285,7 +296,7 @@ def prepare_booking(desk: Desk, name: str, phone: str) -> str:
         service=desk.catalog.services.get(step.service_id, {}).get(desk.language, step.service_id),
         doctor=desk.catalog.doctors.get(step.doctor_id, step.doctor_id),
         name=full_name,
-        phone=number,
+        phone=format_phone(number),
     )
     desk.summary = summary
     return desk.said(summary)
@@ -325,6 +336,22 @@ def _existing(desk: Desk, phone: str | None) -> Appointment | None:
         if appointment.reference in mine or (digits and _digits(appointment.phone) == digits):
             return appointment
     return None
+
+
+# The country a conversation's language suggests for a phone without its prefix.
+_LANGUAGE_REGIONS: Final = {"sq": "AL", "it": "IT"}
+
+
+def _phone_regions(desk: Desk, named: str) -> list[str]:
+    """Where a phone without its prefix may be from, the likeliest first: the country the patient
+    named, their language's, the clinic's."""
+    found = [named if len(named) == 2 else "", _LANGUAGE_REGIONS.get(desk.language, "")]
+    try:  # the clinic's country from its phone's prefix, a valid number or not
+        clinic = phonenumbers.parse(desk.pack.location.phone, None)
+        found.append(phonenumbers.region_code_for_country_code(clinic.country_code or 0))
+    except phonenumbers.NumberParseException:
+        pass
+    return list(dict.fromkeys(region for region in found if region and region != "ZZ"))
 
 
 def _mine(desk: Desk) -> set[str]:

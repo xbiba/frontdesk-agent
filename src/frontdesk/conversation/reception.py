@@ -198,15 +198,19 @@ def build_reception(
         return booking.hold_time(ctx.deps, day, time)
 
     @agent.tool
-    def prepare_booking(ctx: RunContext[Desk], name: str, phone: str) -> str:
+    def prepare_booking(
+        ctx: RunContext[Desk], name: str, phone: str, country: str | None = None
+    ) -> str:
         """Put the patient's full name and phone number on the held time. Returns the summary to
         show them, word for word, before they confirm.
 
         Args:
             name: First and last name, as the patient wrote them.
-            phone: The phone number, as the patient wrote it.
+            phone: The phone number, as the patient wrote it, with or without its prefix.
+            country: The two-letter code of the phone's country (IT, AL, GR…) when the patient
+                says where they or their phone are from; leave it out otherwise.
         """
-        return booking.prepare_booking(ctx.deps, name, phone)
+        return booking.prepare_booking(ctx.deps, name, phone, country)
 
     @agent.tool
     def confirm_booking(ctx: RunContext[Desk]) -> str:
