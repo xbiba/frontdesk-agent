@@ -22,6 +22,7 @@ from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, TurnResult, TurnRuntime, handle_message
 from frontdesk.db.engine import business_session
 from frontdesk.db.models import BookingHold
+from frontdesk.model_gateway.daily_cap import SpendCapReachedError
 from frontdesk.tenancy.pack import BusinessPack, CalendarIntegration, FixedTextKey, Integrations
 from tests.conversation.helpers import classifier_turns, document_responder, make_runtime
 
@@ -808,3 +809,25 @@ async def test_two_conversations_share_no_memory(base: TurnRuntime) -> None:
         assert trace not in seen
     assert other.booking is None
     assert other.history[0].text == "Vorrei sapere una cosa"
+
+
+async def test_the_switch_turns_the_model_off_and_the_rules_still_answer(base: TurnRuntime) -> None:
+    # FRONTDESK_MODEL_OFF (Albi, 2026-10-13): reception's contact instead of the model.
+    script = Script([])
+    chat = Chat(replace(base, model_off=True), script)
+    reply = await chat.say("Vorrei sapere una cosa")
+    assert (reply.trace.rule, reply.outcome) == ("model_off", TurnOutcome.HANDOFF)
+    assert reply.text.endswith(base.pack.fixed_texts["it"][FixedTextKey.HANDOFF])
+    assert (await chat.say("Ho un forte dolore al petto e non respiro")).trace.rule == "emergency"
+    assert script.calls == []
+
+
+async def test_past_the_daily_cap_the_patient_gets_reception(base: TurnRuntime) -> None:
+    def capped(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        raise SpendCapReachedError("today's model spend reached the cap")
+
+    runtime = replace(base, reception=build_reception(FunctionModel(capped), base.pack.profile))
+    reply, _ = await handle_message(
+        "Vorrei sapere una cosa", ConversationState(conversation_id="c1", turns=1), runtime
+    )
+    assert (reply.trace.rule, reply.outcome) == ("spend_cap", TurnOutcome.HANDOFF)

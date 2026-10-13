@@ -63,6 +63,7 @@ from frontdesk.db.engine import business_session
 from frontdesk.knowledge.embedders import Embedder
 from frontdesk.knowledge.evidence import Evidence, EvidenceKind
 from frontdesk.knowledge.facts import Catalog, load_catalog
+from frontdesk.model_gateway.daily_cap import SpendCapReachedError
 from frontdesk.model_gateway.hedging import fallback_turn
 from frontdesk.observability.logs import log_event
 from frontdesk.observability.tracing import record_content, record_metadata, turn_span
@@ -190,6 +191,9 @@ class TurnRuntime:
     min_retrieval_similarity: float = 0.0
     capture_content: bool = False
     timeout_seconds: float = TURN_TIMEOUT_SECONDS
+    # The switch that turns the model off (FRONTDESK_MODEL_OFF, Albi, 2026-10-13): the rules still
+    # answer, and every message the model would answer gets reception's contact.
+    model_off: bool = False
     orders: OrderStore | None = None
     now: Callable[[], datetime] = _utc_now
     keep_drafts: bool = False  # the live evaluation keeps refused answers for its reviewer
@@ -252,6 +256,8 @@ async def _run_turn(text: str, state: ConversationState, runtime: TurnRuntime) -
             result = await _decide(text, language, state, runtime)
     except TimeoutError:
         result = _handoff(pack, language, FixedTextKey.HANDOFF, TurnTrace(rule="timeout"))
+    except SpendCapReachedError:  # today's model spend reached its cap: reception's contact
+        result = _handoff(pack, language, FixedTextKey.HANDOFF, TurnTrace(rule="spend_cap"))
     except Exception as error:  # any failure becomes a handoff; only its type is logged
         log_event(logger, "turn.failed", business_id=pack.id, reason=type(error).__name__)
         result = _handoff(pack, language, FixedTextKey.HANDOFF, TurnTrace(rule="error"))
@@ -279,6 +285,8 @@ async def _decide(
         return _emergency(pack, language, rule.rule)
     if rule.verdict is Verdict.CLINICAL_ADVICE:
         return _handoff(pack, language, FixedTextKey.CLINICAL, TurnTrace(rule=rule.rule))
+    if runtime.model_off:
+        return _handoff(pack, language, FixedTextKey.HANDOFF, TurnTrace(rule="model_off"))
     if runtime.reception is not None:
         if rule.verdict is Verdict.PERSONAL_DATA:  # anything but the name and phone it asked for
             trace = TurnTrace(rule=f"personal_data:{rule.rule}")

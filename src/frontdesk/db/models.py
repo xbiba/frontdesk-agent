@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Computed, Date, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Computed, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, TSTZRANGE, TSVECTOR, UUID, Range
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -115,3 +116,13 @@ class BookingHold(Base):
     phone: Mapped[str | None] = mapped_column(String(32))
     event_id: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class DailySpend(Base):
+    """What a business's model requests cost on one of its days, in USD (migration 0006)."""
+
+    __tablename__ = "daily_spend"
+
+    business_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    usd: Mapped[Decimal] = mapped_column(Numeric(12, 6))

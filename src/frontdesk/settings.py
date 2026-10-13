@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     calcom_api_key: SecretStr | None = None
     calcom_base_url: str = "https://api.cal.com"
     telemetry_capture_content: bool = False
+    # Production's guards on the model (Albi, 2026-10-13): a cap on each day's spend, priced from
+    # a prices file (the live runs' budget format), and a switch that turns the model off.
+    daily_cap_eur: float | None = Field(default=None, gt=0)
+    prices_file: Path | None = None
+    model_off: bool = False
     log_level: str = "INFO"
 
     def require_business_pack(self) -> Path:
