@@ -84,6 +84,7 @@ class ConversationState(BaseModel):
     booking: BookingStep | None = None  # a booking under way; any other turn ends it
     last_reply: str | None = None  # never one that holds a name or a phone
     history: tuple[HistoryEntry, ...] = ()  # the reception agent's conversation only
+    recent: tuple[datetime, ...] = ()  # when its messages of the last minute came (rate limit)
 
     def advanced(
         self,

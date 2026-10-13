@@ -26,6 +26,7 @@ from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, handle_message
 from frontdesk.knowledge.embedders import HashEmbedder
 from frontdesk.model_gateway import google_tokens
+from frontdesk.model_gateway.daily_cap import CappedModel
 from frontdesk.model_gateway.routes import (
     ROUTES,
     DataClass,
@@ -37,6 +38,7 @@ from frontdesk.settings import CalendarBackend, EmbeddingBackend, Settings
 from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.pack import BusinessPack, CalendarIntegration, Integrations, Profile
 from tests.conversation.helpers import first_prompt
+from tests.model_gateway.budget_helpers import write_budget
 
 Activate = Callable[..., sessionmaker[Session]]
 NO_DATABASE = "postgresql+psycopg://nobody:nobody@127.0.0.1:1/none"  # never connected to
@@ -596,3 +598,33 @@ def test_the_agent_on_3_8_flash_falls_back_to_flash_lite(
     build_turn_runtime(deployment, data_class=DataClass.EVALUATION, wrap_model=wrap)
     assert ("gemini-3.8-flash", "agent", False) in wrapped
     assert ("gemini-3.1-flash-lite", "agent", True) in wrapped
+
+
+@pytest.mark.db
+def test_a_daily_cap_needs_the_prices_and_meters_every_agent(
+    activate_pack: Activate,
+    app_url: str,
+    clinic_pack: BusinessPack,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # Production's daily cap (Albi, 2026-10-13): priced from a prices file, around every model.
+    monkeypatch.setattr(
+        "frontdesk.composition.build_live_model",
+        lambda route, *, gcp_project: FunctionModel(
+            lambda messages, info: ModelResponse(parts=[]), model_name=route.model_name
+        ),
+    )
+    factory = activate_pack(clinic_pack)
+    capped = {
+        "model_route": "vertex-eu-gemini-flash-lite",
+        "gcp_project": "p",
+        "daily_cap_eur": 5.0,
+    }
+    deployment = _deployment(clinic_pack, factory, app_url=app_url, **capped)
+    with pytest.raises(ValueError, match="needs FRONTDESK_PRICES_FILE"):
+        build_turn_runtime(deployment, data_class=DataClass.EVALUATION)
+    prices = write_budget(tmp_path).path
+    priced = _deployment(clinic_pack, factory, app_url=app_url, prices_file=prices, **capped)
+    runtime = build_turn_runtime(priced, data_class=DataClass.EVALUATION)
+    assert isinstance(runtime.classifier.model, CappedModel)

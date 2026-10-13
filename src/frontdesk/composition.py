@@ -39,6 +39,8 @@ from frontdesk.db.engine import business_session, make_engine, make_session_fact
 from frontdesk.knowledge.embedders import Embedder, build_embedder
 from frontdesk.knowledge.facts import load_catalog
 from frontdesk.knowledge.versions import check_embedder
+from frontdesk.model_gateway.costs import load_budget
+from frontdesk.model_gateway.daily_cap import CappedModel, DailyCap
 from frontdesk.model_gateway.factory import build_live_model, live_model_settings
 from frontdesk.model_gateway.google_tokens import google_token_source
 from frontdesk.model_gateway.hedging import HedgedModel
@@ -49,6 +51,7 @@ from frontdesk.model_gateway.routes import (
     UnapprovedRouteError,
     require_route,
 )
+from frontdesk.secrets import CLOUD_SCOPE, read_secret
 from frontdesk.settings import CalendarBackend, Conversation, Settings
 from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.loader import load_pack
@@ -70,6 +73,32 @@ def _utc_now() -> datetime:
 
 def _unwrapped(model: Model, role: AgentRole, *, retries: bool = True) -> Model:
     return model
+
+
+def _capped(deployment: Deployment, route: ModelRoute) -> ModelWrapper | None:
+    """Production's daily cap on the model's spend (FRONTDESK_DAILY_CAP_EUR, Albi, 2026-10-13),
+    priced from FRONTDESK_PRICES_FILE; None without a cap. A live evaluation brings its own meter."""
+    settings = deployment.settings
+    if settings.daily_cap_eur is None:
+        return None
+    if settings.prices_file is None:
+        raise ValueError(
+            "FRONTDESK_DAILY_CAP_EUR needs FRONTDESK_PRICES_FILE, to price the requests"
+        )
+    prices = load_budget(settings.prices_file)
+    cap = DailyCap(
+        deployment.session_factory,
+        deployment.pack.id,
+        cap_usd=settings.daily_cap_eur * prices.config.exchange_rate.usd_per_eur,
+        price=prices.price(route.route_id),
+        zone=ZoneInfo(deployment.pack.timezone),
+        clock=_utc_now,
+    )
+
+    def capped(model: Model, role: AgentRole, *, retries: bool = True) -> Model:
+        return CappedModel(model, cap)
+
+    return capped
 
 
 def _hedged(
@@ -185,7 +214,7 @@ def build_turn_runtime(
             reception_version = reception_prompt.version
     else:
         model = build_live_model(route, gcp_project=deployment.settings.gcp_project)
-        wrap = wrap_model or _unwrapped
+        wrap = wrap_model or _capped(deployment, route) or _unwrapped
         classifier = build_classifier(
             wrap(model, "classifier"),
             pack.profile,
@@ -222,6 +251,7 @@ def build_turn_runtime(
         min_support_similarity=deployment.settings.min_support_similarity,
         min_retrieval_similarity=deployment.settings.min_retrieval_similarity,
         capture_content=deployment.settings.telemetry_capture_content,
+        model_off=deployment.settings.model_off,
         orders=OrderStore(tuple(pack.orders)) if pack.features.order_status else None,
         now=deployment.now,
         scheduler=(
@@ -245,8 +275,14 @@ def build_scheduler(settings: Settings, *, write: bool = False) -> Scheduler | N
         token = google_token_source([scope], impersonate=settings.calendar_impersonate)
         return CalendarScheduler(GoogleCalendar(token, calendar_http_client()))
     if settings.calendar_backend is CalendarBackend.CALCOM:
-        if settings.calcom_api_key is None:
+        client = calendar_http_client()
+        key = read_secret(
+            settings,
+            "calcom_api_key",
+            token=google_token_source([CLOUD_SCOPE], impersonate=None),
+            client=client,
+        )
+        if key is None:
             raise ValueError("FRONTDESK_CALCOM_API_KEY is not set for the cal.com scheduler")
-        key = settings.calcom_api_key.get_secret_value()
-        return CalcomScheduler(key, calendar_http_client(), base_url=settings.calcom_base_url)
+        return CalcomScheduler(key, client, base_url=settings.calcom_base_url)
     return None

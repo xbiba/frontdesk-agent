@@ -33,6 +33,9 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RequestUsage
 
 HEDGE_AFTER_SECONDS: Final = 4.5
+# Albi, 2026-10-13: a request still unanswered after this also goes to the fallback, and the first
+# answer wins. In the run agent-8, 19 turns over 10 seconds had waited about 12.5 for a 504 first.
+SPARE_AFTER_SECONDS: Final = 6.0
 # The failures of the provider that the fallback answers: what the meter would have retried.
 FALLBACK_STATUSES: Final = frozenset({429, 500, 502, 503, 504})
 
@@ -79,10 +82,12 @@ class HedgedModel(WrapperModel):
         *,
         fallback: Model | None = None,
         after: float = HEDGE_AFTER_SECONDS,
+        spare_after: float = SPARE_AFTER_SECONDS,
     ) -> None:
         super().__init__(wrapped)
         self._fallback = fallback
         self._after = after
+        self._spare_after = spare_after
 
     async def request(
         self,
@@ -97,6 +102,8 @@ class HedgedModel(WrapperModel):
         model = self._fallback if resting and self._fallback is not None else self.wrapped
         spare = None if resting else self._fallback
         twins: dict[asyncio.Task[ModelResponse], Twin] = {}
+        clock = asyncio.get_running_loop().time
+        began = clock()
 
         def start(on: Model) -> None:
             self._start(twins, on, messages, model_settings, model_request_parameters)
@@ -109,14 +116,21 @@ class HedgedModel(WrapperModel):
                 pending = {task for task in twins if not task.done()}
                 if not pending:
                     raise error if error is not None else RuntimeError("no request answered")
+                deadlines = [began + self._after] if not twinned else []
+                deadlines += [began + self._spare_after] if spare is not None else []
                 done, _ = await asyncio.wait(
                     pending,
-                    timeout=None if twinned else self._after,
+                    timeout=max(0.0, min(deadlines) - clock()) if deadlines else None,
                     return_when=asyncio.FIRST_COMPLETED,
                 )
-                if not done:  # still away: an identical twin
-                    start(model)
-                    twinned = True
+                if not done:  # still away: an identical twin, then the fallback too
+                    elapsed = clock() - began
+                    if not twinned and elapsed >= self._after:
+                        start(model)
+                        twinned = True
+                    if spare is not None and elapsed >= self._spare_after:
+                        start(spare)  # slowness is no failure: the turn keeps the first model
+                        spare = None
                     continue
                 for task in done:
                     failure = task.exception()

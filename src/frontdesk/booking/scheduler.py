@@ -9,8 +9,9 @@ clinic's Google Calendar (Albi, 2026-10-12). The conversation sees only this pro
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from typing import Protocol
+from typing import Final, Protocol
 from zoneinfo import ZoneInfo
 
 from frontdesk.booking.calendar import Calendar, FixtureCalendar
@@ -18,6 +19,19 @@ from frontdesk.booking.flow import entry_description
 from frontdesk.booking.reply import read_calendar
 from frontdesk.booking.slots import Interval, Slot, free_slots
 from frontdesk.tenancy.pack import BusinessPack, Language
+
+ACCEPTED: Final = "accepted"
+PENDING: Final = "pending"  # the clinic confirms it (cal.com's "requires confirmation")
+
+
+@dataclass(frozen=True)
+class Appointment:
+    """A future appointment that is not cancelled, made in the chat or by reception: one per person
+    at a time (Albi, 2026-10-13)."""
+
+    start: datetime
+    phone: str | None
+    reference: str | None  # the chat's reference, for an appointment the chat made
 
 
 class Scheduler(Protocol):
@@ -48,9 +62,15 @@ class Scheduler(Protocol):
         phone: str,
         reference: str,
         language: Language,
-    ) -> None:
-        """Books the slot once: the same `reference` never makes a second appointment. Raises
+    ) -> str:
+        """Books the slot once: the same `reference` never makes a second appointment. The
+        appointment's status: ACCEPTED, or PENDING until the clinic confirms it. Raises
         CalendarUnavailableError when it cannot say that the appointment exists."""
+        ...
+
+    def upcoming(self, pack: BusinessPack, now: datetime) -> tuple[Appointment, ...]:
+        """The clinic's appointments still to come and not cancelled, in time order. Raises
+        CalendarUnavailableError."""
         ...
 
 
@@ -69,6 +89,7 @@ class CalendarScheduler:
 
     def __init__(self, calendar: Calendar) -> None:
         self.calendar = calendar
+        self._made: list[Appointment] = []  # the appointments booked through this scheduler
 
     def fresh(self) -> CalendarScheduler:
         """A fixture without the bookings made since; any other calendar as it is."""
@@ -116,7 +137,9 @@ class CalendarScheduler:
         phone: str,
         reference: str,
         language: Language,
-    ) -> None:
+    ) -> str:
+        """The event written in the calendar: PENDING when the pack says the clinic confirms
+        its appointments, as cal.com would answer."""
         calendar = pack.integrations.calendar
         if calendar is None:
             raise ValueError(f"business '{pack.id}' has no calendar")
@@ -130,3 +153,18 @@ class CalendarScheduler:
             title=f"{service.names.get(default, service_id)} — {name}",
             description=entry_description(phone, default),
         )
+        self._made.append(Appointment(start, phone, reference))
+        return PENDING if calendar.requires_confirmation else ACCEPTED
+
+    def upcoming(self, pack: BusinessPack, now: datetime) -> tuple[Appointment, ...]:
+        """The appointments booked here, and those a fixture declares that are not cancelled."""
+        calendar = pack.integrations.calendar
+        found = list(self._made)
+        if isinstance(self.calendar, FixtureCalendar) and calendar is not None:
+            zone = ZoneInfo(pack.timezone)
+            found += [
+                Appointment(item.start, phone, None)
+                for calendar_id in calendar.calendars.values()
+                for item, phone in self.calendar.appointments(calendar_id, zone)
+            ]
+        return tuple(sorted((item for item in found if item.start > now), key=lambda a: a.start))

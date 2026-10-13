@@ -102,8 +102,8 @@ def test_slots_that_cannot_be_read_raise_with_a_status_only(
     assert "cal_test_key" not in str(raised.value)
 
 
-def _book(scheduler: CalcomScheduler, pack: BusinessPack) -> None:
-    scheduler.book(
+def _book(scheduler: CalcomScheduler, pack: BusinessPack) -> str:
+    return scheduler.book(
         pack,
         "dr-arben-demo",
         "orthopedics-visit",
@@ -263,3 +263,50 @@ def test_the_hours_of_a_fixture_calendar_are_its_blocks(pack: BusinessPack, tmp_
     )
     days = CalendarScheduler(FixtureCalendar(path)).receiving(pack, "dr-arben-demo", NOW)
     assert days == {at(23, 9).date(): (Interval(at(23, 9), at(23, 11)),)}  # full, yet he receives
+
+
+def test_a_booking_says_whether_the_clinic_must_confirm_it(pack: BusinessPack) -> None:
+    # cal.com's "requires confirmation" (Albi, 2026-10-13): the booking waits, "pending".
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(201, json={"status": "success", "data": {"status": "pending"}})
+
+    assert _book(_scheduler(answer), pack) == "pending"
+
+
+def test_the_appointments_to_come_are_read_page_by_page(pack: BusinessPack) -> None:
+    # One appointment per person at a time: every booking to come counts, made in the chat or by
+    # reception, waiting for confirmation too; a cancelled one does not.
+    seen: list[httpx2.Request] = []
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        first = request.url.params["skip"] == "0"
+        items = (
+            [
+                {
+                    "status": "accepted",
+                    "start": at(23, 9).isoformat(),
+                    "attendees": [{"phoneNumber": "+355691234567"}],
+                    "metadata": {"frontdesk": "hold1"},
+                },
+                {
+                    "status": "pending",
+                    "start": at(26, 12).isoformat(),
+                    "attendees": [{}],
+                    "bookingFieldsResponses": {"attendeePhoneNumber": "+355690000002"},
+                },
+                {"status": "cancelled", "start": at(27, 14).isoformat(), "attendees": []},
+            ]
+            if first
+            else [{"status": "accepted", "start": at(28, 9).isoformat(), "attendees": []}]
+        )
+        return httpx2.Response(200, json={"data": items, "pagination": {"hasNextPage": first}})
+
+    found = _scheduler(answer).upcoming(pack, NOW)
+    assert [(item.start, item.phone, item.reference) for item in found] == [
+        (at(23, 9), "+355691234567", "hold1"),
+        (at(26, 12), "+355690000002", None),
+        (at(28, 9), None, None),
+    ]
+    assert [request.url.params["status"] for request in seen] == ["upcoming,unconfirmed"] * 2
+    assert seen[0].url.params["eventTypeIds"] == "7441781"

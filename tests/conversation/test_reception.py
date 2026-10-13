@@ -3,7 +3,7 @@ code checks the calendar, the hold, the patient's yes and every number of the re
 
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -22,6 +22,7 @@ from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, TurnResult, TurnRuntime, handle_message
 from frontdesk.db.engine import business_session
 from frontdesk.db.models import BookingHold
+from frontdesk.model_gateway.daily_cap import SpendCapReachedError
 from frontdesk.tenancy.pack import BusinessPack, CalendarIntegration, FixedTextKey, Integrations
 from tests.conversation.helpers import classifier_turns, document_responder, make_runtime
 
@@ -656,3 +657,177 @@ async def test_hold_time_needs_a_time_that_was_shown(base: TurnRuntime) -> None:
     assert "is not among the times shown" in script.tool_results()[-1]
     with business_session(base.session_factory, base.pack.id) as session:
         assert list(session.scalars(select(BookingHold))) == []
+
+
+ONE_EACH = """
+cal-arben:
+  blocks:
+    - {start: "2026-10-23 09:00", end: "2026-10-23 10:00"}
+    - {start: "2026-10-26 09:00", end: "2026-10-26 10:00"}
+  busy: []
+  appointments:
+    - {start: "2026-10-26 09:00", end: "2026-10-26 09:30", phone: "+355691234567"}
+    - {start: "2026-10-26 09:30", end: "2026-10-26 10:00", phone: "+355697654321", status: cancelled}
+"""
+HOLD_AND_NAME: list[Step] = [
+    [("free_times", {"day": "2026-10-23"})],
+    _final(FRIDAY),
+    [("hold_time", {"day": "2026-10-23", "time": "09:00"})],
+    _final("Nome, cognome e telefono?"),
+]
+
+
+def _one_each(base: TurnRuntime, tmp_path: Path) -> TurnRuntime:
+    path = tmp_path / "one-each.yaml"
+    path.write_text(ONE_EACH, encoding="utf-8")
+    return replace(base, scheduler=CalendarScheduler(FixtureCalendar(path)))
+
+
+async def test_the_same_phone_has_one_appointment_at_a_time(
+    base: TurnRuntime, tmp_path: Path
+) -> None:
+    # One appointment per person at a time, under the same phone too, made by reception or in
+    # another chat (Albi, 2026-10-13): the time goes back to the others.
+    runtime = _one_each(base, tmp_path)
+    phone = {"name": "Mario Rossi", "phone": "+355 69 123 4567"}
+    script = Script(
+        [*HOLD_AND_NAME, [("prepare_booking", phone)], _final("Ha già un appuntamento.")]
+    )
+    chat = Chat(runtime, script)
+    for message in ("Venerdì che orari ci sono?", "alle 9", "Mario Rossi, +355 69 123 4567"):
+        await chat.say(message)
+    said = script.tool_results()[-1]
+    assert said.startswith("There is already an appointment under this phone number.")
+    assert "26" not in said  # whoever types a number may not own it: no day
+    assert "09:00" not in said  # and no time
+    assert chat.state.booking is None
+    with business_session(base.session_factory, base.pack.id) as session:
+        assert list(session.scalars(select(BookingHold))) == []
+
+
+async def test_a_cancelled_appointment_does_not_count(base: TurnRuntime, tmp_path: Path) -> None:
+    runtime = _one_each(base, tmp_path)
+    phone = {"name": "Anna Bianchi", "phone": "+355 69 765 4321"}
+    script = Script([*HOLD_AND_NAME, [("prepare_booking", phone)], _final("Riepilogo")])
+    chat = Chat(runtime, script)
+    for message in ("Venerdì che orari ci sono?", "alle 9", "Anna Bianchi, +355 69 765 4321"):
+        await chat.say(message)
+    assert script.tool_results()[-1].startswith("Riepilogo: venerdì 23 ottobre, 09:00")
+
+
+async def test_a_second_appointment_of_the_same_conversation_is_not_made(
+    base: TurnRuntime,
+) -> None:
+    script = Script(
+        [
+            *HOLD_AND_NAME,
+            [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
+            _final(SUMMARY),
+            [("confirm_booking", {})],
+            _final(BOOKED),
+            [("free_times", {})],
+            _final("Ha già un appuntamento."),
+        ]
+    )
+    chat = Chat(base, script)
+    for message in ("Venerdì che orari ci sono?", "alle 9", "Mario Rossi, +355 69 123 4567", "sì"):
+        await chat.say(message)
+    await chat.say("Vorrei prenotare un'altra seduta")
+    assert script.tool_results()[-1].startswith(
+        "The patient already has an appointment: venerdì 23 ottobre, 09:00. Book no other"
+    )
+
+
+async def test_a_clinic_that_confirms_its_appointments_gets_a_request(
+    base: TurnRuntime, calendar: FixtureCalendar
+) -> None:
+    # cal.com's "requires confirmation" (Albi, 2026-10-13): never "prenotazione confermata".
+    pack = base.pack
+    assert pack.integrations.calendar is not None
+    confirming = pack.integrations.calendar.model_copy(update={"requires_confirmation": True})
+    runtime = replace(
+        base,
+        pack=pack.model_copy(update={"integrations": Integrations(calendar=confirming)}),
+    )
+    script = Script(
+        [
+            *HOLD_AND_NAME,
+            [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
+            _final("Riepilogo"),
+            [("confirm_booking", {})],
+            _final("Fatto"),
+        ]
+    )
+    chat = Chat(runtime, script)
+    for message in ("Venerdì che orari ci sono?", "alle 9", "Mario Rossi, +355 69 123 4567"):
+        await chat.say(message)
+    summary = script.tool_results()[-1]
+    assert summary.endswith("Invio la richiesta di prenotazione? Risponda sì o no.")
+    reply = await chat.say("sì")
+    assert reply.text.startswith(
+        "Richiesta inviata: venerdì 23 ottobre, 09:00, Visita ortopedica con Dr. Arben Demo. La "
+        "reception conferma l'appuntamento"
+    )
+    assert "confermata" not in reply.text
+
+
+async def test_a_conversation_sends_ten_messages_a_minute_at_most(base: TurnRuntime) -> None:
+    # Limits per Instagram user (Albi, 2026-10-13): past ten messages within a minute, a short
+    # reply and no model call; a minute later, the conversation goes on.
+    script = Script([_final("Va bene.") for _ in range(11)])
+    chat = Chat(base, script)
+    for _ in range(10):
+        assert (await chat.say("Vorrei sapere una cosa")).text == "Va bene."
+    slowed = await chat.say("Vorrei sapere una cosa")
+    assert slowed.trace.rule == "rate_limit"
+    assert slowed.text == "Ho ricevuto molti messaggi in poco tempo: riprovi tra un minuto."
+    assert len(script.calls) == 10
+    chat.runtime = replace(chat.runtime, now=lambda: NOW + timedelta(seconds=61))
+    assert (await chat.say("Vorrei sapere una cosa")).text == "Va bene."
+
+
+async def test_two_conversations_share_no_memory(base: TurnRuntime) -> None:
+    # (Albi, 2026-10-13): one agent serves every conversation; a patient's words, name, phone and
+    # booking reach no other conversation's requests.
+    script = Script(
+        [
+            *HOLD_AND_NAME,
+            [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
+            _final(SUMMARY),
+            _final("Buongiorno, come posso aiutarla?"),
+        ]
+    )
+    runtime = replace(base, reception=build_reception(script.model(), base.pack.profile))
+    first = ConversationState(conversation_id="first", turns=1)
+    for message in ("Venerdì che orari ci sono?", "alle 9", "Mario Rossi, +355 69 123 4567"):
+        _, first = await handle_message(message, first, runtime)
+    assert first.booking is not None
+    other = ConversationState(conversation_id="other", turns=1)
+    _, other = await handle_message("Vorrei sapere una cosa", other, runtime)
+    seen = repr(script.calls[-1])  # everything the model got for the other conversation
+    for trace in ("Mario Rossi", "4567", "Riepilogo", "Booking under way", "Venerdì che orari"):
+        assert trace not in seen
+    assert other.booking is None
+    assert other.history[0].text == "Vorrei sapere una cosa"
+
+
+async def test_the_switch_turns_the_model_off_and_the_rules_still_answer(base: TurnRuntime) -> None:
+    # FRONTDESK_MODEL_OFF (Albi, 2026-10-13): reception's contact instead of the model.
+    script = Script([])
+    chat = Chat(replace(base, model_off=True), script)
+    reply = await chat.say("Vorrei sapere una cosa")
+    assert (reply.trace.rule, reply.outcome) == ("model_off", TurnOutcome.HANDOFF)
+    assert reply.text.endswith(base.pack.fixed_texts["it"][FixedTextKey.HANDOFF])
+    assert (await chat.say("Ho un forte dolore al petto e non respiro")).trace.rule == "emergency"
+    assert script.calls == []
+
+
+async def test_past_the_daily_cap_the_patient_gets_reception(base: TurnRuntime) -> None:
+    def capped(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        raise SpendCapReachedError("today's model spend reached the cap")
+
+    runtime = replace(base, reception=build_reception(FunctionModel(capped), base.pack.profile))
+    reply, _ = await handle_message(
+        "Vorrei sapere una cosa", ConversationState(conversation_id="c1", turns=1), runtime
+    )
+    assert (reply.trace.rule, reply.outcome) == ("spend_cap", TurnOutcome.HANDOFF)

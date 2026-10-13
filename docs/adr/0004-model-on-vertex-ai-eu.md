@@ -51,5 +51,16 @@ Vertex's eu multi-region left requests of 3.8 Flash hanging until a 504 for whol
 - **3.1 Flash-Lite as fallback.** It is on the `eu` multi-region and retires "May 7, 2027 or later". The route of 3.8 Flash names it (`fallback`).
   - The first model makes one attempt, without the meter's retries. When it fails with an error status, a timeout or a broken connection, the request goes to the fallback at once (`model_gateway/hedging.py`).
   - So do the next requests of the same turn, so that the turn does not wait out the stuck window again. The next turn tries 3.8 Flash again. The twin after 4.5 seconds stays on 3.8 Flash.
+  - A request still unanswered after 6 seconds, twin included, also goes to the fallback, and the first answer wins (Albi, 2026-10-13: in `runs/2026-10-13-agent-8`, 19 of the 36 turns over 10 seconds had waited for a 504). Slowness is no failure: the turn keeps the first model.
   - A rest of 120 seconds was measured first (`runs/2026-10-13-agent-6`). After 3 failures of 3.8 Flash in an 11-minute run, Flash-Lite answered 204 of 293 requests, and 11 cases failed on its answers, against 1 before. The time criteria passed (95.9% within 10 s, 99.5% within 20). So the rest is the turn's only.
   - The report counts the requests the fallback answered.
+
+## Amendment, 2026-10-13: guards on the model in production
+
+Albi asked for these before Instagram:
+- **A daily spend cap.** `FRONTDESK_DAILY_CAP_EUR` is priced with the routes' prices of `FRONTDESK_PRICES_FILE`, in the live runs' budget format.
+  - Each business-local day's spend is kept in Postgres (`daily_spend`, migration 0006).
+  - Past the cap no request is sent, and the patient gets reception's contact (rule `spend_cap`), until the next day.
+  - The logs carry `spend.alert` at 80% of the cap and `spend.cap_reached` at the cap, for an alert policy.
+- **A switch.** `FRONTDESK_MODEL_OFF` turns the model off: the rules still answer, and every other message gets reception's contact (rule `model_off`).
+- **Ten messages a minute per conversation at most.** Past them, a short reply and no model call (rule `rate_limit`). A conversation holds one time at a time, for 15 minutes at most (`booking/holds.py`).
