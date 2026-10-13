@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Final
 
+import phonenumbers
+from phonenumbers import NumberParseException, PhoneNumber, PhoneNumberFormat, PhoneNumberType
+
 _NAME: Final = re.compile(r"^[^\W\d_]+(?:[ '\u2019\-.]+[^\W\d_]+)*\.?$")
-_PHONE_SEPARATORS: Final = re.compile(r"[\s\-./()]")
-_PHONE: Final = re.compile(r"^\+?\d{8,15}$")
 _PHRASES: Final[dict[str, dict[str, str]]] = {
     "ask_name": {
         "sq": "Mund të më shkruani emrin dhe mbiemrin tuaj?",
@@ -86,15 +89,52 @@ def valid_name(message: str) -> str | None:
     return name if 2 <= len(name) <= 60 and letters >= 2 and _NAME.match(name) else None
 
 
-def valid_phone(message: str, country_code: str = "") -> str | None:
-    """A phone number in international form, "+" and 8 to 15 digits, separators removed. "00"
-    stands for "+", and a national number ("069…") takes the clinic's country code."""
-    phone = _PHONE_SEPARATORS.sub("", message.strip())
-    if phone.startswith("00"):
-        phone = "+" + phone[2:]
-    elif phone.startswith("0") and country_code:
-        phone = country_code + phone[1:]
-    return phone if phone.startswith("+") and _PHONE.match(phone) else None
+@dataclass(frozen=True)
+class PhoneReading:
+    """A phone number as read: the number when one country fits it, else the numbers it may be."""
+
+    number: str | None  # E.164, "+393331234567"
+    options: tuple[str, ...] = ()  # each shown with its prefix, when more than one country fits
+
+
+_PHONE_TEXT: Final = re.compile(r"^[\d\s()+\-./]+$")
+_MOBILE: Final = frozenset({PhoneNumberType.MOBILE, PhoneNumberType.FIXED_LINE_OR_MOBILE})
+
+
+def read_phone(message: str, regions: Sequence[str]) -> PhoneReading:
+    """The phone number the patient wrote (Albi, 2026-10-14: recognized even without its prefix).
+
+    With "+" or "00" it is read as it is. Without, for each of `regions` (two-letter country
+    codes, the likeliest first: the one the patient named, their language's, the clinic's): a
+    number valid in one of them is that one; valid in several, a mobile beats a landline, since a
+    patient gives the phone they read messages on; still several, the patient is asked. Google's
+    libphonenumber knows each country's numbers.
+    """
+    text = message.strip()
+    if not _PHONE_TEXT.match(text):
+        return PhoneReading(None)
+    if text.startswith("00"):
+        text = "+" + text[2:]
+    found: dict[str, PhoneNumber] = {}
+    for region in [None] if text.lstrip("(").startswith("+") else list(regions):
+        try:
+            number = phonenumbers.parse(text, region)
+        except NumberParseException:
+            continue
+        if phonenumbers.is_valid_number(number):
+            found.setdefault(phonenumbers.format_number(number, PhoneNumberFormat.E164), number)
+    mobiles = {key: n for key, n in found.items() if phonenumbers.number_type(n) in _MOBILE}
+    chosen = mobiles or found
+    if len(chosen) == 1:
+        return PhoneReading(next(iter(chosen)))
+    return PhoneReading(None, tuple(format_phone(key) for key in chosen))
+
+
+def format_phone(number: str) -> str:
+    """An E.164 number as people read it: "+39 333 123 4567"."""
+    return phonenumbers.format_number(
+        phonenumbers.parse(number, None), PhoneNumberFormat.INTERNATIONAL
+    )
 
 
 # A yes in a sentence ("sì, confermo grazie"), for the reception agent's confirm_booking: one of

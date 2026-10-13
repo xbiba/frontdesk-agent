@@ -8,7 +8,6 @@ other times (frontdesk.conversation.reception_booking); never a booking that is 
 
 from __future__ import annotations
 
-import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -159,9 +158,3 @@ def _service(context: BookingContext, service_id: str, language: str | None = No
 
 def _duration(context: BookingContext, service_id: str) -> int:
     return next(item.duration_minutes for item in context.pack.services if item.id == service_id)
-
-
-def country_code(pack: BusinessPack) -> str:
-    """The clinic's own country code ("+355" from "+355 69 443 9339"), for a national number."""
-    found = re.match(r"\+\d{1,3}(?=[\s\-.(]|$)", pack.location.phone.strip())
-    return found.group(0) if found else ""

@@ -6,9 +6,10 @@ from frontdesk.booking.flow import (
     _PHRASES,
     affirms,
     entry_description,
+    format_phone,
     phrase,
+    read_phone,
     valid_name,
-    valid_phone,
 )
 
 
@@ -32,20 +33,36 @@ def test_a_name_is_letters_with_spaces_or_marks_between(message: str, name: str 
 
 
 @pytest.mark.parametrize(
-    ("message", "phone"),
+    ("message", "regions", "number"),
     [
-        ("+355 69 123 4567", "+355691234567"),
-        ("069-123-4567", "+355691234567"),  # a national number takes the clinic's country code
-        ("0039 333 123 4567", "+393331234567"),
-        ("(+39) 333.123.4567", "+393331234567"),
-        ("3331234567", None),  # neither a + nor a national 0
-        ("+1234567", None),  # too short
-        ("+1234567890123456", None),  # too long
-        ("il mio numero è 0691234567", None),
+        ("+355 69 123 4567", ("AL",), "+355691234567"),
+        ("069-123-4567", ("AL", "IT"), "+355691234567"),  # a mobile in Albania, a landline in Rome
+        ("69 123 4567", ("AL", "IT"), "+355691234567"),  # neither the 0 nor a prefix
+        ("0039 333 123 4567", ("AL",), "+393331234567"),
+        ("(+39) 333.123.4567", ("AL",), "+393331234567"),
+        ("3331234567", ("AL", "IT"), "+393331234567"),  # an Italian mobile without its prefix
+        ("333 1234567", ("IT", "AL"), "+393331234567"),
+        ("+1234567", ("AL", "IT"), None),  # too short
+        ("+1234567890123456", ("AL", "IT"), None),  # too long
+        ("12345", ("AL", "IT"), None),
+        ("il mio numero è 0691234567", ("AL", "IT"), None),  # the tool gets the number alone
     ],
 )
-def test_a_phone_is_international_with_8_to_15_digits(message: str, phone: str | None) -> None:
-    assert valid_phone(message, "+355") == phone
+def test_a_phone_is_read_for_the_countries_the_conversation_suggests(
+    message: str, regions: tuple[str, ...], number: str | None
+) -> None:
+    # Albi, 2026-10-14: a number without its prefix is recognized, not refused.
+    assert read_phone(message, regions).number == number
+
+
+def test_a_number_two_countries_fit_is_asked_about() -> None:
+    # A landline in Albania and one in Milan alike: the patient says which.
+    reading = read_phone("02 1234567", ("AL", "IT"))
+    assert (reading.number, reading.options) == (None, ("+355 212 34567", "+39 02 123 4567"))
+
+
+def test_a_phone_is_shown_with_its_prefix_and_its_spaces() -> None:
+    assert format_phone("+393331234567") == "+39 333 123 4567"
 
 
 @pytest.mark.parametrize(
