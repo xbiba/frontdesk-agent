@@ -1,0 +1,144 @@
+"""The webhook (M4 design §4 steps 1-3): Meta's check, the signature, the size, the switch, and a
+task for each conversation with work."""
+
+import hashlib
+import hmac
+import json
+import logging
+
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+
+from frontdesk.api.app import create_webhook_app
+from frontdesk.api.webhook import MAX_BODY_BYTES
+from frontdesk.channels.inbox import BURST, Inbox, conversation_key
+from frontdesk.channels.instagram import InstagramWebhook
+from frontdesk.channels.wiring import Ingress
+from frontdesk.db.engine import make_engine, make_session_factory
+from frontdesk.settings import Settings
+from tests.channels.fakes import NOW, RecordingDispatcher
+
+pytestmark = pytest.mark.db
+SECRET = "app-secret"
+VERIFY = "verify-me"
+ACCOUNT = "17841400000000001"
+ALICE = "1111111111111111"
+CODE = "mcu-prova-1234"
+KEY = conversation_key("demo-clinic", "instagram", ALICE)
+PATH = "/webhooks/instagram"
+
+
+def _app(
+    app_url: str, *, off: bool = False, dispatcher: RecordingDispatcher | None = None
+) -> tuple[TestClient, RecordingDispatcher, Inbox]:
+    inbox = Inbox(
+        make_session_factory(make_engine(app_url)),
+        business_id="demo-clinic",
+        channel="instagram",
+        account_id=ACCOUNT,
+        testers_only=True,
+        pairing_code=CODE,
+        now=lambda: NOW,
+    )
+    sink = dispatcher or RecordingDispatcher()
+    ingress = Ingress(
+        webhook=InstagramWebhook(SECRET), inbox=inbox, dispatcher=sink, verify_token=VERIFY, off=off
+    )
+    app = create_webhook_app(Settings(), ingress=ingress, engine=create_engine(app_url))
+    return TestClient(app), sink, inbox
+
+
+def _delivery(text: str) -> bytes:
+    item = {
+        "sender": {"id": ALICE},
+        "recipient": {"id": ACCOUNT},
+        "timestamp": 1760430000000,
+        "message": {"mid": "m_1", "text": text},
+    }
+    entry = {"id": ACCOUNT, "time": 1760430000000, "messaging": [item]}
+    return json.dumps({"object": "instagram", "entry": [entry]}).encode()
+
+
+def _signature(body: bytes) -> str:
+    return "sha256=" + hmac.new(SECRET.encode(), body, hashlib.sha256).hexdigest()
+
+
+def _post(client: TestClient, body: bytes, signature: str | None) -> httpx.Response:
+    headers = {"content-type": "application/json"}
+    if signature is not None:
+        headers["x-hub-signature-256"] = signature
+    return client.post(PATH, content=body, headers=headers)
+
+
+def test_meta_s_check_gets_the_challenge_back(app_url: str) -> None:
+    client, _, _ = _app(app_url)
+    params = {"hub.mode": "subscribe", "hub.verify_token": VERIFY, "hub.challenge": "1158201444"}
+    response = client.get(PATH, params=params)
+    assert response.status_code == 200
+    assert response.text == "1158201444"
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"hub.mode": "subscribe", "hub.verify_token": "wrong", "hub.challenge": "1"},
+        {"hub.mode": "unsubscribe", "hub.verify_token": VERIFY, "hub.challenge": "1"},
+        {},
+    ],
+)
+def test_a_check_without_the_verify_token_is_refused(app_url: str, params: dict[str, str]) -> None:
+    client, _, _ = _app(app_url)
+    assert client.get(PATH, params=params).status_code == 403
+
+
+def test_a_signed_delivery_is_stored_and_its_conversation_dispatched(app_url: str) -> None:
+    client, sink, inbox = _app(app_url)
+    body = _delivery(CODE)
+    assert _post(client, body, _signature(body)).status_code == 200
+    assert inbox.count_testers() == 1
+    assert sink.calls == [(KEY, BURST)]
+
+
+def test_an_unsigned_delivery_is_refused_and_stores_nothing(app_url: str) -> None:
+    client, sink, inbox = _app(app_url)
+    body = _delivery(CODE)
+    assert _post(client, body, None).status_code == 403
+    assert _post(client, body, "sha256=" + "0" * 64).status_code == 403
+    assert inbox.count_testers() == 0
+    assert sink.calls == []
+
+
+def test_a_delivery_too_large_is_refused(app_url: str) -> None:
+    client, _, _ = _app(app_url)
+    body = b"x" * (MAX_BODY_BYTES + 1)
+    assert _post(client, body, _signature(body)).status_code == 413
+
+
+def test_the_switch_drops_everything(app_url: str) -> None:
+    client, sink, inbox = _app(app_url, off=True)
+    body = _delivery(CODE)
+    assert _post(client, body, _signature(body)).status_code == 200
+    assert inbox.count_testers() == 0
+    assert sink.calls == []
+
+
+def test_a_signed_delivery_that_cannot_be_read_is_answered_and_alerted(
+    app_url: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    client, sink, _ = _app(app_url)
+    with caplog.at_level(logging.INFO, logger="frontdesk.api.webhook"):
+        assert _post(client, b"not json", _signature(b"not json")).status_code == 200
+    assert sink.calls == []
+    assert any(
+        r.levelno == logging.ERROR and r.msg == "channel.unreadable_delivery"
+        for r in caplog.records
+    )
+
+
+def test_a_task_that_cannot_be_queued_makes_meta_deliver_again(app_url: str) -> None:
+    client, _, inbox = _app(app_url, dispatcher=RecordingDispatcher(fail=True))
+    body = _delivery(CODE)
+    assert _post(client, body, _signature(body)).status_code == 500
+    assert inbox.count_testers() == 1  # stored: Meta's next delivery or the sweep finds it
