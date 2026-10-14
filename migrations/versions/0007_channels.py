@@ -39,6 +39,7 @@ def upgrade() -> None:
         sa.Column("paused_until", sa.DateTime(timezone=True), nullable=True),  # the staff's
         sa.Column("slowed_at", sa.DateTime(timezone=True), nullable=True),  # the last slow-down
         sa.Column("lease_until", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("lease_owner", UUID(as_uuid=True), nullable=True),  # the worker holding it
         sa.UniqueConstraint(
             "business_id", "channel", "user_id", name="uq_channel_conversations_user"
         ),

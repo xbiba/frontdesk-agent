@@ -61,8 +61,13 @@ class Outcome(StrEnum):
     FAILED = "failed"  # three turns failed: the handoff text went out
 
 
+class _LeaseLostError(Exception):
+    """Another worker took the conversation while this one ran its turn: it keeps nothing."""
+
+
 @dataclass(frozen=True)
 class _Conversation:
+    token: uuid.UUID  # this worker's hold on the lease
     user_id: str
     state: dict[str, Any] | None
     active_at: datetime | None
@@ -83,6 +88,7 @@ def _mark(session: Session, pending: Sequence[_Pending], status: InStatus, now: 
     session.execute(
         update(ChannelMessage)
         .where(ChannelMessage.id.in_([message.id for message in pending]))
+        .where(ChannelMessage.status == InStatus.PENDING)
         .values(status=status, text=None, updated_at=now)
     )
 
@@ -116,8 +122,10 @@ class Runner:
         try:
             outcome = await self._run(conversation_id, claimed, self._now())
             await self._deliver(conversation_id, claimed.user_id)
+        except _LeaseLostError:
+            outcome = Outcome.BUSY  # another worker holds the conversation now
         finally:
-            self._release(conversation_id)
+            self._release(conversation_id, claimed.token)
         log_event(
             logger,
             "channel.processed",
@@ -131,6 +139,7 @@ class Runner:
         return business_session(self._factory, self._pack.id)
 
     def _claim(self, key: str, now: datetime) -> _Conversation | Outcome:
+        token = uuid.uuid4()
         with self._session() as session:
             row = session.execute(
                 update(ChannelConversation)
@@ -142,7 +151,7 @@ class Runner:
                         ChannelConversation.lease_until < now,
                     )
                 )
-                .values(lease_until=now + LEASE)
+                .values(lease_until=now + LEASE, lease_owner=token)
                 .returning(
                     ChannelConversation.user_id,
                     ChannelConversation.state,
@@ -152,18 +161,32 @@ class Runner:
                 )
             ).first()
             if row is not None:
-                return _Conversation(*row)
+                return _Conversation(token, *row)
             exists = session.get(ChannelConversation, (self._pack.id, key)) is not None
         return Outcome.BUSY if exists else Outcome.IDLE
 
-    def _release(self, key: str) -> None:
+    def _release(self, key: str, token: uuid.UUID) -> None:
+        """Give the lease back, if it is still this worker's: never another worker's."""
         with self._session() as session:
             session.execute(
                 update(ChannelConversation)
                 .where(ChannelConversation.business_id == self._pack.id)
                 .where(ChannelConversation.conversation_id == key)
-                .values(lease_until=None)
+                .where(ChannelConversation.lease_owner == token)
+                .values(lease_until=None, lease_owner=None)
             )
+
+    def _held(self, session: Session, key: str, token: uuid.UUID) -> bool:
+        """Whether this worker still holds the conversation; holding it renews the lease."""
+        held = session.execute(
+            update(ChannelConversation)
+            .where(ChannelConversation.business_id == self._pack.id)
+            .where(ChannelConversation.conversation_id == key)
+            .where(ChannelConversation.lease_owner == token)
+            .values(lease_until=self._now() + LEASE)
+            .returning(ChannelConversation.conversation_id)
+        ).first()
+        return held is not None
 
     async def _run(self, key: str, conversation: _Conversation, now: datetime) -> Outcome:
         pending = self._pending(key)
@@ -202,7 +225,7 @@ class Runner:
                 count=MAX_REPLIES_A_DAY,
             )
             replies = []
-        self._finish(key, pending, following, replies, slowed, now)
+        self._finish(key, conversation.token, pending, following, replies, slowed, now)
         return Outcome.DONE
 
     def _pending(self, key: str) -> list[_Pending]:
@@ -268,6 +291,7 @@ class Runner:
     def _finish(
         self,
         key: str,
+        token: uuid.UUID,
         pending: Sequence[_Pending],
         state: ConversationState,
         replies: Sequence[tuple[str, str]],
@@ -277,6 +301,8 @@ class Runner:
         size = self._sender.max_message_bytes
         parts = [(kind, part) for kind, text in replies for part in split_message(text, size)]
         with self._session() as session:
+            if not self._held(session, key, token):
+                raise _LeaseLostError
             session.execute(
                 update(ChannelConversation)
                 .where(ChannelConversation.business_id == self._pack.id)
@@ -304,6 +330,8 @@ class Runner:
         text = self._fixed(self._state(key, conversation, now), FixedTextKey.HANDOFF)
         parts = [("fixed", part) for part in split_message(text, self._sender.max_message_bytes)]
         with self._session() as session:
+            if not self._held(session, key, conversation.token):
+                raise _LeaseLostError
             _mark(session, pending, InStatus.FAILED, now)
             queue_reply(
                 session,
@@ -327,7 +355,8 @@ class Runner:
             if blocked is not None or text is None:
                 self._drop_queued(key, blocked or "expired")
                 return
-            self._set(message_id, status=OutStatus.SENDING)
+            if not self._take(message_id):
+                continue  # another worker took this reply: it is sent once (D9)
             outcome = await self._sender.send(user_id, text)
             self._set(
                 message_id,
@@ -345,6 +374,18 @@ class Runner:
                 )
                 self._drop_queued(key, "previous_failed")
                 return
+
+    def _take(self, message_id: uuid.UUID) -> bool:
+        """The reply goes to this worker alone: from queued to sending, once."""
+        with self._session() as session:
+            taken = session.execute(
+                update(ChannelMessage)
+                .where(ChannelMessage.id == message_id)
+                .where(ChannelMessage.status == OutStatus.QUEUED)
+                .values(status=OutStatus.SENDING, updated_at=self._now())
+                .returning(ChannelMessage.id)
+            ).first()
+        return taken is not None
 
     def _queued(self, key: str) -> list[tuple[uuid.UUID, str | None]]:
         with self._session() as session:

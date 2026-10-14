@@ -2,13 +2,21 @@
 window, the staff's pause, replies sent at most once, and the limits."""
 
 import logging
+import uuid
 from datetime import timedelta
 
 import pytest
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
-from frontdesk.channels.inbox import Inbox, InStatus, OutStatus, conversation_key, queue_reply
+from frontdesk.channels.inbox import (
+    TESTER_WELCOME,
+    Inbox,
+    InStatus,
+    OutStatus,
+    conversation_key,
+    queue_reply,
+)
 from frontdesk.channels.messages import Inbound, InboundKind, SendOutcome, SendStatus
 from frontdesk.channels.runner import MAX_REPLIES_A_DAY, Outcome, Runner, Turn
 from frontdesk.conversation.state import ConversationState
@@ -420,3 +428,48 @@ async def test_at_most_sixty_replies_a_day(
         assert await runner.process(KEY) is Outcome.DONE
     assert _replies(sender) == []
     assert any(r.levelno == logging.ERROR and r.msg == "channel.reply_cap" for r in caplog.records)
+
+
+async def test_a_worker_that_lost_its_lease_queues_and_sends_nothing(
+    inbox: Inbox, factory: sessionmaker[Session], clock: Clock, clinic_pack: BusinessPack
+) -> None:
+    other = uuid.uuid4()
+    turn = FakeTurn()
+
+    async def overrun(text: str, state: ConversationState) -> tuple[TurnResult, ConversationState]:
+        # The turn outlived the lease, and another worker took the conversation meanwhile.
+        with business_session(factory, BUSINESS) as session:
+            session.execute(
+                update(ChannelConversation).values(
+                    lease_owner=other, lease_until=NOW + timedelta(minutes=5)
+                )
+            )
+        return await turn(text, state)
+
+    sender = FakeSender()
+    runner = _runner(factory, clock, clinic_pack, sender, overrun)
+    _say(inbox, "m1", "Ciao")
+    clock.advance(seconds=3)
+    assert await runner.process(KEY) is Outcome.BUSY
+    assert sender.sent == []
+    assert [m.kind for m in _messages(factory, "out")] == ["fixed"]  # the welcome only
+    (question,) = [m for m in _messages(factory, "in") if m.external_id == "m1"]
+    assert question.status == InStatus.PENDING  # left to the worker that holds the lease
+    assert _conversation(factory).lease_owner == other  # whose lease stays
+
+
+async def test_a_reply_listed_by_two_workers_is_sent_once(
+    inbox: Inbox,
+    factory: sessionmaker[Session],
+    clock: Clock,
+    clinic_pack: BusinessPack,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sender = FakeSender()
+    first = _runner(factory, clock, clinic_pack, sender, FakeTurn())
+    second = _runner(factory, clock, clinic_pack, sender, FakeTurn())
+    listed = first._queued(KEY)  # what a second worker saw before the first one sent
+    await first._deliver(KEY, ALICE)
+    monkeypatch.setattr(second, "_queued", lambda key: listed)
+    await second._deliver(KEY, ALICE)
+    assert sender.sent == [(ALICE, TESTER_WELCOME)]
