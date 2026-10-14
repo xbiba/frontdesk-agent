@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 
 def make_engine(url: str) -> Engine:
-    return create_engine(url, pool_pre_ping=True)
+    # A database error never carries its statement's values: they can be a person's message or
+    # their Instagram ID (M4 review).
+    return create_engine(url, pool_pre_ping=True, hide_parameters=True)
 
 
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:

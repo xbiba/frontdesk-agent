@@ -301,3 +301,14 @@ def test_testers_can_be_counted_and_cleared(inbox: Inbox) -> None:
     assert inbox.count_testers() == 1
     assert inbox.clear_testers() == 1
     assert inbox.count_testers() == 0
+
+
+@pytest.mark.db
+def test_the_echo_of_an_uncertain_send_is_the_bots(
+    inbox: Inbox, factory: sessionmaker[Session]
+) -> None:
+    _paired(inbox)
+    # The Send API timed out, but Meta delivered the message: its echo brings an ID never seen.
+    _sent(factory, "Siamo aperti sabato.", status=OutStatus.UNCERTAIN, external_id=None, at=NOW)
+    inbox.accept([_echo("Siamo aperti sabato.", "late-mid")])
+    assert _paused_until(factory) is None

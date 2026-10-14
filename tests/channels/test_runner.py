@@ -473,3 +473,24 @@ async def test_a_reply_listed_by_two_workers_is_sent_once(
     monkeypatch.setattr(second, "_queued", lambda key: listed)
     await second._deliver(KEY, ALICE)
     assert sender.sent == [(ALICE, TESTER_WELCOME)]
+
+
+async def test_a_staff_reply_during_the_turn_keeps_the_pause(
+    inbox: Inbox, factory: sessionmaker[Session], clock: Clock, clinic_pack: BusinessPack
+) -> None:
+    turn = FakeTurn()
+
+    async def staff_meanwhile(
+        text: str, state: ConversationState
+    ) -> tuple[TurnResult, ConversationState]:
+        _staff(inbox)  # the staff answers in the thread while the model composes
+        return await turn(text, state)
+
+    sender = FakeSender()
+    runner = _runner(factory, clock, clinic_pack, sender, staff_meanwhile)
+    await _welcomed(runner)
+    _say(inbox, "m1", "Ciao")
+    clock.advance(seconds=3)
+    await runner.process(KEY)
+    assert _replies(sender) == []
+    assert _conversation(factory).paused_until is not None

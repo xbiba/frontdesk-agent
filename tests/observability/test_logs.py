@@ -270,3 +270,42 @@ def test_log_alert_writes_an_error_with_its_fields(caplog: pytest.LogCaptureFixt
 def test_the_business_account_id_may_be_logged() -> None:
     line = json.loads(_format({"account_id": "17841400000000001"}))
     assert line["account_id"] == "17841400000000001"
+
+
+UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
+
+
+@pytest.fixture
+def restore_uvicorn_loggers() -> Iterator[None]:
+    """uvicorn's loggers are process-wide: put back what a test changed."""
+    saved = [
+        (logger, list(logger.handlers), logger.propagate, logger.disabled)
+        for logger in map(logging.getLogger, UVICORN_LOGGERS)
+    ]
+    yield
+    for logger, handlers, propagate, disabled in saved:
+        logger.handlers[:] = handlers
+        logger.propagate = propagate
+        logger.disabled = disabled
+
+
+@pytest.mark.usefixtures("restore_root_logger", "restore_uvicorn_loggers")
+def test_uvicorn_s_own_lines_go_through_the_metadata_only_formatter(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    for name in UVICORN_LOGGERS:  # as uvicorn sets itself up before it calls the app factory
+        logging.getLogger(name).handlers[:] = [logging.StreamHandler(sys.stderr)]
+        logging.getLogger(name).propagate = False
+    configure_logging("INFO")
+    try:
+        raise ValueError(SENTINEL)
+    except ValueError:
+        logging.getLogger("uvicorn.error").exception("Exception in ASGI application")
+    query = f"/webhooks/instagram?hub.verify_token={SENTINEL}"
+    logging.getLogger("uvicorn.access").info(
+        '%s - "%s %s HTTP/%s" %d', "10.0.0.1", "GET", query, "1.1", 200
+    )
+    captured = capsys.readouterr()
+    assert SENTINEL not in captured.out + captured.err
+    (line,) = captured.out.splitlines()
+    assert json.loads(line)["exception_type"] == "ValueError"

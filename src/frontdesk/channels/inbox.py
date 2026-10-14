@@ -397,7 +397,10 @@ class Inbox:
             .where(ChannelMessage.business_id == self._business)
             .where(ChannelMessage.conversation_id == key)
             .where(ChannelMessage.direction == OUT)
-            .where(ChannelMessage.status.in_([OutStatus.SENDING, OutStatus.SENT]))
+            # An uncertain send may have been delivered: its echo is the bot's too.
+            .where(
+                ChannelMessage.status.in_([OutStatus.SENDING, OutStatus.SENT, OutStatus.UNCERTAIN])
+            )
             .where(ChannelMessage.updated_at >= now - ECHO_WINDOW)
         ).all()
         echoed = _normal(event.text)

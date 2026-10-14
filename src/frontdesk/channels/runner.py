@@ -19,7 +19,7 @@ from enum import StrEnum
 from typing import Any, Final
 
 from pydantic import ValidationError
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.channels.inbox import (
@@ -310,7 +310,12 @@ class Runner:
                 .values(
                     state=state.model_dump(mode="json"),
                     active_at=now,
-                    paused_until=None,
+                    # A pause that has ended goes; one the staff began during this turn stays, and
+                    # the replies are then dropped before sending (D6).
+                    paused_until=case(
+                        (ChannelConversation.paused_until > now, ChannelConversation.paused_until),
+                        else_=None,
+                    ),
                     slowed_at=slowed,
                 )
             )

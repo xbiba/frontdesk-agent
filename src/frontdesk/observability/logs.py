@@ -143,6 +143,17 @@ def configure_logging(level: str = "INFO") -> None:
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level)
+    # uvicorn sets up handlers of its own before it calls the app factory, and they print exception
+    # messages and query strings (M4 review). Its server lines go through the formatter above; its
+    # access log stays off, since Cloud Run logs every request itself.
+    for name in ("uvicorn", "uvicorn.error"):
+        server = logging.getLogger(name)
+        server.handlers[:] = []
+        server.propagate = True
+    access = logging.getLogger("uvicorn.access")
+    access.handlers[:] = []
+    access.propagate = False
+    access.disabled = True
 
 
 def log_event(logger: logging.Logger, event: str, **fields: Any) -> None:
