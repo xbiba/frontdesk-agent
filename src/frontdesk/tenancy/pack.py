@@ -112,6 +112,21 @@ class Integrations(Frozen):
     calendar: CalendarIntegration | None = None
 
 
+class ChannelPolicy(Frozen):
+    """What one channel lets the business do (ADR-0010). It can only switch features off: a turn
+    has the business's features AND the channel's."""
+
+    chat_booking: bool = True
+    order_status: bool = True
+    orientation: bool = True
+
+
+class Channels(Frozen):
+    """The channels the business answers on, each with its policy (M4: Instagram)."""
+
+    instagram: ChannelPolicy | None = None
+
+
 class OpeningHours(Frozen):
     days: str = Field(pattern=_DAYS)
     opens: str = Field(pattern=_TIME)
@@ -221,6 +236,7 @@ class BusinessPack(Frozen):
     timezone: TimeZoneName
     features: Features = Features()
     integrations: Integrations = Integrations()
+    channels: Channels = Channels()
     fixed_texts: dict[Language, dict[FixedTextKey, str]]
     location: Location
     services: list[Service] = Field(default_factory=list)
