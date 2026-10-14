@@ -8,6 +8,9 @@ and the conversation it belongs to, until a turn reads it.
 - an echo of the staff's pauses the conversation until 24 hours pass without messages (D6);
 - in testers mode, the message of someone who is not a tester is dropped before anything is
   stored, unless it is the pairing code (D4).
+
+`sweep` and `purge` run on Cloud Scheduler: the first gives back lost work, the second keeps what
+the design keeps (D8).
 """
 
 from __future__ import annotations
@@ -23,14 +26,14 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Final
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.channels.messages import Inbound, InboundKind
 from frontdesk.db.engine import business_session
 from frontdesk.db.models import ChannelConversation, ChannelMessage, ChannelTester
-from frontdesk.observability.logs import log_event
+from frontdesk.observability.logs import log_alert, log_event
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,10 @@ BURST: Final = timedelta(seconds=3)  # D12: a turn starts 3 seconds after the la
 PAUSE: Final = timedelta(hours=24)  # D6: the staff keeps the thread until 24 hours of silence
 ECHO_WINDOW: Final = timedelta(minutes=2)  # D6: an echo can come before the send returns
 FORGET_STATE: Final = timedelta(days=7)  # D8: after a week of silence the conversation starts over
+STALE: Final = timedelta(minutes=2)  # work older than this lost its task, a send its answer
+KEEP_IDS: Final = timedelta(days=7)  # D8: Meta retries for 36 hours
+KEEP_SENT_TEXT: Final = timedelta(days=1)  # D8: the text of a reply, for its echo
+FORGET_CONVERSATION: Final = timedelta(days=30)  # D8
 TESTER_WELCOME: Final = (
     "Modalità di prova attiva: l'assistente risponde a questo account. "
     "Test mode on: the assistant answers this account."
@@ -112,6 +119,18 @@ class Accepted:
     """The conversations a delivery gave work to: the worker is called for each."""
 
     work: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Swept:
+    work: tuple[str, ...]  # conversations to give back to the worker
+    uncertain: int  # sends that never came back
+
+
+@dataclass(frozen=True)
+class Purged:
+    messages: int
+    conversations: int
 
 
 class Inbox:
@@ -187,6 +206,103 @@ class Inbox:
                 .returning(ChannelTester.user_id)
             ).all()
         return len(removed)
+
+    def sweep(self) -> Swept:
+        """Every 10 minutes (ADR-0011): a send that never came back becomes uncertain and is never
+        tried again (D9); a conversation whose work lost its task is given back."""
+        now = self._now()
+        with business_session(self._factory, self._business) as session:
+            mine = (
+                ChannelMessage.business_id == self._business,
+                ChannelMessage.channel == self._channel,
+            )
+            stuck = session.scalars(
+                update(ChannelMessage)
+                .where(*mine, ChannelMessage.direction == OUT)
+                .where(ChannelMessage.status == OutStatus.SENDING)
+                .where(ChannelMessage.updated_at < now - STALE)
+                .values(status=OutStatus.UNCERTAIN, reason="no_answer", updated_at=now)
+                .returning(ChannelMessage.conversation_id)
+            ).all()
+            waiting = session.scalars(
+                select(ChannelMessage.conversation_id)
+                .distinct()
+                .where(*mine, ChannelMessage.created_at < now - STALE)
+                .where(
+                    or_(
+                        and_(
+                            ChannelMessage.direction == IN,
+                            ChannelMessage.status == InStatus.PENDING,
+                        ),
+                        and_(
+                            ChannelMessage.direction == OUT,
+                            ChannelMessage.status == OutStatus.QUEUED,
+                        ),
+                    )
+                )
+            ).all()
+        for key in stuck:
+            log_alert(
+                logger,
+                "channel.send_uncertain",
+                channel=self._channel,
+                conversation_id=key,
+                reason="no_answer",
+            )
+        return Swept(work=tuple(sorted(set(waiting))), uncertain=len(stuck))
+
+    def purge(self) -> Purged:
+        """Every night: what the design keeps, and no longer (D8)."""
+        now = self._now()
+        day_old = now - KEEP_SENT_TEXT
+        with business_session(self._factory, self._business) as session:
+            mine = (
+                ChannelMessage.business_id == self._business,
+                ChannelMessage.channel == self._channel,
+            )
+            session.execute(
+                update(ChannelMessage)
+                .where(*mine, ChannelMessage.direction == OUT)
+                .where(ChannelMessage.status == OutStatus.QUEUED)
+                .where(ChannelMessage.created_at < day_old)
+                .values(status=OutStatus.DROPPED, reason="expired", updated_at=now)
+            )
+            session.execute(
+                update(ChannelMessage)
+                .where(*mine, ChannelMessage.direction == OUT)
+                .where(ChannelMessage.text.is_not(None))
+                .where(ChannelMessage.created_at < day_old)
+                .values(text=None)
+            )
+            session.execute(
+                update(ChannelMessage)
+                .where(*mine, ChannelMessage.direction == IN)
+                .where(ChannelMessage.status == InStatus.PENDING)
+                .where(ChannelMessage.created_at < day_old)
+                .values(status=InStatus.FAILED, reason="expired", text=None, updated_at=now)
+            )
+            messages = session.scalars(
+                delete(ChannelMessage)
+                .where(*mine, ChannelMessage.created_at < now - KEEP_IDS)
+                .returning(ChannelMessage.id)
+            ).all()
+            talks = (
+                ChannelConversation.business_id == self._business,
+                ChannelConversation.channel == self._channel,
+            )
+            session.execute(
+                update(ChannelConversation)
+                .where(*talks, ChannelConversation.state.is_not(None))
+                .where(ChannelConversation.last_message_at < now - FORGET_STATE)
+                .values(state=None)
+            )
+            gone = session.scalars(
+                delete(ChannelConversation)
+                .where(*talks, ChannelConversation.last_message_at < now - FORGET_CONVERSATION)
+                .returning(ChannelConversation.conversation_id)
+            ).all()
+        log_event(logger, "channel.purged", channel=self._channel, count=len(messages) + len(gone))
+        return Purged(messages=len(messages), conversations=len(gone))
 
     def _is_tester(self, session: Session, user_id: str) -> bool:
         return session.get(ChannelTester, (self._business, self._channel, user_id)) is not None
