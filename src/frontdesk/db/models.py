@@ -1,4 +1,4 @@
-"""ORM models. Every business table has business_id and an RLS policy (migrations 0002-0005)."""
+"""ORM models. Every business table has business_id and an RLS policy (migrations 0002-0007)."""
 
 from __future__ import annotations
 
@@ -138,3 +138,55 @@ class DailySpend(Base):
     day: Mapped[date] = mapped_column(Date, primary_key=True)
     usd: Mapped[Decimal] = mapped_column(Numeric(12, 6))
     alerted: Mapped[int] = mapped_column(SmallInteger, default=0)
+
+
+class ChannelConversation(Base):
+    """One person's thread on a channel (migration 0007): the engine's state between turns, the
+    staff's pause and the lease that runs one turn at a time."""
+
+    __tablename__ = "channel_conversations"
+
+    business_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    channel: Mapped[str] = mapped_column(String(16))
+    user_id: Mapped[str] = mapped_column(String(64))
+    # SQL NULL, not JSON null, when there is no state: "IS NULL" must find it.
+    state: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
+    last_message_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paused_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    slowed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ChannelMessage(Base):
+    """A message in (from the person) or out (a reply), recorded before anything is done with it
+    (migration 0007)."""
+
+    __tablename__ = "channel_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    business_id: Mapped[str] = mapped_column(String(64))
+    conversation_id: Mapped[str] = mapped_column(String(64))
+    channel: Mapped[str] = mapped_column(String(16))
+    direction: Mapped[str] = mapped_column(String(8))
+    kind: Mapped[str] = mapped_column(String(16))
+    external_id: Mapped[str | None] = mapped_column(String(512))
+    text: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16))
+    attempts: Mapped[int] = mapped_column(SmallInteger, default=0)
+    reason: Mapped[str | None] = mapped_column(String(64))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ChannelTester(Base):
+    """Someone the channel answers in testers mode (M4 design D4)."""
+
+    __tablename__ = "channel_testers"
+
+    business_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    channel: Mapped[str] = mapped_column(String(16), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
