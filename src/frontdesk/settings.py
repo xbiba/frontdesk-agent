@@ -48,8 +48,6 @@ class Settings(BaseSettings):
     migration_database_url: str = (
         "postgresql+psycopg://frontdesk:frontdesk@localhost:5432/frontdesk"
     )
-    temporal_address: str = "localhost:7233"
-    temporal_namespace: str = "default"
     model_route: str = "offline-demo"
     gcp_project: str | None = None
     # The reception agent leads the conversation on live routes; offline stays the pipeline.

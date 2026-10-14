@@ -4,7 +4,7 @@ Each record uses the same headings: Status, Context, Options considered, Decisio
 
 | ADR | Decision | Status |
 |---|---|---|
-| [0001](0001-one-temporal-workflow-per-conversation.md) | One Temporal workflow per conversation | Accepted |
+| [0001](0001-one-temporal-workflow-per-conversation.md) | One Temporal workflow per conversation | Superseded by 0011 |
 | [0002](0002-pydantic-ai-agent-layer.md) | Pydantic AI as the agent layer | Accepted |
 | [0003](0003-google-calendar-for-bookings.md) | Google Calendar for bookings | Accepted, amended for M4 |
 | [0004](0004-model-on-vertex-ai-eu.md) | A model on Vertex AI in the EU, chosen by evaluation (today Gemini 3.1 Flash-Lite) | Accepted, amended in M3 |
@@ -13,4 +13,5 @@ Each record uses the same headings: Status, Context, Options considered, Decisio
 | [0007](0007-public-code-private-business-configuration.md) | Public code, private business configuration | Accepted |
 | [0008](0008-one-deployment-per-business.md) | One deployment per business | Accepted |
 | [0009](0009-grounded-replies.md) | Facts written by code; document answers carry verified quotes | Accepted |
-| [0010](0010-one-engine-channel-adapters.md) | One engine, channel adapters, a capability policy per channel | Accepted |
+| [0010](0010-one-engine-channel-adapters.md) | One engine, channel adapters, a capability policy per channel | Accepted, amended in M4 |
+| [0011](0011-channel-inbox-on-postgres.md) | The channel inbox on Postgres; Temporal set aside | Accepted |

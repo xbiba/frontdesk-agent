@@ -91,7 +91,7 @@ class Features(Frozen):
 
 
 class CalendarIntegration(Frozen):
-    """One calendar per bookable doctor (ADR-0011). The doctor's hours are the events titled with
+    """One calendar per bookable doctor (ADR-0003). The doctor's hours are the events titled with
     the marker; the other events are appointments, read only as busy time."""
 
     credentials_ref: str = Field(min_length=1)

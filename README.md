@@ -147,7 +147,7 @@ uv run pytest
 uv run pytest --cov   # branch coverage of src/frontdesk; fails under 80%
 ```
 
-Tests start Postgres with testcontainers (Docker required) and download the Temporal test server on first run.
+Tests start Postgres with testcontainers (Docker required).
 
 `docker build -t frontdesk:local .` builds the container image of the HTTP service. It serves `/health` today; channel webhooks arrive with the first channel.
 
