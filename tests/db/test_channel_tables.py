@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
 from frontdesk.db.models import ChannelConversation, ChannelMessage, ChannelTester
@@ -44,6 +45,14 @@ def _message(business: str, external_id: str | None, direction: str = "in") -> C
     )
 
 
+def _write(factory: sessionmaker[Session], scope: str, *rows: object) -> None:
+    """Rows written in one transaction scoped to `scope`, each flushed at once."""
+    with business_session(factory, scope) as session:
+        for row in rows:
+            session.add(row)
+            session.flush()
+
+
 def test_a_business_sees_only_its_own_channel_rows(app_url: str) -> None:
     factory = make_session_factory(make_engine(app_url))
     with business_session(factory, "alpha") as session:
@@ -61,9 +70,8 @@ def test_a_business_sees_only_its_own_channel_rows(app_url: str) -> None:
 
 def test_a_business_cannot_write_rows_of_another(app_url: str) -> None:
     factory = make_session_factory(make_engine(app_url))
-    with pytest.raises(DBAPIError), business_session(factory, "beta") as session:
-        session.add(_conversation("alpha"))
-        session.flush()
+    with pytest.raises(DBAPIError):
+        _write(factory, "beta", _conversation("alpha"))
 
 
 def test_a_message_id_is_stored_once(app_url: str) -> None:
@@ -72,9 +80,8 @@ def test_a_message_id_is_stored_once(app_url: str) -> None:
         session.add(_conversation("alpha"))
         session.flush()
         session.add(_message("alpha", "m1"))
-    with pytest.raises(IntegrityError), business_session(factory, "alpha") as session:
-        session.add(_message("alpha", "m1"))
-        session.flush()
+    with pytest.raises(IntegrityError):
+        _write(factory, "alpha", _message("alpha", "m1"))
 
 
 def test_replies_without_an_id_yet_do_not_collide(app_url: str) -> None:
@@ -124,7 +131,9 @@ def test_no_channel_table_stores_a_blank_business_id(
     migrated_url: str, table: str, statement: str
 ) -> None:
     engine = create_engine(migrated_url)  # the owner: a superuser, so only the constraint decides
-    with pytest.raises(IntegrityError, match=f"ck_{table}_business_id_not_blank"):
-        with engine.begin() as connection:
-            connection.execute(text(statement))
+    with (
+        pytest.raises(IntegrityError, match=f"ck_{table}_business_id_not_blank"),
+        engine.begin() as connection,
+    ):
+        connection.execute(text(statement))
     engine.dispose()
