@@ -81,9 +81,12 @@ def test_only_the_route_table_declares_evaluation_data() -> None:
     chat does: a person types test messages into it, and it says so before the first prompt. So
     does the live evaluation, which runs the business's labelled test messages, and so does the
     embedder experiment, which sends the pack's approved public text and the labelled retrieval
-    questions to the embedding models it compares."""
+    questions to the embedding models it compares. And so does the Instagram channel in testers
+    mode (M4 design D4): only the people who sent the pairing code reach the model, and they write
+    test messages; in live mode the channel's messages are patient data."""
     declaring = declaring_modules(SOURCE)
     assert declaring == [
+        "channels/wiring.py",
         "cli/experiment.py",
         "cli/live.py",
         "cli/live_chat.py",
