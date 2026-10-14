@@ -8,11 +8,12 @@ import logging
 
 import httpx
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 
 from frontdesk.api.app import create_webhook_app
-from frontdesk.api.webhook import MAX_BODY_BYTES
+from frontdesk.api.webhook import MAX_BODY_BYTES, read_limited
 from frontdesk.channels.inbox import BURST, Inbox, conversation_key
 from frontdesk.channels.instagram import InstagramWebhook
 from frontdesk.channels.wiring import Ingress
@@ -142,3 +143,27 @@ def test_a_task_that_cannot_be_queued_makes_meta_deliver_again(app_url: str) -> 
     body = _delivery(CODE)
     assert _post(client, body, _signature(body)).status_code == 500
     assert inbox.count_testers() == 1  # stored: Meta's next delivery or the sweep finds it
+
+
+async def test_a_body_past_the_limit_is_not_read_to_its_end() -> None:
+    chunk = b"x" * 400_000
+    pulled: list[int] = []
+
+    async def receive() -> dict[str, object]:
+        pulled.append(1)
+        return {"type": "http.request", "body": chunk, "more_body": len(pulled) < 10}
+
+    request = Request({"type": "http", "method": "POST", "headers": []}, receive)
+    assert await read_limited(request) is None
+    assert len(pulled) == 3  # 1.2 MB is past the limit: the other 7 chunks are never read
+
+
+async def test_a_body_within_the_limit_is_read_whole() -> None:
+    parts = [b"uno", b"due", b""]
+
+    async def receive() -> dict[str, object]:
+        body = parts.pop(0)
+        return {"type": "http.request", "body": body, "more_body": bool(parts)}
+
+    request = Request({"type": "http", "method": "POST", "headers": []}, receive)
+    assert await read_limited(request) == b"unodue"

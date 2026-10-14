@@ -20,6 +20,20 @@ logger = logging.getLogger(__name__)
 MAX_BODY_BYTES: Final = 1_000_000
 
 
+async def read_limited(request: Request) -> bytes | None:
+    """The body, or None once it passes MAX_BODY_BYTES: read in chunks, so a body without a length,
+    or with a false one, is never held whole before the check."""
+    declared = request.headers.get("content-length")
+    if declared is not None and (not declared.isdigit() or int(declared) > MAX_BODY_BYTES):
+        return None
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > MAX_BODY_BYTES:
+            return None
+    return bytes(body)
+
+
 def webhook_router(ingress: Ingress) -> APIRouter:
     router = APIRouter()
     channel = ingress.webhook.name
@@ -38,11 +52,8 @@ def webhook_router(ingress: Ingress) -> APIRouter:
 
     @router.post(path)
     async def receive(request: Request) -> Response:
-        declared = request.headers.get("content-length", "0")
-        if not declared.isdigit() or int(declared) > MAX_BODY_BYTES:
-            return Response(status_code=413)
-        body = await request.body()
-        if len(body) > MAX_BODY_BYTES:
+        body = await read_limited(request)
+        if body is None:
             return Response(status_code=413)
         if not ingress.webhook.signature_ok(body, request.headers.get("x-hub-signature-256")):
             log_event(logger, "channel.bad_signature", channel=channel)
