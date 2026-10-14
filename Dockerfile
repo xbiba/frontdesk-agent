@@ -4,11 +4,14 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.26@sha256:3d868e555f8f1dbc324afa005066cd11
 WORKDIR /app
 # UV_NO_CACHE: uv's download cache would stay in a layer (about 200 MB) and is not read at run time.
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_NO_CACHE=1 PYTHONUNBUFFERED=1
+# The extras a deployment needs: `demo` brings the local fastembed embedder some packs were
+# evaluated with (Clinica MCU's). CI builds the image without any.
+ARG EXTRAS=""
 COPY pyproject.toml uv.lock ./
-RUN uv sync --locked --no-dev --no-install-project
+RUN uv sync --locked --no-dev --no-install-project ${EXTRAS:+--extra ${EXTRAS}}
 COPY . .
 # Editable install: alembic.ini, migrations/ and agents/ are read from /app at runtime.
-RUN uv sync --locked --no-dev
+RUN uv sync --locked --no-dev ${EXTRAS:+--extra ${EXTRAS}}
 ENV PATH="/app/.venv/bin:$PATH"
 USER 10001:10001
 EXPOSE 8080

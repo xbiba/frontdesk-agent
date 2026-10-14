@@ -149,7 +149,7 @@ uv run pytest --cov   # branch coverage of src/frontdesk; fails under 80%
 
 Tests start Postgres with testcontainers (Docker required).
 
-`docker build -t frontdesk:local .` builds the container image of the HTTP service. It serves `/health` today; channel webhooks arrive with the first channel.
+`docker build -t frontdesk:local .` builds the container image of the HTTP services. `--build-arg EXTRAS=demo` adds the local fastembed embedder. One image runs both services of a channel (ADR-0011): `uvicorn frontdesk.api.app:create_webhook_app --factory` receives the channel's webhooks, `uvicorn frontdesk.api.app:create_worker_app --factory` runs the turns that Cloud Tasks hands it. `frontdesk db app-role`, `frontdesk knowledge publish` and `frontdesk instagram account|subscribe|testers` prepare a cloud deployment.
 
 ## License
 

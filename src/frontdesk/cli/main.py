@@ -19,8 +19,10 @@ from frontdesk.cli.bookings import purge_bookings
 from frontdesk.cli.calendar import check_calendar
 from frontdesk.cli.chat import run_chat
 from frontdesk.cli.experiment import eval_embedders
+from frontdesk.cli.instagram import show_account, show_testers, subscribe_account
 from frontdesk.cli.live import eval_report, live_turns, read_cases
 from frontdesk.cli.live_chat import run_live_chat
+from frontdesk.cli.publish import publish_knowledge
 from frontdesk.cli.runtime import build_runtime, without_knowledge
 from frontdesk.composition import Deployment, NoActiveKnowledgeError, open_deployment
 from frontdesk.conversation.evaluation import (
@@ -30,6 +32,7 @@ from frontdesk.conversation.evaluation import (
 )
 from frontdesk.db.engine import business_session
 from frontdesk.db.migrate import upgrade_to_head
+from frontdesk.db.roles import RoleError, ensure_app_role
 from frontdesk.knowledge.evaluation import (
     DatasetError,
     load_cases,
@@ -71,11 +74,13 @@ knowledge_app = typer.Typer(no_args_is_help=True, help="Versioned, approved know
 eval_app = typer.Typer(no_args_is_help=True, help="Evaluations.")
 calendar_app = typer.Typer(no_args_is_help=True, help="The doctors' calendars.")
 bookings_app = typer.Typer(no_args_is_help=True, help="Bookings from the chat.")
+instagram_app = typer.Typer(no_args_is_help=True, help="The Instagram channel (M4).")
 app.add_typer(db_app, name="db")
 app.add_typer(knowledge_app, name="knowledge")
 app.add_typer(eval_app, name="eval")
 app.add_typer(calendar_app, name="calendar")
 app.add_typer(bookings_app, name="bookings")
+app.add_typer(instagram_app, name="instagram")
 
 EnvFile = Annotated[
     Path, typer.Option("--env-file", exists=True, dir_okay=False, help="The deployment's env file.")
@@ -140,6 +145,19 @@ def db_upgrade(env_file: EnvFile) -> None:
     """Apply all migrations to this deployment's database."""
     upgrade_to_head(load_settings(env_file).migration_database_url)
     typer.echo("database is at the latest migration")
+
+
+@db_app.command("app-role")
+def db_app_role(env_file: EnvFile) -> None:
+    """Create the application's role from FRONTDESK_DATABASE_URL, or set its password, as the owner
+    of FRONTDESK_MIGRATION_DATABASE_URL. On a new cloud database, before `db upgrade`."""
+    settings = load_settings(env_file)
+    try:
+        role = ensure_app_role(settings.migration_database_url, settings.database_url)
+    except RoleError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(1) from error
+    typer.echo(f"application role ready: {role}")
 
 
 @knowledge_app.command("draft")
@@ -474,3 +492,36 @@ def bookings_purge(env_file: EnvFile) -> None:
     """Delete the expired holds, with any name and phone on them, and the bookings whose slot has
     passed. Run it on a schedule."""
     raise typer.Exit(purge_bookings(load_settings(env_file), datetime.now(UTC)))
+
+
+@knowledge_app.command("publish")
+def knowledge_publish(
+    env_file: EnvFile,
+    by: Annotated[str, typer.Option("--by", help="Who approved the content.")],
+    evidence: Annotated[str, typer.Option("--evidence", help="Where the approval is recorded.")],
+) -> None:
+    """Draft, approve and activate the pack's knowledge in one step, for a deployment whose content
+    was approved on another database (`approvals/` in the business's repository)."""
+    settings = load_settings(env_file)
+    raise typer.Exit(publish_knowledge(settings, by=by, evidence=evidence, now=datetime.now(UTC)))
+
+
+@instagram_app.command("account")
+def instagram_account(env_file: EnvFile) -> None:
+    """Print the ID the account's webhooks carry (FRONTDESK_INSTAGRAM_ACCOUNT_ID) and its name."""
+    raise typer.Exit(asyncio.run(show_account(load_settings(env_file))))
+
+
+@instagram_app.command("subscribe")
+def instagram_subscribe(env_file: EnvFile) -> None:
+    """Subscribe the account to this app's message webhooks."""
+    raise typer.Exit(asyncio.run(subscribe_account(load_settings(env_file))))
+
+
+@instagram_app.command("testers")
+def instagram_testers(
+    env_file: EnvFile,
+    clear: Annotated[bool, typer.Option("--clear", help="Remove every tester.")] = False,
+) -> None:
+    """Count the testers, or remove them all."""
+    raise typer.Exit(show_testers(load_settings(env_file), clear=clear))
