@@ -40,6 +40,13 @@ class Conversation(StrEnum):
     AGENT = "agent"
 
 
+class InstagramMode(StrEnum):
+    """Whom the Instagram channel answers (M4 design D4): its testers, or everyone."""
+
+    TESTERS = "testers"
+    LIVE = "live"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="FRONTDESK_", extra="ignore")
 
@@ -72,6 +79,21 @@ class Settings(BaseSettings):
     daily_cap_eur: float | None = Field(default=None, gt=0)
     prices_file: Path | None = None
     model_off: bool = False
+    # Instagram (M4, ADR-0011): the account its webhooks name, whom it answers, its switch (D4,
+    # D13). Token, app secret, verify token and pairing code come from the environment in
+    # development only, like cal.com's key; from Secret Manager in production.
+    instagram_account_id: str | None = None
+    instagram_mode: InstagramMode = InstagramMode.TESTERS
+    instagram_off: bool = False
+    instagram_api_version: str = "v25.0"
+    instagram_token: SecretStr | None = None
+    instagram_app_secret: SecretStr | None = None
+    instagram_verify_token: SecretStr | None = None
+    instagram_pairing_code: SecretStr | None = None
+    # Cloud Tasks (ADR-0011): the queue, the worker it calls, the identity it calls the worker with.
+    tasks_queue: str | None = None
+    worker_url: str | None = None
+    tasks_invoker: str | None = None
     log_level: str = "INFO"
 
     def require_business_pack(self) -> Path:

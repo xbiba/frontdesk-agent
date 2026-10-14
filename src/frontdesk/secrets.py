@@ -25,6 +25,8 @@ SECRET_IDS: Final = {
     "calcom_api_key": "frontdesk-calcom-api-key",
     "instagram_token": "frontdesk-instagram-token",
     "instagram_app_secret": "frontdesk-instagram-app-secret",
+    "instagram_verify_token": "frontdesk-instagram-verify-token",
+    "instagram_pairing_code": "frontdesk-instagram-pairing-code",
 }
 _API: Final = "https://secretmanager.googleapis.com/v1"
 
@@ -67,3 +69,32 @@ def read_secret(
         return base64.b64decode(data).decode("utf-8").strip()
     except (KeyError, TypeError, ValueError, binascii.Error):
         raise SecretUnavailableError(f"{secret_id}: malformed answer") from None
+
+
+def add_secret_version(
+    settings: Settings,
+    name: str,
+    value: str,
+    *,
+    token: Callable[[], str],
+    client: httpx2.Client,
+) -> None:
+    """Store `value` as the newest version of the secret `name`: the Instagram token, renewed every
+    week (M4 design D3). The program never writes a development secret."""
+    if settings.secrets_backend is SecretsBackend.ENV:
+        raise ValueError(f"{name} lives in the environment: the program cannot renew it")
+    project = settings.secrets_project or settings.gcp_project
+    if not project:
+        raise ValueError("FRONTDESK_SECRETS_BACKEND=gcp needs FRONTDESK_SECRETS_PROJECT")
+    secret_id = SECRET_IDS[name]
+    data = base64.b64encode(value.encode("utf-8")).decode("ascii")
+    try:
+        response = client.post(
+            f"{_API}/projects/{project}/secrets/{secret_id}:addVersion",
+            json={"payload": {"data": data}},
+            headers={"Authorization": f"Bearer {token()}"},
+        )
+    except httpx2.HTTPError as error:
+        raise SecretUnavailableError(f"{secret_id}: {type(error).__name__}") from None
+    if response.status_code != 200:
+        raise SecretUnavailableError(f"{secret_id}: status {response.status_code}")

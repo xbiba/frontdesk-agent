@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from frontdesk.settings import EmbeddingBackend, Settings, load_settings
+from frontdesk.settings import EmbeddingBackend, InstagramMode, Settings, load_settings
 
 
 def test_defaults_are_offline_and_metadata_only(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -67,3 +67,11 @@ def test_missing_business_pack_is_a_clear_error(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.delenv("FRONTDESK_BUSINESS_PACK", raising=False)
     with pytest.raises(ValueError, match="FRONTDESK_BUSINESS_PACK"):
         Settings().require_business_pack()
+
+
+def test_the_instagram_channel_starts_with_testers_and_switched_on() -> None:
+    settings = Settings()
+    assert settings.instagram_mode is InstagramMode.TESTERS
+    assert settings.instagram_off is False
+    assert settings.instagram_api_version == "v25.0"
+    assert settings.tasks_queue is None
