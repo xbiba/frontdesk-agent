@@ -1,8 +1,8 @@
 """The responder's one tool, built once per deployment over its services (ADR-0002).
 
 Deps stay serializable; database sessions and embedders come from the closure,
-so the same toolset works in-process now and as Temporal activities if Temporal stays
-(ADR-0001, reconsidered in M4).
+so the same toolset works in-process and could run as activities of a durable runtime
+(ADR-0011).
 It reads approved documents only and returns typed evidence.
 """
 

@@ -1,7 +1,7 @@
 # ADR-0001: One Temporal workflow per conversation
 
 ## Status
-Accepted (2026-10-07). Reconsidered in the M4 plan; M0 ships the worker skeleton.
+Superseded by ADR-0011 (2026-10-14). Accepted on 2026-10-07; M0 shipped a worker skeleton, removed in M4.
 
 ## Context
 A conversation waits: for the next message, for reception to confirm a booking, for Meta's 24-hour reply window. Messages can arrive twice or in bursts, and processes crash or redeploy in the middle of a turn.

@@ -10,7 +10,8 @@ its level and logger name, and:
 - "dropped_fields": the names of the other fields, those not allowlisted and those holding
   anything else (free text, exceptions, mappings, arbitrary objects). Field names are
   chosen in code and written as given;
-- "exception_type": the class name of an exception, never its message or traceback.
+- "exception_type": the class name of an exception, never its message or traceback;
+- "severity": the level again, under the name Cloud Logging reads (M4).
 
 So message text, tool results and exception messages are never written, provided call
 sites pass codes and identifiers rather than pieces of content: one word is accepted
@@ -31,10 +32,12 @@ from typing import Any, Final
 
 ALLOWED_FIELDS: Final = frozenset(
     {
+        "account_id",
         "action",
         "agent_version",
         "business_id",
         "category",
+        "channel",
         "check_reasons",
         "conversation_id",
         "correlation_id",
@@ -95,6 +98,7 @@ def _metadata(value: object) -> object:
 def _render(record: logging.LogRecord) -> str:
     payload: dict[str, Any] = {
         "level": record.levelname,
+        "severity": record.levelname,
         "logger": record.name,
         "event": _event_name(record.msg),
     }
@@ -117,6 +121,7 @@ def _fallback(record: logging.LogRecord) -> str:
     """A line without field values, for a record that could not be rendered."""
     payload = {
         "level": record.levelname,
+        "severity": record.levelname,
         "logger": record.name,
         "event": _event_name(record.msg),
         "format_error": True,
@@ -138,7 +143,24 @@ def configure_logging(level: str = "INFO") -> None:
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level)
+    # uvicorn sets up handlers of its own before it calls the app factory, and they print exception
+    # messages and query strings (M4 review). Its server lines go through the formatter above; its
+    # access log stays off, since Cloud Run logs every request itself.
+    for name in ("uvicorn", "uvicorn.error"):
+        server = logging.getLogger(name)
+        server.handlers[:] = []
+        server.propagate = True
+    access = logging.getLogger("uvicorn.access")
+    access.handlers[:] = []
+    access.propagate = False
+    access.disabled = True
 
 
 def log_event(logger: logging.Logger, event: str, **fields: Any) -> None:
     logger.info(event, extra={"fields": fields})
+
+
+def log_alert(logger: logging.Logger, event: str, **fields: Any) -> None:
+    """An event a person must look at (M4): written at ERROR, the level Cloud Logging's alert rule
+    watches. Same fields and rules as `log_event`."""
+    logger.error(event, extra={"fields": fields})

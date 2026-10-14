@@ -32,3 +32,8 @@ The first channel is Instagram direct messages. The owner also wants a chat on t
 
 ## Exit plan
 If a channel needs behaviour the engine cannot express through features, add a feature to the engine. Never branch on the channel name inside the engine.
+
+## Amendment (2026-10-14, M4)
+- The policy is `ChannelPolicy` in the business pack (`channels.instagram`), with switches for chat bookings, order status and orientation. The deployment builds the turn from a copy of the pack with those features off (`frontdesk.channels.policy.narrow`); a policy cannot turn anything on.
+- The adapter is two parts: a webhook reader (signature, events) and a sender (`frontdesk.channels.messages`).
+- Fixed texts per channel are postponed: Instagram uses the business's texts. They become per channel with the website.

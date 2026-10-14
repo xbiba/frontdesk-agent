@@ -2,13 +2,14 @@
 from Google Secret Manager, never from a file; in development, from the environment."""
 
 import base64
+import json
 from pathlib import Path
 
 import httpx2
 import pytest
 from pydantic import SecretStr
 
-from frontdesk.secrets import SecretUnavailableError, read_secret
+from frontdesk.secrets import SecretUnavailableError, add_secret_version, read_secret
 from frontdesk.settings import SecretsBackend, Settings
 
 
@@ -61,3 +62,34 @@ def test_a_secret_that_cannot_be_read_names_itself_and_never_a_value() -> None:
     client = _client(httpx2.Response(403, json={"error": "denied"}), [])
     with pytest.raises(SecretUnavailableError, match="frontdesk-calcom-api-key: status 403"):
         read_secret(settings, "calcom_api_key", token=lambda: "t0ken", client=client)
+
+
+def test_a_new_version_of_a_secret_is_added_in_production() -> None:
+    seen: list[httpx2.Request] = []
+    client = _client(httpx2.Response(200, json={"name": "versions/2"}), seen)
+    settings = _settings(secrets_backend=SecretsBackend.GCP, gcp_project="clinica-mcu")
+    add_secret_version(
+        settings, "instagram_token", "new-token", token=lambda: "t0ken", client=client
+    )
+    (request,) = seen
+    assert request.url.path == (
+        "/v1/projects/clinica-mcu/secrets/frontdesk-instagram-token:addVersion"
+    )
+    assert request.headers["authorization"] == "Bearer t0ken"
+    expected = base64.b64encode(b"new-token").decode()
+    assert json.loads(request.content) == {"payload": {"data": expected}}
+
+
+def test_a_version_that_cannot_be_added_names_the_secret_never_the_value() -> None:
+    settings = _settings(secrets_backend=SecretsBackend.GCP, gcp_project="clinica-mcu")
+    client = _client(httpx2.Response(403), [])
+    with pytest.raises(SecretUnavailableError, match=r"^frontdesk-instagram-token: status 403$"):
+        add_secret_version(
+            settings, "instagram_token", "new-token", token=lambda: "t", client=client
+        )
+
+
+def test_secrets_in_the_environment_are_not_renewed_by_the_program() -> None:
+    client = _client(httpx2.Response(200), [])
+    with pytest.raises(ValueError, match="environment"):
+        add_secret_version(_settings(), "instagram_token", "x", token=lambda: "t", client=client)

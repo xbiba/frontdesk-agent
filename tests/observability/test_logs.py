@@ -7,7 +7,12 @@ from enum import Enum, IntEnum, StrEnum
 
 import pytest
 
-from frontdesk.observability.logs import MetadataOnlyFormatter, configure_logging, log_event
+from frontdesk.observability.logs import (
+    MetadataOnlyFormatter,
+    configure_logging,
+    log_alert,
+    log_event,
+)
 
 SENTINEL = "SENTINEL-7f3a"
 
@@ -145,6 +150,7 @@ def test_values_from_the_planned_call_sites_are_kept() -> None:
     assert written == {
         "event": "turn.completed",
         "level": "INFO",
+        "severity": "INFO",
         "logger": "test",
         **fields,
     }
@@ -210,6 +216,7 @@ def test_format_never_raises_and_falls_back_to_a_bare_line(
         "format_error": True,
         "level": "INFO",
         "logger": "test",
+        "severity": "INFO",
     }
 
 
@@ -241,3 +248,64 @@ def test_configure_logging_writes_one_metadata_only_json_line(
     assert written["exception_type"] == "ValueError"
     assert SENTINEL not in captured.out
     assert captured.err == ""
+
+
+def test_lines_carry_the_severity_cloud_logging_reads() -> None:
+    line = json.loads(MetadataOnlyFormatter().format(_record("turn.completed", {})))
+    assert line["severity"] == "INFO"
+
+
+def test_log_alert_writes_an_error_with_its_fields(caplog: pytest.LogCaptureFixture) -> None:
+    logger = logging.getLogger("frontdesk.test")
+    with caplog.at_level(logging.INFO, logger="frontdesk.test"):
+        log_alert(logger, "channel.send_uncertain", channel="instagram", reason="timeout")
+    (record,) = caplog.records
+    assert record.levelno == logging.ERROR
+    line = json.loads(MetadataOnlyFormatter().format(record))
+    assert line["severity"] == "ERROR"
+    assert line["channel"] == "instagram"
+    assert line["reason"] == "timeout"
+
+
+def test_the_business_account_id_may_be_logged() -> None:
+    line = json.loads(_format({"account_id": "17841400000000001"}))
+    assert line["account_id"] == "17841400000000001"
+
+
+UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
+
+
+@pytest.fixture
+def restore_uvicorn_loggers() -> Iterator[None]:
+    """uvicorn's loggers are process-wide: put back what a test changed."""
+    saved = [
+        (logger, list(logger.handlers), logger.propagate, logger.disabled)
+        for logger in map(logging.getLogger, UVICORN_LOGGERS)
+    ]
+    yield
+    for logger, handlers, propagate, disabled in saved:
+        logger.handlers[:] = handlers
+        logger.propagate = propagate
+        logger.disabled = disabled
+
+
+@pytest.mark.usefixtures("restore_root_logger", "restore_uvicorn_loggers")
+def test_uvicorn_s_own_lines_go_through_the_metadata_only_formatter(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    for name in UVICORN_LOGGERS:  # as uvicorn sets itself up before it calls the app factory
+        logging.getLogger(name).handlers[:] = [logging.StreamHandler(sys.stderr)]
+        logging.getLogger(name).propagate = False
+    configure_logging("INFO")
+    try:
+        raise ValueError(SENTINEL)
+    except ValueError:
+        logging.getLogger("uvicorn.error").exception("Exception in ASGI application")
+    query = f"/webhooks/instagram?hub.verify_token={SENTINEL}"
+    logging.getLogger("uvicorn.access").info(
+        '%s - "%s %s HTTP/%s" %d', "10.0.0.1", "GET", query, "1.1", 200
+    )
+    captured = capsys.readouterr()
+    assert SENTINEL not in captured.out + captured.err
+    (line,) = captured.out.splitlines()
+    assert json.loads(line)["exception_type"] == "ValueError"

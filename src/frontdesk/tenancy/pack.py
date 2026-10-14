@@ -91,7 +91,7 @@ class Features(Frozen):
 
 
 class CalendarIntegration(Frozen):
-    """One calendar per bookable doctor (ADR-0011). The doctor's hours are the events titled with
+    """One calendar per bookable doctor (ADR-0003). The doctor's hours are the events titled with
     the marker; the other events are appointments, read only as busy time."""
 
     credentials_ref: str = Field(min_length=1)
@@ -110,6 +110,21 @@ class CalendarIntegration(Frozen):
 
 class Integrations(Frozen):
     calendar: CalendarIntegration | None = None
+
+
+class ChannelPolicy(Frozen):
+    """What one channel lets the business do (ADR-0010). It can only switch features off: a turn
+    has the business's features AND the channel's."""
+
+    chat_booking: bool = True
+    order_status: bool = True
+    orientation: bool = True
+
+
+class Channels(Frozen):
+    """The channels the business answers on, each with its policy (M4: Instagram)."""
+
+    instagram: ChannelPolicy | None = None
 
 
 class OpeningHours(Frozen):
@@ -221,6 +236,7 @@ class BusinessPack(Frozen):
     timezone: TimeZoneName
     features: Features = Features()
     integrations: Integrations = Integrations()
+    channels: Channels = Channels()
     fixed_texts: dict[Language, dict[FixedTextKey, str]]
     location: Location
     services: list[Service] = Field(default_factory=list)
