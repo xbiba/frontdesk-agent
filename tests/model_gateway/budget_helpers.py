@@ -7,6 +7,7 @@ from pathlib import Path
 from frontdesk.model_gateway.costs import Budget, load_budget
 
 ROUTE = "vertex-eu-gemini-flash-lite"
+OTHER_ROUTE = "vertex-eu-gemini-flash"  # a fallback or a second try, at its own price
 
 
 def write_budget(directory: Path, *, cap_eur: float = 10.0, usd_per_eur: float = 1.25) -> Budget:
@@ -26,6 +27,10 @@ prices:
       unit: tokens_1m
       input_usd: 1.0
       output_usd: 10.0
+    {OTHER_ROUTE}:
+      unit: tokens_1m
+      input_usd: 2.0
+      output_usd: 20.0
     vertex-ew1-gemini-embedding-001:
       unit: characters_1k
       input_usd: 0.5

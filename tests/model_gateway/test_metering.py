@@ -20,7 +20,7 @@ from pydantic_ai.usage import RequestUsage
 from frontdesk.model_gateway.costs import BudgetError, BudgetExhaustedError
 from frontdesk.model_gateway.metering import MAX_INPUT_TOKENS_PER_REQUEST, Meter
 from tests.model_gateway.attempt_helpers import Sleeps
-from tests.model_gateway.budget_helpers import ROUTE, write_budget
+from tests.model_gateway.budget_helpers import OTHER_ROUTE, ROUTE, write_budget
 
 
 def _answering(input_tokens: int, output_tokens: int, thoughts: int = 0) -> FunctionModel:
@@ -199,3 +199,21 @@ async def test_a_metered_model_does_not_stream(tmp_path: Path) -> None:
 def test_a_meter_needs_a_price_for_its_route(tmp_path: Path) -> None:
     with pytest.raises(BudgetError, match="no price for route 'vertex-eu-opus'"):
         Meter(write_budget(tmp_path), route_id="vertex-eu-opus", run_id="run-1")
+
+
+async def test_a_model_of_another_route_is_priced_and_recorded_as_its_own(tmp_path: Path) -> None:
+    # The fallback and the second try run on other models (Albi, 2026-10-16).
+    budget = write_budget(tmp_path)
+    meter = Meter(budget, route_id=ROUTE, run_id="run-1")
+    other = meter.wrap(_answering(2_000, 300), "agent", route_id=OTHER_ROUTE)
+    await Agent(other).run("x", model_settings={"max_tokens": 600})
+    [call] = meter.drain()
+    assert call.usd == pytest.approx((2_000 * 2.0 + 300 * 20.0) / 1_000_000)
+    (entry,) = [json.loads(line) for line in budget.ledger_path.read_text().splitlines()]
+    assert (entry["route"], entry["usd"]) == (OTHER_ROUTE, pytest.approx(call.usd))
+
+
+def test_a_model_of_a_route_with_no_price_is_never_wrapped(tmp_path: Path) -> None:
+    meter = Meter(write_budget(tmp_path), route_id=ROUTE, run_id="run-1")
+    with pytest.raises(BudgetError, match="no price for route 'vertex-eu-opus'"):
+        meter.wrap(_answering(1, 1), "agent", route_id="vertex-eu-opus")

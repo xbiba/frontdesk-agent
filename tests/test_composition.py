@@ -34,6 +34,7 @@ from frontdesk.model_gateway.routes import (
     OutputLimits,
     UnapprovedRouteError,
 )
+from frontdesk.model_gateway.second_try import SecondTryModel
 from frontdesk.settings import CalendarBackend, EmbeddingBackend, Settings
 from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.pack import BusinessPack, CalendarIntegration, Integrations, Profile
@@ -581,10 +582,12 @@ def test_the_agent_on_3_8_flash_falls_back_to_flash_lite(
         )
 
     monkeypatch.setattr("frontdesk.composition.build_live_model", build)
-    wrapped: list[tuple[str, str, bool]] = []
+    wrapped: list[tuple[str, str, bool, str | None]] = []
 
-    def wrap(model: Model, role: str, *, retries: bool = True) -> Model:
-        wrapped.append((model.model_name, role, retries))
+    def wrap(
+        model: Model, role: str, *, retries: bool = True, route_id: str | None = None
+    ) -> Model:
+        wrapped.append((model.model_name, role, retries, route_id))
         return model
 
     deployment = _deployment(
@@ -596,8 +599,54 @@ def test_the_agent_on_3_8_flash_falls_back_to_flash_lite(
         gcp_project="p",
     )
     build_turn_runtime(deployment, data_class=DataClass.EVALUATION, wrap_model=wrap)
-    assert ("gemini-3.8-flash", "agent", False) in wrapped
-    assert ("gemini-3.1-flash-lite", "agent", True) in wrapped
+    assert ("gemini-3.8-flash", "agent", False, None) in wrapped
+    # The fallback is priced at its own route's price.
+    assert ("gemini-3.1-flash-lite", "agent", True, "vertex-eu-gemini-flash-lite") in wrapped
+
+
+@pytest.mark.db
+def test_the_agent_on_3_5_flash_lite_writes_again_on_3_8_flash(
+    activate_pack: Activate,
+    app_url: str,
+    clinic_pack: BusinessPack,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Albi, 2026-10-16: 3.5 Flash-Lite leads; 3.8 Flash writes again a reply a check sent back,
+    # and answers a request 3.5 Flash-Lite fails.
+    monkeypatch.setattr(
+        "frontdesk.composition.build_live_model",
+        lambda route, *, gcp_project: FunctionModel(
+            lambda messages, info: ModelResponse(parts=[]), model_name=route.model_name
+        ),
+    )
+    wrapped: list[tuple[str, bool, str | None]] = []
+
+    def wrap(
+        model: Model, role: str, *, retries: bool = True, route_id: str | None = None
+    ) -> Model:
+        if role == "agent":
+            wrapped.append((model.model_name, retries, route_id))
+        return model
+
+    deployment = _deployment(
+        clinic_pack,
+        activate_pack(clinic_pack),
+        app_url=app_url,
+        model_route="vertex-eu-gemini-flash-lite-3-5",
+        conversation="agent",
+        gcp_project="p",
+    )
+    runtime = build_turn_runtime(deployment, data_class=DataClass.EVALUATION, wrap_model=wrap)
+    assert runtime.reception is not None
+    assert isinstance(runtime.reception.model, SecondTryModel)
+    assert sorted(wrapped, key=str) == sorted(
+        [
+            ("gemini-3.5-flash-lite", False, None),  # the fallback answers its failures
+            ("gemini-3.8-flash", True, "vertex-eu-gemini-flash"),  # the fallback
+            ("gemini-3.8-flash", True, "vertex-eu-gemini-flash"),  # the second try
+        ],
+        key=str,
+    )
 
 
 @pytest.mark.db

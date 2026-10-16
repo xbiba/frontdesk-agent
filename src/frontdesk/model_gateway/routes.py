@@ -50,6 +50,9 @@ class ModelRoute:
     request_timeout_seconds: float = 30.0
     # The route that answers a request this one fails (frontdesk.model_gateway.hedging).
     fallback: str | None = None
+    # The route that writes again a reply a check sent back, and the rest of the turn
+    # (frontdesk.model_gateway.second_try). It runs with this route's settings: the same thinking.
+    second_try: str | None = None
 
 
 ROUTES: Final[dict[str, ModelRoute]] = {
@@ -97,10 +100,12 @@ ROUTES: Final[dict[str, ModelRoute]] = {
         # europe-west1, -west4, -west8 and -west9, retires on 2026-10-20.
         fallback="vertex-eu-gemini-flash-lite",
     ),
-    # Gemini 3.5 Flash-Lite as the reception agent, measured on the MCU cases against 3.8 Flash
-    # (Albi, 2026-10-16). GA since 2026-07-21, retiring "July 21, 2027 or later"; served on the eu
-    # multi-region (probe of 2026-10-16). Low thinking, as 3.8 Flash: 3.1 Flash-Lite with minimal
-    # thinking failed bookings and dates (run agent-10-lite). No fallback: it is measured alone.
+    # Gemini 3.5 Flash-Lite leads the reception agent (Albi, 2026-10-16), after run agent-11-lite35
+    # on the MCU cases: 155 of 163 against 157 for 3.8 Flash, five times cheaper and 2.4 times
+    # faster. GA since 2026-07-21, retiring "July 21, 2027 or later"; served on the eu multi-region
+    # (probe of 2026-10-16). Low thinking, as 3.8 Flash: 3.1 Flash-Lite with minimal thinking
+    # failed bookings and dates (run agent-10-lite). 3.8 Flash writes again a reply a check sent
+    # back, and answers a request this one fails: the stronger model, and another one.
     "vertex-eu-gemini-flash-lite-3-5": ModelRoute(
         route_id="vertex-eu-gemini-flash-lite-3-5",
         provider="google-vertex",
@@ -110,6 +115,8 @@ ROUTES: Final[dict[str, ModelRoute]] = {
         retires_on=date(2027, 7, 21),
         thinking="low",
         request_timeout_seconds=15.0,
+        fallback="vertex-eu-gemini-flash",
+        second_try="vertex-eu-gemini-flash",
     ),
     # The embedding candidates of the M3 experiment (design §4.5). Neither is served on the eu
     # multi-region; both are on europe-west1 (Belgium).

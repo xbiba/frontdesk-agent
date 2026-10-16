@@ -132,11 +132,12 @@ def test_the_gemini_client_needs_a_project(project: str) -> None:
 
 
 def test_the_newer_flash_lite_is_an_evaluation_route_on_the_eu_multi_region() -> None:
-    # Albi, 2026-10-16: Gemini 3.5 Flash-Lite as the reception agent, on the same 163 cases.
+    # Albi, 2026-10-16: Gemini 3.5 Flash-Lite leads the reception agent, and 3.8 Flash writes again
+    # a reply a check sent back and answers a request it fails.
     route = require_route("vertex-eu-gemini-flash-lite-3-5", DataClass.EVALUATION)
     assert (route.model_name, route.region) == ("gemini-3.5-flash-lite", "eu")
     assert route.thinking == "low"
     assert route.retires_on == date(2027, 7, 21)
-    assert route.fallback is None
+    assert route.fallback == route.second_try == "vertex-eu-gemini-flash"
     with pytest.raises(UnapprovedRouteError):
         require_route("vertex-eu-gemini-flash-lite-3-5", DataClass.PATIENT_DERIVED)

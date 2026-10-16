@@ -8,7 +8,7 @@ refuses to start when its active knowledge was embedded by another model.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import Literal, Protocol
 from zoneinfo import ZoneInfo
@@ -51,6 +51,7 @@ from frontdesk.model_gateway.routes import (
     UnapprovedRouteError,
     require_route,
 )
+from frontdesk.model_gateway.second_try import SecondTryModel
 from frontdesk.secrets import CLOUD_SCOPE, read_secret
 from frontdesk.settings import CalendarBackend, Conversation, Settings
 from frontdesk.shop.orders import OrderStore
@@ -62,16 +63,21 @@ AgentRole = Literal["classifier", "responder", "agent"]
 
 class ModelWrapper(Protocol):
     """What meters a model for an agent's role; without retries when a fallback answers its
-    failures (frontdesk.model_gateway.metering)."""
+    failures (frontdesk.model_gateway.metering). `route_id`: the route of a model other than the
+    deployment's own (a fallback, a second try), priced at its own price."""
 
-    def __call__(self, model: Model, role: AgentRole, *, retries: bool = True) -> Model: ...
+    def __call__(
+        self, model: Model, role: AgentRole, *, retries: bool = True, route_id: str | None = None
+    ) -> Model: ...
 
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _unwrapped(model: Model, role: AgentRole, *, retries: bool = True) -> Model:
+def _unwrapped(
+    model: Model, role: AgentRole, *, retries: bool = True, route_id: str | None = None
+) -> Model:
     return model
 
 
@@ -95,27 +101,44 @@ def _capped(deployment: Deployment, route: ModelRoute) -> ModelWrapper | None:
         clock=_utc_now,
     )
 
-    def capped(model: Model, role: AgentRole, *, retries: bool = True) -> Model:
-        return CappedModel(model, cap)
+    def capped(
+        model: Model, role: AgentRole, *, retries: bool = True, route_id: str | None = None
+    ) -> Model:
+        if route_id is None or route_id == route.route_id:
+            return CappedModel(model, cap)
+        return CappedModel(model, replace(cap, price=prices.price(route_id)))
 
     return capped
 
 
-def _hedged(
+def _agent_model(
     route: ModelRoute,
     model: Model,
     wrap: ModelWrapper,
     deployment: Deployment,
     data_class: DataClass,
 ) -> Model:
-    """The agent's model: a stuck request gets a twin (Albi, 2026-10-12), and a failure goes to the
-    route's fallback, when it names one (Albi, 2026-10-13)."""
+    """The agent's model: a stuck request gets a twin (Albi, 2026-10-12), a failure goes to the
+    route's fallback, when it names one (Albi, 2026-10-13), and a reply a check sent back goes to
+    its second try, when it names one, with the rest of the turn (Albi, 2026-10-16). The second try
+    has no fallback: a failure there ends the turn with the handoff, as a second refusal does."""
+    project = deployment.settings.gcp_project
     if route.fallback is None:
-        return HedgedModel(wrap(model, "agent"))
-    spare = build_live_model(
-        require_route(route.fallback, data_class), gcp_project=deployment.settings.gcp_project
-    )
-    return HedgedModel(wrap(model, "agent", retries=False), fallback=wrap(spare, "agent"))
+        first = HedgedModel(wrap(model, "agent"))
+    else:
+        spare_route = require_route(route.fallback, data_class)
+        spare = wrap(
+            build_live_model(spare_route, gcp_project=project),
+            "agent",
+            route_id=spare_route.route_id,
+        )
+        first = HedgedModel(wrap(model, "agent", retries=False), fallback=spare)
+    if route.second_try is None:
+        return first
+    second_route = require_route(route.second_try, data_class)
+    second = build_live_model(second_route, gcp_project=project)
+    wrapped = wrap(second, "agent", route_id=second_route.route_id)
+    return SecondTryModel(first, second=HedgedModel(wrapped))
 
 
 @dataclass(frozen=True)
@@ -231,7 +254,7 @@ def build_turn_runtime(
         if deployment.settings.conversation is Conversation.AGENT:
             reception_prompt = read_prompt(pack.profile, "reception")
             reception = build_reception(
-                _hedged(route, model, wrap, deployment, data_class),
+                _agent_model(route, model, wrap, deployment, data_class),
                 pack.profile,
                 model_settings=live_model_settings(route, max_tokens=route.output_limits.agent),
                 instructions=reception_prompt.text,

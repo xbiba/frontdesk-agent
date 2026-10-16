@@ -55,7 +55,7 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RequestUsage
 from pydantic_core import to_json
 
-from frontdesk.model_gateway.costs import Budget, BudgetError, BudgetExhaustedError
+from frontdesk.model_gateway.costs import Budget, BudgetError, BudgetExhaustedError, Price
 from frontdesk.model_gateway.hedging import CURRENT_TWIN
 
 # The reserve assumes a request holds at most this many input tokens. Real requests stay far below
@@ -134,12 +134,7 @@ class Meter:
         if breaker is not None and breaker < 1:
             raise ValueError("the breaker needs at least one failed attempt to trip")
         self._budget = budget
-        self._price = budget.price(route_id)
-        if self._price.unit != "tokens_1m":
-            raise BudgetError(
-                f"{budget.path}: route '{route_id}' is priced per {self._price.unit}, "
-                "and the meter counts tokens"
-            )
+        self._price = _token_price(budget, route_id)
         self._route_id = route_id
         self._run_id = run_id
         self.clock = clock
@@ -189,10 +184,20 @@ class Meter:
         """What the requests in flight hold against the cap until they are settled."""
         return self._held
 
-    def wrap(self, model: Model, role: str, *, retries: bool = True) -> Model:
+    def wrap(
+        self, model: Model, role: str, *, retries: bool = True, route_id: str | None = None
+    ) -> Model:
         """`model` metered for `role`. Without retries, one attempt and no stop for a rate limit:
-        a fallback answers the failure (frontdesk.model_gateway.hedging)."""
-        return MeteredModel(model, meter=self, role=role, retries=retries)
+        a fallback answers the failure (frontdesk.model_gateway.hedging). `route_id`: the route of
+        a model other than the run's own (a fallback, a second try), priced at its own price."""
+        self._price_of(route_id)  # a route with no price is refused before any request
+        return MeteredModel(model, meter=self, role=role, retries=retries, route_id=route_id)
+
+    def _price_of(self, route_id: str | None) -> Price:
+        """The price of a route's requests: the run's own route when None."""
+        if route_id is None or route_id == self._route_id:
+            return self._price
+        return _token_price(self._budget, route_id)
 
     def drain(self) -> tuple[CallRecord, ...]:
         """The requests since the last drain, oldest first."""
@@ -227,7 +232,7 @@ class Meter:
         self._stop(STOP_BUDGET, message)
         raise UnboundedRequestError(message)
 
-    def reserve(self, max_tokens: int, role: str = "") -> float:
+    def reserve(self, max_tokens: int, role: str = "", route_id: str | None = None) -> float:
         """Refuse a request when the run has stopped or the budget has no room for it and for the
         requests in flight; otherwise hold the most it could cost, and return that.
 
@@ -236,7 +241,8 @@ class Meter:
             raise RunStoppedError(
                 f"the run has stopped ({self._stop_reason}): no further request is sent"
             )
-        most = self._price.cost(input_units=input_bound(role), output_units=max_tokens)
+        price = self._price_of(route_id)
+        most = price.cost(input_units=input_bound(role), output_units=max_tokens)
         try:
             self._budget.ensure_room(self._held + most)
         except BudgetExhaustedError as error:
@@ -272,9 +278,10 @@ class Meter:
             )
         )
 
-    def _append(self, kind: str, usd: float) -> None:
+    def _append(self, kind: str, usd: float, route_id: str | None = None) -> None:
+        route = route_id or self._route_id
         try:
-            self._budget.record(run_id=self._run_id, route_id=self._route_id, kind=kind, usd=usd)
+            self._budget.record(run_id=self._run_id, route_id=route, kind=kind, usd=usd)
         except (BudgetError, OSError) as error:
             # A ledger that cannot be written: the next request would be paid and uncounted.
             self._stop(STOP_LEDGER, self._ledger_detail(error, "appended to"))
@@ -300,7 +307,13 @@ class Meter:
             raise BudgetError(self._ledger_detail(error, "appended to")) from error
 
     def record(
-        self, role: str, response: ModelResponse, seconds: float, *, reserved: float
+        self,
+        role: str,
+        response: ModelResponse,
+        seconds: float,
+        *,
+        reserved: float,
+        route_id: str | None = None,
     ) -> None:
         """What the provider says the attempt used; `reserved` is the hold it gives back. An
         answer that reports no usage may still have been billed in full: it counts its reserve."""
@@ -308,10 +321,11 @@ class Meter:
         if usage.input_tokens + usage.output_tokens == 0:
             self.unconfirmed(role, reserved, seconds)
             return
-        usd = self._price.cost(input_units=usage.input_tokens, output_units=usage.output_tokens)
+        price = self._price_of(route_id)
+        usd = price.cost(input_units=usage.input_tokens, output_units=usage.output_tokens)
         self._failures[role] = 0  # answered with usage: whatever this agent failed is behind it
         try:
-            self._append("chat", usd)
+            self._append("chat", usd, route_id)
         finally:
             self.release(reserved)
         self._calls.append(
@@ -327,12 +341,14 @@ class Meter:
             )
         )
 
-    def unconfirmed(self, role: str, usd: float, seconds: float) -> None:
+    def unconfirmed(
+        self, role: str, usd: float, seconds: float, route_id: str | None = None
+    ) -> None:
         """A request that was sent but brought back no usage, recorded at its reserve `usd`, which
         is also the hold it gives back. It is one more failure in a row for `role`."""
         self._failures[role] = self._failures.get(role, 0) + 1
         try:
-            self._append("chat-unconfirmed", usd)
+            self._append("chat-unconfirmed", usd, route_id)
         finally:
             self.release(usd)
         self._calls.append(
@@ -349,14 +365,20 @@ class Meter:
         )
 
     def abandoned(
-        self, role: str, reserved: float, winner: RequestUsage, cap: int, seconds: float
+        self,
+        role: str,
+        reserved: float,
+        winner: RequestUsage,
+        cap: int,
+        seconds: float,
+        route_id: str | None = None,
     ) -> None:
         """A hedged twin cancelled after the other answered (frontdesk.model_gateway.hedging): the
         winner's input tokens and at most `cap` output tokens, which may have been billed. It is no
         failure in a row: its twin answered."""
-        usd = self._price.cost(input_units=winner.input_tokens, output_units=cap)
+        usd = self._price_of(route_id).cost(input_units=winner.input_tokens, output_units=cap)
         try:
-            self._append("chat-hedged", usd)
+            self._append("chat-hedged", usd, route_id)
         finally:
             self.release(reserved)
         self._calls.append(
@@ -392,6 +414,16 @@ class Meter:
         self._stop(
             STOP_UNAVAILABLE, f"{attempts} of the {role} in a row failed; the last request {how}"
         )
+
+
+def _token_price(budget: Budget, route_id: str) -> Price:
+    price = budget.price(route_id)
+    if price.unit != "tokens_1m":
+        raise BudgetError(
+            f"{budget.path}: route '{route_id}' is priced per {price.unit}, "
+            "and the meter counts tokens"
+        )
+    return price
 
 
 def retry_waits(role: str) -> tuple[float, ...]:
@@ -435,11 +467,20 @@ def _worth_retrying(error: Exception) -> bool:
 
 
 class MeteredModel(WrapperModel):
-    def __init__(self, wrapped: Model, *, meter: Meter, role: str, retries: bool = True) -> None:
+    def __init__(
+        self,
+        wrapped: Model,
+        *,
+        meter: Meter,
+        role: str,
+        retries: bool = True,
+        route_id: str | None = None,
+    ) -> None:
         super().__init__(wrapped)
         self._meter = meter
         self._role = role
         self._retries = retries
+        self._route_id = route_id
 
     async def request(
         self,
@@ -490,7 +531,8 @@ class MeteredModel(WrapperModel):
         cap: int,
     ) -> ModelResponse:
         """One attempt: held while it is away, settled as soon as it ends."""
-        reserved = self._meter.reserve(cap, self._role)
+        route = self._route_id
+        reserved = self._meter.reserve(cap, self._role, route)
         started = self._meter.clock()
         try:
             response = await super().request(messages, model_settings, model_request_parameters)
@@ -508,11 +550,12 @@ class MeteredModel(WrapperModel):
             twin = CURRENT_TWIN.get()
             with suppress(BudgetError, OSError):
                 if twin is not None and twin.abandoned and twin.winner is not None:
-                    self._meter.abandoned(self._role, reserved, twin.winner, cap, seconds)
+                    self._meter.abandoned(self._role, reserved, twin.winner, cap, seconds, route)
                 else:
-                    self._meter.unconfirmed(self._role, reserved, seconds)
+                    self._meter.unconfirmed(self._role, reserved, seconds, route)
             raise
-        self._meter.record(self._role, response, self._meter.clock() - started, reserved=reserved)
+        seconds = self._meter.clock() - started
+        self._meter.record(self._role, response, seconds, reserved=reserved, route_id=route)
         return response
 
     async def count_tokens(
