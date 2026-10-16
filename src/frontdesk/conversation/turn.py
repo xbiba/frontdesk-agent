@@ -56,6 +56,7 @@ from frontdesk.conversation.reception import (
     ReceptionReply,
     ReplyKind,
     history_messages,
+    reply_sources,
 )
 from frontdesk.conversation.reception_facts import render_facts
 from frontdesk.conversation.state import BookingStage, BookingStep, ConversationState
@@ -357,7 +358,7 @@ async def _reception(
         rule="pass",
         category=Category.ADMINISTRATIVE,
         intent=intent,
-        sources=tuple(dict.fromkeys(desk.sources)) or desk.document_sources,
+        sources=reply_sources(reply.text, desk.sources, desk.seen, desk.document_texts),
         booking=desk.booking,
         check_reasons=_sent_back(desk),
     )
@@ -428,7 +429,7 @@ def _desk(
         conversation="\n".join(entry.text for entry in state.history),
         booking=state.booking,
         documents=documents.text,
-        document_sources=documents.sources,
+        document_texts=documents.texts,
         previous=next(
             (entry.text for entry in reversed(state.history) if entry.role == "assistant"), ""
         ),

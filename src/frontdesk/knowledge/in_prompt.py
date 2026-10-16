@@ -44,7 +44,12 @@ def knowledge_chars(session: Session, business_id: str) -> int:
 @dataclass(frozen=True)
 class PromptDocuments:
     text: str  # each passage as "[heading]\ncontent", as search_information returns it
-    sources: tuple[str, ...]  # the keys of the documents it holds
+    texts: tuple[tuple[str, str], ...] = ()  # each document's key and its passages
+
+    @property
+    def sources(self) -> tuple[str, ...]:
+        """The keys of the documents it holds."""
+        return tuple(key for key, _ in self.texts)
 
 
 def documents_for(
@@ -53,7 +58,9 @@ def documents_for(
     """The active documents valid today, in `language` when it has some, else in every language."""
     chunks = valid_chunks(session, business_id=business_id, today=today)
     chosen = [chunk for chunk in chunks if chunk.language == language] or chunks
-    passages = [neutralized(chunk_evidence(chunk)) for chunk in chosen]
-    text = "\n\n".join(f"[{item.title}]\n{item.content}" for item in passages)
-    sources = tuple(dict.fromkeys(chunk.document_key for chunk in chosen))
-    return PromptDocuments(text, sources)
+    blocks: dict[str, list[str]] = {}
+    for chunk in chosen:
+        item = neutralized(chunk_evidence(chunk))
+        blocks.setdefault(chunk.document_key, []).append(f"[{item.title}]\n{item.content}")
+    texts = tuple((key, "\n\n".join(parts)) for key, parts in blocks.items())
+    return PromptDocuments("\n\n".join(text for _, text in texts), texts)
