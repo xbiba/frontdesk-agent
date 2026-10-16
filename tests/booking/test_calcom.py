@@ -18,7 +18,11 @@ from frontdesk.booking.calcom import (
     SLOTS_VERSION,
     CalcomScheduler,
 )
-from frontdesk.booking.calendar import CalendarUnavailableError, FixtureCalendar
+from frontdesk.booking.calendar import (
+    CalendarUnavailableError,
+    FixtureCalendar,
+    RequestGoneError,
+)
 from frontdesk.booking.scheduler import CalendarScheduler
 from frontdesk.booking.slots import Interval
 from frontdesk.tenancy.pack import BusinessPack, CalendarIntegration, Integrations
@@ -310,3 +314,84 @@ def test_the_appointments_to_come_are_read_page_by_page(pack: BusinessPack) -> N
     ]
     assert [request.url.params["status"] for request in seen] == ["upcoming,unconfirmed"] * 2
     assert seen[0].url.params["eventTypeIds"] == "7441781"
+
+
+# --- WhatsApp W1: the clinic confirms or declines a request ----------------------------------------
+
+
+def _request(
+    reference: str = "hold1", status: str = "pending", uid: str = "bk-1"
+) -> dict[str, Any]:
+    return {"uid": uid, "status": status, "metadata": {"frontdesk": reference}}
+
+
+def _deciding(seen: list[httpx2.Request], bookings: list[dict[str, Any]]) -> Handler:
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        if request.method == "GET":
+            return httpx2.Response(200, json={"status": "success", "data": bookings})
+        return httpx2.Response(200, json={"status": "success", "data": {"uid": "bk-1"}})
+
+    return answer
+
+
+def _decide(handler: Handler, pack: BusinessPack, *, accept: bool = True) -> None:
+    _scheduler(handler).decide(
+        pack, "dr-arben-demo", at(23, 10), at(23, 11), "hold1", accept=accept
+    )
+
+
+def test_a_pending_booking_is_confirmed(pack: BusinessPack) -> None:
+    seen: list[httpx2.Request] = []
+    _decide(_deciding(seen, [_request("hold2", uid="bk-other"), _request()]), pack, accept=True)
+    lookup, confirmed = seen
+    assert (lookup.method, lookup.url.path) == ("GET", "/v2/bookings")
+    assert lookup.url.params["eventTypeId"] == "7441781"
+    assert (confirmed.method, confirmed.url.path) == ("POST", "/v2/bookings/bk-1/confirm")
+    assert confirmed.headers["cal-api-version"] == BOOKINGS_VERSION
+
+
+def test_a_pending_booking_is_declined(pack: BusinessPack) -> None:
+    seen: list[httpx2.Request] = []
+    _decide(_deciding(seen, [_request()]), pack, accept=False)
+    assert [request.url.path for request in seen] == ["/v2/bookings", "/v2/bookings/bk-1/decline"]
+
+
+@pytest.mark.parametrize("status", ["accepted", "cancelled", "rejected"])
+def test_a_booking_no_longer_pending_is_gone(pack: BusinessPack, status: str) -> None:
+    seen: list[httpx2.Request] = []
+    with pytest.raises(RequestGoneError):
+        _decide(_deciding(seen, [_request(status=status)]), pack)
+    assert [request.method for request in seen] == ["GET"]
+
+
+def test_a_booking_never_found_is_gone(pack: BusinessPack) -> None:
+    seen: list[httpx2.Request] = []
+    with pytest.raises(RequestGoneError):
+        _decide(_deciding(seen, [_request("hold2")]), pack)
+    assert [request.method for request in seen] == ["GET"]
+
+
+def _timeout(request: httpx2.Request) -> httpx2.Response:
+    raise httpx2.ReadTimeout("slow", request=request)
+
+
+def _decision_fails(request: httpx2.Request) -> httpx2.Response:
+    if request.method == "GET":
+        return httpx2.Response(200, json={"status": "success", "data": [_request()]})
+    return httpx2.Response(502)
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        pytest.param(lambda request: httpx2.Response(503), id="lookup-5xx"),
+        pytest.param(_timeout, id="timeout"),
+        pytest.param(_decision_fails, id="decision-5xx"),
+    ],
+)
+def test_a_calendar_that_does_not_answer_is_unavailable(
+    pack: BusinessPack, handler: Handler
+) -> None:
+    with pytest.raises(CalendarUnavailableError):
+        _decide(handler, pack)

@@ -14,7 +14,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Final, Protocol
 from zoneinfo import ZoneInfo
 
-from frontdesk.booking.calendar import Calendar, FixtureCalendar
+from frontdesk.booking.calendar import Calendar, FixtureCalendar, RequestGoneError
 from frontdesk.booking.flow import entry_description
 from frontdesk.booking.reply import read_calendar
 from frontdesk.booking.slots import Interval, Slot, free_slots
@@ -73,6 +73,21 @@ class Scheduler(Protocol):
         CalendarUnavailableError."""
         ...
 
+    def decide(
+        self,
+        pack: BusinessPack,
+        doctor_id: str,
+        start: datetime,
+        end: datetime,
+        reference: str,
+        *,
+        accept: bool,
+    ) -> None:
+        """Confirms or declines the pending appointment booked with `reference` (W1). Raises
+        CalendarUnavailableError when the calendar does not answer, and RequestGoneError when the
+        appointment is no longer pending there."""
+        ...
+
 
 def by_day(
     intervals: tuple[Interval, ...] | list[Interval], zone: ZoneInfo
@@ -90,6 +105,7 @@ class CalendarScheduler:
     def __init__(self, calendar: Calendar) -> None:
         self.calendar = calendar
         self._made: list[Appointment] = []  # the appointments booked through this scheduler
+        self.decided: list[tuple[str, bool]] = []  # (reference, accept), in order
 
     def fresh(self) -> CalendarScheduler:
         """A fixture without the bookings made since; any other calendar as it is."""
@@ -168,3 +184,19 @@ class CalendarScheduler:
                 for item, phone in self.calendar.appointments(calendar_id, zone)
             ]
         return tuple(sorted((item for item in found if item.start > now), key=lambda a: a.start))
+
+    def decide(
+        self,
+        pack: BusinessPack,
+        doctor_id: str,
+        start: datetime,
+        end: datetime,
+        reference: str,
+        *,
+        accept: bool,
+    ) -> None:
+        """Records the decision of an appointment booked here, once."""
+        made = any(item.reference == reference for item in self._made)
+        if not made or any(done == reference for done, _ in self.decided):
+            raise RequestGoneError("not pending")
+        self.decided.append((reference, accept))
