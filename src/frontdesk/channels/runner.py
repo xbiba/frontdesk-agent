@@ -59,6 +59,7 @@ class Outcome(StrEnum):
     BUSY = "busy"  # another worker holds the conversation: Cloud Tasks tries again
     PAUSED = "paused"  # the staff has the thread
     FAILED = "failed"  # three turns failed: the handoff text went out
+    OFF = "off"  # the switch is off: no turn, the messages wait for it to come back on
 
 
 class _LeaseLostError(Exception):
@@ -198,9 +199,26 @@ class Runner:
             with self._session() as session:
                 _mark(session, pending, InStatus.DISCARDED, now)
             return Outcome.PAUSED
+        if self._off:
+            # No turn and no attempt counted: the messages wait, and are answered when the switch
+            # is back on, or failed by the purge after a day (final review of M4, M3).
+            return Outcome.OFF
         if max(message.attempts for message in pending) >= MAX_ATTEMPTS:
             self._give_up(key, pending, conversation, now)
             return Outcome.FAILED
+        if self._replies_today(key, now) >= MAX_REPLIES_A_DAY:
+            # Checked before the turn: past the cap, a turn would be paid for and dropped (final
+            # review of M4, M8).
+            log_alert(
+                logger,
+                "channel.reply_cap",
+                channel=self._channel,
+                conversation_id=key,
+                count=MAX_REPLIES_A_DAY,
+            )
+            with self._session() as session:
+                _mark(session, pending, InStatus.READ, now)
+            return Outcome.DONE
         self._count_attempt(pending, now)  # committed first: a turn that crashes still counts
         state = self._state(key, conversation, now)
         texts = [m.text for m in pending if m.kind == InboundKind.TEXT and m.text]
@@ -216,15 +234,6 @@ class Runner:
                 slowed = now
         if any(m.kind == InboundKind.ATTACHMENT for m in pending):
             replies.append(("fixed", self._fixed(following, FixedTextKey.ATTACHMENT)))
-        if replies and self._replies_today(key, now) >= MAX_REPLIES_A_DAY:
-            log_alert(
-                logger,
-                "channel.reply_cap",
-                channel=self._channel,
-                conversation_id=key,
-                count=MAX_REPLIES_A_DAY,
-            )
-            replies = []
         self._finish(key, conversation.token, pending, following, replies, slowed, now)
         return Outcome.DONE
 

@@ -424,10 +424,34 @@ async def test_at_most_sixty_replies_a_day(
         )
     _say(inbox, "m1", "Ciao")
     clock.advance(seconds=3)
+    turn = FakeTurn()
+    runner = _runner(factory, clock, clinic_pack, sender, turn)
     with caplog.at_level(logging.INFO, logger="frontdesk.channels.runner"):
         assert await runner.process(KEY) is Outcome.DONE
     assert _replies(sender) == []
     assert any(r.levelno == logging.ERROR and r.msg == "channel.reply_cap" for r in caplog.records)
+    # Final review of M4, M8: past the cap no turn runs, so no model call is paid for it.
+    assert turn.texts == []
+    (message,) = [m for m in _messages(factory, "in") if m.external_id == "m1"]
+    assert (message.status, message.text) == (InStatus.READ, None)
+
+
+async def test_the_switch_runs_no_turn_and_leaves_the_messages_waiting(
+    inbox: Inbox, factory: sessionmaker[Session], clock: Clock, clinic_pack: BusinessPack
+) -> None:
+    # Final review of M4, M3: switched off, a stored message still went to the model, and was
+    # never answered once the switch was back on.
+    sender, turn = FakeSender(), FakeTurn()
+    await _welcomed(_runner(factory, clock, clinic_pack, sender, turn))
+    _say(inbox, "m1", "Ciao")
+    clock.advance(seconds=3)
+    off = _runner(factory, clock, clinic_pack, sender, turn, off=True)
+    assert await off.process(KEY) is Outcome.OFF
+    assert turn.texts == []
+    (message,) = [m for m in _messages(factory, "in") if m.external_id == "m1"]
+    assert (message.status, message.attempts) == (InStatus.PENDING, 0)
+    assert await _runner(factory, clock, clinic_pack, sender, turn).process(KEY) is Outcome.DONE
+    assert _replies(sender) == ["Risposta: Ciao"]
 
 
 async def test_a_worker_that_lost_its_lease_queues_and_sends_nothing(
