@@ -78,11 +78,19 @@ def says_booked(reply: str) -> bool:
     """Whether the reply says a booking, or a request for one, is done. A question is read as any
     clause (security review, 2026-10-16): the summaries ask with no word of a booking done."""
     return any(
-        not _negated(clause, match)
-        for clause in _CLAUSE_BREAK.split(reply)
-        for pattern in _CLAIMS
-        for match in pattern.finditer(clause)  # every match: a negated one may come first
+        _claims(clause, pattern) for clause in _CLAUSE_BREAK.split(reply) for pattern in _CLAIMS
     )
+
+
+def _claims(clause: str, pattern: re.Pattern[str]) -> bool:
+    """A match of `pattern` in the clause that no negation cancels. After a negated one, the search
+    goes on from its next character: a claim may overlap it ("No visit fee booking is confirmed")."""
+    match = pattern.search(clause)
+    while match is not None:
+        if not _negated(clause, match):
+            return True
+        match = pattern.search(clause, match.start() + 1)
+    return False
 
 
 def _negated(clause: str, match: re.Match[str]) -> bool:
