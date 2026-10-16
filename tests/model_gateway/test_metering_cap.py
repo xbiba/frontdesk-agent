@@ -8,7 +8,7 @@ from pathlib import Path
 
 import httpx2
 import pytest
-from pydantic_ai import Agent, ModelResponse, TextPart
+from pydantic_ai import Agent, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models import ModelRequestContext, ModelRequestParameters
@@ -247,3 +247,30 @@ async def test_the_reception_agent_s_requests_have_a_larger_bound(tmp_path: Path
     assert sent == ["request"]
     with pytest.raises(UnboundedRequestError, match="96000 tokens"):
         await Agent(meter.wrap(model, "agent")).run("\N{EURO SIGN}" * 33_000, model_settings=CAP)
+
+
+async def test_the_instructions_count_once_however_many_requests_the_turn_made(
+    tmp_path: Path,
+) -> None:
+    # Run agent-12 (2026-10-16): every earlier request of a turn keeps a copy of its instructions,
+    # which is not sent again; counted each time, a turn's sixth request passed the bound. 30,000
+    # bytes of instructions, three requests: sent with one copy, refused with three.
+    calls: list[int] = []
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        calls.append(len(calls))
+        if len(calls) < 3:
+            return ModelResponse(parts=[ToolCallPart("look_up", {"question": "q"})], usage=SMALL)
+        return ModelResponse(parts=[TextPart("ok")], usage=SMALL)
+
+    def look_up(question: str) -> str:
+        return question
+
+    meter = Meter(write_budget(tmp_path), route_id=ROUTE, run_id="run-1")
+    agent = Agent(
+        meter.wrap(FunctionModel(model), "agent"),
+        instructions="\N{EURO SIGN}" * 10_000,
+        tools=[look_up],
+    )
+    result = await agent.run("x", model_settings=CAP)
+    assert (result.output, calls) == ("ok", [0, 1, 2])

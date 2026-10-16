@@ -36,14 +36,19 @@ import asyncio
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Final, NoReturn
 
 import httpx2
 from google.auth.exceptions import GoogleAuthError
 from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelHTTPError
-from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter, ModelResponse
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    ModelRequest,
+    ModelResponse,
+)
 from pydantic_ai.models import (
     Model,
     ModelRequestContext,
@@ -442,8 +447,15 @@ def input_bound(role: str) -> int:
 
 
 def _request_bytes(messages: list[ModelMessage], parameters: ModelRequestParameters) -> int:
-    """The UTF-8 length of what a request carries: its messages, instructions included, and the
-    definitions of its tools."""
+    """The UTF-8 length of what a request carries: its messages, its instructions and the
+    definitions of its tools. The instructions in force come with the parameters; each earlier
+    request of the run keeps a copy of its own, which is not sent again. Counted each time, they
+    took a turn's sixth request past the bound (run agent-12, 2026-10-16)."""
+    if parameters.instruction_parts is not None:
+        messages = [
+            replace(message, instructions=None) if isinstance(message, ModelRequest) else message
+            for message in messages
+        ]
     return len(ModelMessagesTypeAdapter.dump_json(messages)) + len(
         to_json(parameters, fallback=str)
     )
