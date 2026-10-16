@@ -24,7 +24,7 @@ from frontdesk.booking.scheduler import CalendarScheduler
 from frontdesk.composition import Deployment, build_scheduler, build_turn_runtime, open_deployment
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, handle_message
-from frontdesk.knowledge.embedders import HashEmbedder
+from frontdesk.knowledge.embedders import HashEmbedder, NoEmbedder
 from frontdesk.model_gateway import google_tokens
 from frontdesk.model_gateway.daily_cap import CappedModel
 from frontdesk.model_gateway.routes import (
@@ -34,6 +34,7 @@ from frontdesk.model_gateway.routes import (
     OutputLimits,
     UnapprovedRouteError,
 )
+from frontdesk.model_gateway.second_try import SecondTryModel
 from frontdesk.settings import CalendarBackend, EmbeddingBackend, Settings
 from frontdesk.shop.orders import OrderStore
 from frontdesk.tenancy.pack import BusinessPack, CalendarIntegration, Integrations, Profile
@@ -581,10 +582,12 @@ def test_the_agent_on_3_8_flash_falls_back_to_flash_lite(
         )
 
     monkeypatch.setattr("frontdesk.composition.build_live_model", build)
-    wrapped: list[tuple[str, str, bool]] = []
+    wrapped: list[tuple[str, str, bool, str | None]] = []
 
-    def wrap(model: Model, role: str, *, retries: bool = True) -> Model:
-        wrapped.append((model.model_name, role, retries))
+    def wrap(
+        model: Model, role: str, *, retries: bool = True, route_id: str | None = None
+    ) -> Model:
+        wrapped.append((model.model_name, role, retries, route_id))
         return model
 
     deployment = _deployment(
@@ -596,8 +599,54 @@ def test_the_agent_on_3_8_flash_falls_back_to_flash_lite(
         gcp_project="p",
     )
     build_turn_runtime(deployment, data_class=DataClass.EVALUATION, wrap_model=wrap)
-    assert ("gemini-3.8-flash", "agent", False) in wrapped
-    assert ("gemini-3.1-flash-lite", "agent", True) in wrapped
+    assert ("gemini-3.8-flash", "agent", False, None) in wrapped
+    # The fallback is priced at its own route's price.
+    assert ("gemini-3.1-flash-lite", "agent", True, "vertex-eu-gemini-flash-lite") in wrapped
+
+
+@pytest.mark.db
+def test_the_agent_on_3_5_flash_lite_writes_again_on_3_8_flash(
+    activate_pack: Activate,
+    app_url: str,
+    clinic_pack: BusinessPack,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Albi, 2026-10-16: 3.5 Flash-Lite leads; 3.8 Flash writes again a reply a check sent back,
+    # and answers a request 3.5 Flash-Lite fails.
+    monkeypatch.setattr(
+        "frontdesk.composition.build_live_model",
+        lambda route, *, gcp_project: FunctionModel(
+            lambda messages, info: ModelResponse(parts=[]), model_name=route.model_name
+        ),
+    )
+    wrapped: list[tuple[str, bool, str | None]] = []
+
+    def wrap(
+        model: Model, role: str, *, retries: bool = True, route_id: str | None = None
+    ) -> Model:
+        if role == "agent":
+            wrapped.append((model.model_name, retries, route_id))
+        return model
+
+    deployment = _deployment(
+        clinic_pack,
+        activate_pack(clinic_pack),
+        app_url=app_url,
+        model_route="vertex-eu-gemini-flash-lite-3-5",
+        conversation="agent",
+        gcp_project="p",
+    )
+    runtime = build_turn_runtime(deployment, data_class=DataClass.EVALUATION, wrap_model=wrap)
+    assert runtime.reception is not None
+    assert isinstance(runtime.reception.model, SecondTryModel)
+    assert sorted(wrapped, key=str) == sorted(
+        [
+            ("gemini-3.5-flash-lite", False, None),  # the fallback answers its failures
+            ("gemini-3.8-flash", True, "vertex-eu-gemini-flash"),  # the fallback
+            ("gemini-3.8-flash", True, "vertex-eu-gemini-flash"),  # the second try
+        ],
+        key=str,
+    )
 
 
 @pytest.mark.db
@@ -628,3 +677,52 @@ def test_a_daily_cap_needs_the_prices_and_meters_every_agent(
     priced = _deployment(clinic_pack, factory, app_url=app_url, prices_file=prices, **capped)
     runtime = build_turn_runtime(priced, data_class=DataClass.EVALUATION)
     assert isinstance(runtime.classifier.model, CappedModel)
+
+
+def _tools(agent: Any) -> set[str]:
+    return {name for toolset in agent.toolsets for name in getattr(toolset, "tools", {})}
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(("limit", "in_prompt"), [(None, True), (10, False)])
+def test_a_small_pack_s_documents_ride_in_the_prompt_and_a_large_one_s_are_searched(
+    activate_pack: Activate,
+    app_url: str,
+    clinic_pack: BusinessPack,
+    monkeypatch: pytest.MonkeyPatch,
+    limit: int | None,
+    in_prompt: bool,
+) -> None:
+    # Albi, 2026-10-16: below the limit, every document in the prompt and no search tool.
+    if limit is not None:
+        monkeypatch.setattr("frontdesk.composition.IN_PROMPT_CHARS", limit)
+    deployment = _deployment(
+        clinic_pack, activate_pack(clinic_pack), app_url=app_url, conversation="agent"
+    )
+    runtime = build_turn_runtime(deployment, data_class=DataClass.EVALUATION)
+    assert runtime.documents_in_prompt is in_prompt
+    assert runtime.reception is not None
+    assert ("search_information" in _tools(runtime.reception)) is not in_prompt
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    ("conversation", "limit"), [("agent", 10), ("pipeline", None)], ids=["large-pack", "pipeline"]
+)
+def test_a_deployment_without_an_embedder_never_has_documents_to_search(
+    activate_pack: Activate,
+    app_url: str,
+    clinic_pack: BusinessPack,
+    monkeypatch: pytest.MonkeyPatch,
+    conversation: str,
+    limit: int | None,
+) -> None:
+    if limit is not None:
+        monkeypatch.setattr("frontdesk.composition.IN_PROMPT_CHARS", limit)
+    factory = activate_pack(clinic_pack, NoEmbedder())
+    deployment = replace(
+        _deployment(clinic_pack, factory, app_url=app_url, conversation=conversation),
+        embedder=NoEmbedder(),
+    )
+    with pytest.raises(ValueError, match="no embedder to search them"):
+        build_turn_runtime(deployment, data_class=DataClass.EVALUATION)

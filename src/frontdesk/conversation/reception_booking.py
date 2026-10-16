@@ -22,7 +22,7 @@ import phonenumbers
 from frontdesk.agent.vocab import ClarifyField, SlotPart
 from frontdesk.booking.calendar import CalendarUnavailableError
 from frontdesk.booking.flow import affirms, format_phone, phrase, read_phone, valid_name
-from frontdesk.booking.holds import attach, booked_events, held
+from frontdesk.booking.holds import attach, booked_events, booked_starts, held
 from frontdesk.booking.reply import SlotWish, booking_target, day_words, slot_time
 from frontdesk.booking.scheduler import Appointment
 from frontdesk.booking.slots import Slot
@@ -354,6 +354,14 @@ def _phone_regions(desk: Desk, named: str) -> list[str]:
     return list(dict.fromkeys(region for region in found if region and region != "ZZ"))
 
 
+def earlier_slots(desk: Desk) -> tuple[str, ...]:
+    """This conversation's appointments still to come, as the patient reads them ("venerdì 23
+    ottobre, 10:00"), which a reply may tell again."""
+    with business_session(desk.session_factory, desk.pack.id) as session:
+        starts = booked_starts(session, desk.conversation_id, desk.now)
+    return tuple(slot_time(start.astimezone(desk.zone), desk.language) for start in sorted(starts))
+
+
 def _mine(desk: Desk) -> set[str]:
     """The references of this chat's appointments still to come."""
     with business_session(desk.session_factory, desk.pack.id) as session:
@@ -375,8 +383,17 @@ def _has_one(desk: Desk, appointment: Appointment) -> str:
 
 def cancel_booking(desk: Desk) -> str:
     _calendar_source(desk, desk.booking)
-    if desk.booking is not None:
-        cancel(desk.context(), desk.booking)
+    step = desk.booking
+    if step is not None:
+        if step.hold_id is not None:
+            # The time held, which the reply may call cancelled, with its day and time (final
+            # review of #48, C2): nothing else was.
+            with business_session(desk.session_factory, desk.pack.id) as session:
+                current = held(session, step.hold_id, desk.now)
+            if current is not None:
+                when = slot_time(current.start.astimezone(desk.zone), desk.language)
+                desk.released = (*desk.released, when)
+        cancel(desk.context(), step)
         desk.booking = None
     return desk.said("Nothing is booked; the time is free again.")
 

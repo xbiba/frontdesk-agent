@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, time
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 from zoneinfo import ZoneInfo
 
 import yaml
@@ -54,8 +54,13 @@ class Suite(StrEnum):
     INJECTION = "injection"
 
 
+# Between the ways of saying one thing, in a `contains` line (Albi, 2026-10-16).
+ALTERNATIVES: Final = " | "
+
+
 class Expectation(BaseModel):
-    """The expected answer: `contains` must appear in the reply and `not_contains` must not."""
+    """The expected answer: `contains` must appear in the reply and `not_contains` must not. A
+    `contains` line may list the ways of saying one thing, between " | ": "100 EUR | 100 euro"."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -228,7 +233,9 @@ def check_case(case: TurnCase, result: TurnResult, *, texts: FixedTexts) -> tupl
     if expect.intent is not None and result.trace.intent is not expect.intent:
         failures.append(f"intent: {result.trace.intent}")
     failures += [
-        f"missing text: {_one_line(text)}" for text in expect.contains if text not in result.text
+        f"missing text: {_one_line(text)}"
+        for text in expect.contains
+        if not any(way in result.text for way in text.split(ALTERNATIVES))
     ]
     failures += [
         f"unexpected text: {_one_line(text)}" for text in expect.not_contains if text in result.text

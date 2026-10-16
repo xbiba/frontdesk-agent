@@ -144,3 +144,21 @@ def test_a_region_without_a_pinned_endpoint_is_refused(region: str | None) -> No
     )
     with pytest.raises(UnapprovedRouteError, match="no pinned endpoint"):
         build_live_model(route, gcp_project="demo-project")
+
+
+@pytest.mark.parametrize(
+    "route", [route for route in ROUTES.values() if route.fallback or route.second_try]
+)
+def test_a_fallback_and_a_second_try_take_the_data_the_route_takes(route: ModelRoute) -> None:
+    # The model a turn moves to may receive what the route receives.
+    for other_id in filter(None, (route.fallback, route.second_try)):
+        other = ROUTES[other_id]
+        assert other.provider in CHAT_PROVIDERS
+        assert route.approved_for <= other.approved_for
+
+
+@pytest.mark.parametrize("route", [route for route in ROUTES.values() if route.second_try])
+def test_a_second_try_thinks_as_its_route(route: ModelRoute) -> None:
+    # It writes the reply with the route's own settings (frontdesk.model_gateway.second_try).
+    assert route.second_try is not None
+    assert ROUTES[route.second_try].thinking == route.thinking

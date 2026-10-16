@@ -35,9 +35,14 @@ class Desk:
     facts: str
     conversation: str  # the conversation so far, as text: a number in it may be repeated
     booking: BookingStep | None
+    documents: str = ""  # the clinic's documents, when they ride in the prompt
+    # Each document's key and text: the sources of a reply (frontdesk.conversation.reception).
+    document_texts: tuple[tuple[str, str], ...] = ()
+    previous: str = ""  # the agent's last message, which a reply may not repeat word for word
     seen: list[str] = field(default_factory=list)  # what the tools returned this turn
     sources: list[str] = field(default_factory=list)
     booked: bool = False
+    released: tuple[str, ...] = ()  # the held times cancel_booking let go of, as "venerdì 23…"
     summary: str | None = None  # the summary prepare_booking wrote this turn, shown as written
     booked_text: str | None = None  # what confirm_booking said when it booked
     rejected: list[str] = field(default_factory=list)  # the codes of the replies sent back

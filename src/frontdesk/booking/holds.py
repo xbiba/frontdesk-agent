@@ -118,6 +118,21 @@ def mark_booked(session: Session, hold_id: uuid.UUID, event_id: str) -> None:
     )
 
 
+def booked_starts(session: Session, conversation_id: str, now: datetime) -> list[datetime]:
+    """When the conversation's appointments still to come begin."""
+    return [
+        during.lower
+        for during in session.scalars(
+            select(BookingHold.during).where(
+                BookingHold.conversation_id == conversation_id,
+                BookingHold.status == "booked",
+                BookingHold.expires_at > now,
+            )
+        )
+        if during.lower is not None
+    ]
+
+
 def booked_events(session: Session, conversation_id: str, now: datetime) -> list[str]:
     """The calendar's references of the conversation's appointments still to come."""
     return [

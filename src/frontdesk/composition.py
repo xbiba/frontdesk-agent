@@ -8,7 +8,7 @@ refuses to start when its active knowledge was embedded by another model.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import Literal, Protocol
 from zoneinfo import ZoneInfo
@@ -36,8 +36,9 @@ from frontdesk.conversation.desk import Desk
 from frontdesk.conversation.reception import ReceptionReply, build_reception
 from frontdesk.conversation.turn import TurnRuntime
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
-from frontdesk.knowledge.embedders import Embedder, build_embedder
+from frontdesk.knowledge.embedders import IN_PROMPT_CHARS, Embedder, NoEmbedder, build_embedder
 from frontdesk.knowledge.facts import load_catalog
+from frontdesk.knowledge.in_prompt import knowledge_chars
 from frontdesk.knowledge.versions import check_embedder
 from frontdesk.model_gateway.costs import load_budget
 from frontdesk.model_gateway.daily_cap import CappedModel, DailyCap
@@ -51,6 +52,7 @@ from frontdesk.model_gateway.routes import (
     UnapprovedRouteError,
     require_route,
 )
+from frontdesk.model_gateway.second_try import SecondTryModel
 from frontdesk.secrets import CLOUD_SCOPE, read_secret
 from frontdesk.settings import CalendarBackend, Conversation, Settings
 from frontdesk.shop.orders import OrderStore
@@ -62,16 +64,21 @@ AgentRole = Literal["classifier", "responder", "agent"]
 
 class ModelWrapper(Protocol):
     """What meters a model for an agent's role; without retries when a fallback answers its
-    failures (frontdesk.model_gateway.metering)."""
+    failures (frontdesk.model_gateway.metering). `route_id`: the route of a model other than the
+    deployment's own (a fallback, a second try), priced at its own price."""
 
-    def __call__(self, model: Model, role: AgentRole, *, retries: bool = True) -> Model: ...
+    def __call__(
+        self, model: Model, role: AgentRole, *, retries: bool = True, route_id: str | None = None
+    ) -> Model: ...
 
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _unwrapped(model: Model, role: AgentRole, *, retries: bool = True) -> Model:
+def _unwrapped(
+    model: Model, role: AgentRole, *, retries: bool = True, route_id: str | None = None
+) -> Model:
     return model
 
 
@@ -95,27 +102,44 @@ def _capped(deployment: Deployment, route: ModelRoute) -> ModelWrapper | None:
         clock=_utc_now,
     )
 
-    def capped(model: Model, role: AgentRole, *, retries: bool = True) -> Model:
-        return CappedModel(model, cap)
+    def capped(
+        model: Model, role: AgentRole, *, retries: bool = True, route_id: str | None = None
+    ) -> Model:
+        if route_id is None or route_id == route.route_id:
+            return CappedModel(model, cap)
+        return CappedModel(model, replace(cap, price=prices.price(route_id)))
 
     return capped
 
 
-def _hedged(
+def _agent_model(
     route: ModelRoute,
     model: Model,
     wrap: ModelWrapper,
     deployment: Deployment,
     data_class: DataClass,
 ) -> Model:
-    """The agent's model: a stuck request gets a twin (Albi, 2026-10-12), and a failure goes to the
-    route's fallback, when it names one (Albi, 2026-10-13)."""
+    """The agent's model: a stuck request gets a twin (Albi, 2026-10-12), a failure goes to the
+    route's fallback, when it names one (Albi, 2026-10-13), and a reply a check sent back goes to
+    its second try, when it names one, with the rest of the turn (Albi, 2026-10-16). The second try
+    has no fallback: a failure there ends the turn with the handoff, as a second refusal does."""
+    project = deployment.settings.gcp_project
     if route.fallback is None:
-        return HedgedModel(wrap(model, "agent"))
-    spare = build_live_model(
-        require_route(route.fallback, data_class), gcp_project=deployment.settings.gcp_project
-    )
-    return HedgedModel(wrap(model, "agent", retries=False), fallback=wrap(spare, "agent"))
+        first = HedgedModel(wrap(model, "agent"))
+    else:
+        spare_route = require_route(route.fallback, data_class)
+        spare = wrap(
+            build_live_model(spare_route, gcp_project=project),
+            "agent",
+            route_id=spare_route.route_id,
+        )
+        first = HedgedModel(wrap(model, "agent", retries=False), fallback=spare)
+    if route.second_try is None:
+        return first
+    second_route = require_route(route.second_try, data_class)
+    second = build_live_model(second_route, gcp_project=project)
+    wrapped = wrap(second, "agent", route_id=second_route.route_id)
+    return SecondTryModel(first, second=HedgedModel(wrapped))
 
 
 @dataclass(frozen=True)
@@ -186,6 +210,7 @@ def build_turn_runtime(
     with business_session(deployment.session_factory, pack.id) as session:
         catalog = load_catalog(session, pack.id)
         check_embedder(session, pack.id, deployment.embedder)
+        in_prompt = _documents_in_prompt(deployment, knowledge_chars(session, pack.id))
     if catalog is None:
         raise NoActiveKnowledgeError(pack.id)
     services = ToolServices(
@@ -209,7 +234,10 @@ def build_turn_runtime(
             # The offline path of a deployment the agent leads: the rules, then the agent's stand-in.
             reception_prompt = read_prompt(pack.profile, "reception")
             reception = build_reception(
-                demo_reception_model(), pack.profile, instructions=reception_prompt.text
+                demo_reception_model(),
+                pack.profile,
+                instructions=reception_prompt.text,
+                search=not in_prompt,
             )
             reception_version = reception_prompt.version
     else:
@@ -231,10 +259,11 @@ def build_turn_runtime(
         if deployment.settings.conversation is Conversation.AGENT:
             reception_prompt = read_prompt(pack.profile, "reception")
             reception = build_reception(
-                _hedged(route, model, wrap, deployment, data_class),
+                _agent_model(route, model, wrap, deployment, data_class),
                 pack.profile,
                 model_settings=live_model_settings(route, max_tokens=route.output_limits.agent),
                 instructions=reception_prompt.text,
+                search=not in_prompt,
             )
             reception_version = reception_prompt.version
     return TurnRuntime(
@@ -245,6 +274,7 @@ def build_turn_runtime(
         responder_prompt_version=responder_prompt.version,
         reception=reception,
         reception_prompt_version=reception_version,
+        documents_in_prompt=in_prompt,
         session_factory=deployment.session_factory,
         embedder=deployment.embedder,
         today=business_today,
@@ -260,6 +290,21 @@ def build_turn_runtime(
             else None
         ),
     )
+
+
+def _documents_in_prompt(deployment: Deployment, size: int) -> bool:
+    """Whether the reception agent reads the documents in its prompt instead of searching them
+    (Albi, 2026-10-16): a small pack's, `size` characters up to IN_PROMPT_CHARS. A deployment with
+    no embedder (FRONTDESK_EMBEDDING_BACKEND=none) has nothing to search with otherwise."""
+    agent = deployment.settings.conversation is Conversation.AGENT
+    in_prompt = agent and size <= IN_PROMPT_CHARS
+    if not in_prompt and isinstance(deployment.embedder, NoEmbedder):
+        searched = f"{size} characters of documents" if agent else "the pipeline's documents"
+        raise ValueError(
+            f"{searched} are searched, more than the {IN_PROMPT_CHARS} the agent's prompt holds: "
+            "FRONTDESK_EMBEDDING_BACKEND=none leaves no embedder to search them"
+        )
+    return in_prompt
 
 
 def build_scheduler(settings: Settings, *, write: bool = False) -> Scheduler | None:

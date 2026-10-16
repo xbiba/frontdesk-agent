@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
 from frontdesk.db.models import Chunk, Document, KnowledgeVersion, Record
 from frontdesk.knowledge.chunking import chunk_markdown
-from frontdesk.knowledge.embedders import Embedder, HashEmbedder
+from frontdesk.knowledge.embedders import Embedder, HashEmbedder, NoEmbedder
 from frontdesk.knowledge.versions import (
     EmbedderMismatchError,
     KnowledgeStateError,
@@ -669,3 +669,30 @@ def test_a_new_map_version_approver_or_date_is_a_new_draft_and_shows_in_the_repo
     assert second.unchanged is False
     assert second.version_id != first.version_id
     assert f'- changed: orientation_map:approval\n  - {field}: "{before}" → "{after}"' in report
+
+
+def test_with_no_embedder_a_version_is_activated_without_vectors(
+    factory: sessionmaker[Session], clinic_pack: BusinessPack
+) -> None:
+    # Albi, 2026-10-16: the knowledge of a small pack rides in the prompt and is never searched.
+    with business_session(factory, clinic_pack.id) as session:
+        version_id = _activate(session, clinic_pack, embedder=NoEmbedder())
+        assert (
+            _chunk_count(session, version_id)
+            == _chunk_count(session, version_id, unembedded=True)
+            > 0
+        )
+        check_embedder(session, clinic_pack.id, NoEmbedder())
+        assert reembed_active(session, clinic_pack.id, NoEmbedder()) == 0
+
+
+def test_with_no_embedder_a_version_too_large_for_the_prompt_is_never_activated(
+    factory: sessionmaker[Session], clinic_pack: BusinessPack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Final review of #48, M1: running workers would put the whole larger set in every prompt.
+    monkeypatch.setattr("frontdesk.knowledge.versions.IN_PROMPT_CHARS", 10)
+    with business_session(factory, clinic_pack.id) as session:
+        draft = create_draft(session, clinic_pack)
+        approve(session, draft.version_id, approved_by="Owner", evidence="signed sheet", now=NOW)
+        with pytest.raises(KnowledgeStateError, match="searched"):
+            activate(session, draft.version_id, NoEmbedder(), now=NOW)

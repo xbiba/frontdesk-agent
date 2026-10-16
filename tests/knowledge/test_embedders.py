@@ -7,6 +7,7 @@ from frontdesk.knowledge.embedders import (
     DEMO_MODEL,
     FastEmbedEmbedder,
     HashEmbedder,
+    NoEmbedder,
     build_embedder,
     cosine,
 )
@@ -55,3 +56,12 @@ def test_demo_model_relates_albanian_and_italian() -> None:
     assert len(sq) == EMBEDDING_DIM
     assert cosine(sq, it) > cosine(sq, other)
     assert embedder.identity == f"fastembed:{DEMO_MODEL}"
+
+
+def test_a_deployment_may_have_no_embedder_and_then_searches_nothing() -> None:
+    # Albi, 2026-10-16: a small pack's knowledge rides in the prompt, with no model in the image.
+    embedder = build_embedder(EmbeddingBackend.NONE)
+    assert isinstance(embedder, NoEmbedder)
+    assert embedder.identity == "none"
+    with pytest.raises(RuntimeError, match="no embedder"):
+        embedder.embed(["Sa kushton?"])

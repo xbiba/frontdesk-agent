@@ -480,3 +480,15 @@ def test_a_handoff_in_the_agent_s_words_gives_the_contact_number() -> None:
     silent = _result("Si rivolga alla reception.", TurnOutcome.HANDOFF)
     assert check_reply(said, texts=texts) == ()
     assert check_reply(silent, texts=texts) == ("handoff without contact",)
+
+
+@pytest.mark.parametrize(
+    ("reply", "passes"),
+    [("Costa 100 EUR.", True), ("Costa 100 euro.", True), ("Costa 100 lekë.", False)],
+)
+def test_a_line_the_reply_must_say_may_list_its_ways_of_saying_it(reply: str, passes: bool) -> None:
+    # Albi, 2026-10-16: "100 euro" is the right price as much as "100 EUR".
+    case = _case("Quanto costa?", contains=["100 EUR | 100 euro"])
+    failures = check_case(case, _result(reply), texts=TEXTS)
+    assert (not failures) is passes
+    assert failures in ((), ("missing text: 100 EUR | 100 euro",))

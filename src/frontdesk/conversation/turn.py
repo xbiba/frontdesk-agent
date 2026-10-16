@@ -56,6 +56,7 @@ from frontdesk.conversation.reception import (
     ReceptionReply,
     ReplyKind,
     history_messages,
+    reply_sources,
 )
 from frontdesk.conversation.reception_facts import render_facts
 from frontdesk.conversation.state import BookingStage, BookingStep, ConversationState
@@ -63,6 +64,7 @@ from frontdesk.db.engine import business_session
 from frontdesk.knowledge.embedders import Embedder
 from frontdesk.knowledge.evidence import Evidence, EvidenceKind
 from frontdesk.knowledge.facts import Catalog, load_catalog
+from frontdesk.knowledge.in_prompt import PromptDocuments, documents_for
 from frontdesk.model_gateway.daily_cap import SpendCapReachedError
 from frontdesk.model_gateway.hedging import fallback_turn
 from frontdesk.observability.logs import log_event
@@ -201,6 +203,9 @@ class TurnRuntime:
     # The reception agent leads the conversation when set (FRONTDESK_CONVERSATION=agent).
     reception: Agent[Desk, ReceptionReply] | None = None
     reception_prompt_version: str | None = None
+    # A small pack's documents ride in the agent's prompt, and it has no search tool
+    # (frontdesk.knowledge.in_prompt, Albi, 2026-10-16).
+    documents_in_prompt: bool = False
 
 
 async def handle_message(
@@ -353,7 +358,7 @@ async def _reception(
         rule="pass",
         category=Category.ADMINISTRATIVE,
         intent=intent,
-        sources=tuple(dict.fromkeys(desk.sources)),
+        sources=reply_sources(reply.text, desk.sources, desk.seen, desk.document_texts),
         booking=desk.booking,
         check_reasons=_sent_back(desk),
     )
@@ -402,6 +407,11 @@ def _desk(
     books = runtime.scheduler is not None and calendar is not None and calendar.chat_booking
     with business_session(runtime.session_factory, pack.id) as session:
         facts = render_facts(session, pack, catalog, language, runtime.today(), chat_booking=books)
+        documents = (
+            documents_for(session, pack.id, runtime.today(), language)
+            if runtime.documents_in_prompt
+            else PromptDocuments("", ())
+        )
     return Desk(
         pack=pack,
         catalog=catalog,
@@ -418,6 +428,11 @@ def _desk(
         facts=facts,
         conversation="\n".join(entry.text for entry in state.history),
         booking=state.booking,
+        documents=documents.text,
+        document_texts=documents.texts,
+        previous=next(
+            (entry.text for entry in reversed(state.history) if entry.role == "assistant"), ""
+        ),
     )
 
 

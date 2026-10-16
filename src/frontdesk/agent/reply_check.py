@@ -11,21 +11,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date
 from typing import Final
 
 from frontdesk.agent.answer_check import links_in, numbers_in
+from frontdesk.agent.claims import says_booked, says_cancelled
+from frontdesk.agent.weekdays import days_named, wrong_weekdays
 from frontdesk.booking.reply import MONTHS
 from frontdesk.safety.rules import contains_diagnostic_language, promise_phrase
-
-# Saying a booking is done: only the booking tool may lead to these words.
-_BOOKED: Final = re.compile(
-    r"prenotazione (?:è )?confermata|ho prenotato|è stat[oa] prenotat"
-    r"|booking (?:is )?confirmed|(?:i have|i've) booked|you are booked|you're booked"
-    r"|rezervimi (?:u )?konfirmua|kam rezervuar|u rezervua"
-    r"|richiesta (?:è stata )?inviata|request (?:has been )?sent|kërkesa (?:për rezervim )?u dërgua",
-    re.IGNORECASE,
-)
-
 
 # Saying the clinic offers only some services, or not one: the agent knows the services it prices,
 # and the clinic has more ("Klinika jonë ofron vetëm trajtime osteopatike", "Non disponiamo delle
@@ -114,11 +107,26 @@ def times_named(reply: str) -> list[tuple[tuple[int, int], str]]:
 _LIST_MARK: Final = re.compile(r"(?m)^[ \t]*\d{1,2}[).][ \t]")
 
 
+def numbers_said(reply: str) -> set[str]:
+    """The numbers a reply states: its numbered list's own numbers are none."""
+    return numbers_in(_LIST_MARK.sub(" ", reply))
+
+
 def _without(text: str, spans: list[tuple[int, int]]) -> str:
     chars = list(text)
     for start, end in spans:
         chars[start:end] = " " * (end - start)
     return "".join(chars)
+
+
+def _names_only(reply: str, slots: tuple[str, ...]) -> bool:
+    """The reply names a time, and only the times and days of `slots` ("venerdì 23 ottobre,
+    10:00"): a booking made earlier, or a held time let go, told with its own day and time (final
+    review of #48, I1)."""
+    times = {time for _, time in times_named(reply)}
+    own_times = {time for slot in slots for _, time in times_named(slot)}
+    own_days = {day for slot in slots for day in days_named(slot)}
+    return bool(times) and times <= own_times and days_named(reply) <= own_days
 
 
 @dataclass(frozen=True)
@@ -131,15 +139,30 @@ class Problem:
 
 
 def reply_problems(
-    reply: str, known: str, *, booked: bool, times: frozenset[str] = frozenset()
+    reply: str,
+    known: str,
+    *,
+    booked: bool,
+    times: frozenset[str] = frozenset(),
+    earlier: tuple[str, ...] = (),
+    today: date | None = None,
+    previous: str = "",
+    released: tuple[str, ...] = (),
 ) -> tuple[Problem, ...]:
     """Why `reply` may not be sent; empty when it may. `known`: everything the agent was given,
     which a number or a link must come from. `booked`: the booking tool made a booking. `times`:
     the free times the patient was shown ("10:00"); a time the reply names must be one of them or a
-    time of `known` (an opening hour), and is then no number to check."""
+    time of `known` (an opening hour), and is then no number to check. `earlier`: the appointments
+    the conversation made in earlier turns ("venerdì 23 ottobre, 10:00"), which it may tell again.
+    `today`: the business's date, against which a weekday next to a date is checked. `previous`:
+    the agent's last message, which the reply may not repeat word for word. `released`: the held
+    times cancel_booking let go of this turn, which the reply may call cancelled."""
     problems = []
     if not reply.strip():
         problems.append(Problem("empty", "the reply is empty"))
+    elif previous.strip() and reply.strip() == previous.strip():
+        detail = "it repeats your previous message word for word: answer what is asked now"
+        problems.append(Problem("repeat", detail))
     named = times_named(reply)
     allowed = set(times) | {number for number in numbers_in(known) if ":" in number}
     wrong = sorted({time for _, time in named if time not in allowed})
@@ -154,15 +177,36 @@ def reply_problems(
     new_links = sorted(links_in(reply) - links_in(known))
     if new_links:
         problems.append(Problem("links", f"links that are in no fact: {', '.join(new_links)}"))
+    wrong = wrong_weekdays(reply, today) if today is not None else []
+    if wrong:
+        detail = (
+            f"weekdays that are not their dates': {'; '.join(wrong)}; write them as the tools do"
+        )
+        problems.append(Problem("weekday", detail))
     if contains_diagnostic_language(reply):
         problems.append(Problem("diagnosis", "it reads like a diagnosis or medical advice"))
     promise = promise_phrase(reply)
     if promise is not None:
         detail = f"it promises an action nobody will take: {promise}"
         problems.append(Problem("promise", detail))
-    if not booked and _BOOKED.search(reply):
-        detail = "it says a booking is confirmed, but confirm_booking made none"
+    if not booked and says_booked(reply) and not _names_only(reply, earlier):
+        detail = (
+            f"it says a booking is done; the one this conversation made is {' and '.join(earlier)}: "
+            "name it with its day and time, or say nothing of it"
+            if earlier
+            else "it says a booking or a booking request is done, but confirm_booking made none: "
+            "say what the next step is instead"
+        )
         problems.append(Problem("booking", detail))
+    if says_cancelled(reply) and not _names_only(reply, released):
+        detail = (
+            f"it says something is cancelled; what you let go of is the time held, "
+            f"{' and '.join(released)}: say only that, with its day and time"
+            if released
+            else "it says an appointment is cancelled, but no tool cancelled one: you cannot "
+            "cancel or move an appointment; reception can, give its phone"
+        )
+        problems.append(Problem("cancel", detail))
     if _denies_a_service(reply):
         detail = (
             "it says the clinic offers only some services, or not one; the clinic has more than "
