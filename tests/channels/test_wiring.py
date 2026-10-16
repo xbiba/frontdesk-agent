@@ -96,4 +96,5 @@ def test_the_worker_side_is_built_for_testers(
 ) -> None:
     activate_pack(load_pack(pack_dir))
     worker = build_worker(_settings(pack_dir, database_url=app_url))
-    assert worker.runner is not None
+    assert set(worker.runners) == {"instagram"}
+    assert worker.requests is None

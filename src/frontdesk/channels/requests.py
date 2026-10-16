@@ -74,6 +74,18 @@ _COPY: Final[dict[str, dict[str, str]]] = {
 }
 
 
+_ONLY_BUTTONS: Final = {
+    "it": "Per ora rispondo solo ai pulsanti delle richieste di prenotazione.",
+    "sq": "Për momentin u përgjigjem vetëm butonave të kërkesave për rezervim.",
+}
+
+
+def only_buttons(language: str) -> str:
+    """The one reply to a staff member's text or voice note in W1, which answers only the
+    buttons: no model reads the staff's thread."""
+    return _ONLY_BUTTONS.get(language, _ONLY_BUTTONS["it"])
+
+
 def payload(hold_id: uuid.UUID, *, accept: bool) -> str:
     """What a button of the request carries back: the request and the answer, nothing personal."""
     return f"request:{hold_id.hex}:{'confirm' if accept else 'decline'}"

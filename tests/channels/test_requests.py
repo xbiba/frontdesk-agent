@@ -21,7 +21,7 @@ from frontdesk.booking.holds import attach, hold, mark_booked
 from frontdesk.booking.scheduler import CalendarScheduler
 from frontdesk.channels.inbox import Inbox, conversation_key
 from frontdesk.channels.messages import Inbound, InboundKind
-from frontdesk.channels.requests import Requests, payload
+from frontdesk.channels.requests import Requests, only_buttons, payload
 from frontdesk.channels.staff import Role, Staff
 from frontdesk.channels.whatsapp import TEMPLATE, Template
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
@@ -365,4 +365,14 @@ async def test_the_staff_reads_albanian_when_reception_prefers_it(
     decision = await setup.requests.decide(ANA.user_id, payload(hold_id, accept=True))
     assert decision.reply == (
         "U konfirmua: e premte 23 tetor, 10:00, Vizitë ortopedike me Dr. Arben Demo, Mario Rossi."
+    )
+
+
+def test_the_staff_s_texts_get_one_fixed_reply_in_their_language() -> None:
+    # W1 answers only the buttons; the runner sends this to any text or voice note of the staff.
+    assert (
+        only_buttons("it") == "Per ora rispondo solo ai pulsanti delle richieste di prenotazione."
+    )
+    assert (
+        only_buttons("sq") == "Për momentin u përgjigjem vetëm butonave të kërkesave për rezervim."
     )

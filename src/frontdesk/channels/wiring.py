@@ -4,7 +4,7 @@ built from the settings. The webhook's part loads nothing of the model, the embe
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -24,6 +24,7 @@ from frontdesk.tenancy.loader import load_pack
 from frontdesk.tenancy.pack import BusinessPack, ChannelPolicy
 
 if TYPE_CHECKING:
+    from frontdesk.channels.requests import Requests
     from frontdesk.channels.runner import Runner
     from frontdesk.conversation.state import ConversationState
     from frontdesk.conversation.turn import TurnResult
@@ -46,10 +47,12 @@ class Ingress:
 
 @dataclass(frozen=True)
 class Worker:
-    """What the worker needs: the runner for each conversation, the inbox for the schedules."""
+    """What the worker needs, by channel: the runner of each conversation and the inbox for the
+    schedules; and the booking requests the staff decides on WhatsApp (W1), if it is on."""
 
-    runner: Runner
-    inbox: Inbox
+    runners: Mapping[str, Runner]
+    inbox: Mapping[str, Inbox]
+    requests: Requests | None
     dispatcher: Dispatcher
     refresh: Callable[[], Awaitable[None]]
     purge_bookings: Callable[[], int]
@@ -169,8 +172,9 @@ def build_worker(settings: Settings) -> Worker:
         now=deployment.now,
     )
     return Worker(
-        runner=runner,
-        inbox=inbox,
+        runners={INSTAGRAM: runner},
+        inbox={INSTAGRAM: inbox},
+        requests=None,
         dispatcher=_dispatcher(settings),
         refresh=refresh,
         purge_bookings=purge_bookings,

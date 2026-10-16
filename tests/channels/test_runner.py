@@ -18,7 +18,9 @@ from frontdesk.channels.inbox import (
     queue_reply,
 )
 from frontdesk.channels.messages import Inbound, InboundKind, SendOutcome, SendStatus
+from frontdesk.channels.requests import Decision
 from frontdesk.channels.runner import MAX_REPLIES_A_DAY, Outcome, Runner, Turn
+from frontdesk.channels.whatsapp import TEMPLATE
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnResult
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
@@ -518,3 +520,96 @@ async def test_a_staff_reply_during_the_turn_keeps_the_pause(
     await runner.process(KEY)
     assert _replies(sender) == []
     assert _conversation(factory).paused_until is not None
+
+
+# --- WhatsApp W1: taps decided by code, templates, the staff's fixed reply ------------------------
+ONLY_BUTTONS = "Per ora rispondo solo ai pulsanti delle richieste di prenotazione."
+TAP = "request:" + "ab" * 16 + ":confirm"
+
+
+async def test_a_tap_is_decided_by_code_and_never_reaches_the_turn(
+    inbox: Inbox, factory: sessionmaker[Session], clock: Clock, clinic_pack: BusinessPack
+) -> None:
+    taps: list[tuple[str, str]] = []
+
+    async def buttons(user_id: str, text: str) -> Decision:
+        taps.append((user_id, text))
+        return Decision("Confermata: venerdì 23 ottobre, 10:00.")
+
+    sender, turn = FakeSender(), FakeTurn()
+    runner = Runner(
+        factory,
+        pack=clinic_pack,
+        channel=CHANNEL,
+        sender=sender,
+        turn=turn,
+        now=clock,
+        buttons=buttons,
+    )
+    await _welcomed(runner)
+    _say(inbox, "b1", TAP, kind=InboundKind.BUTTON)
+    clock.advance(seconds=3)
+    assert await runner.process(KEY) is Outcome.DONE
+    assert turn.texts == []
+    assert taps == [(ALICE, TAP)]
+    assert _replies(sender) == ["Confermata: venerdì 23 ottobre, 10:00."]
+    (tap,) = [m for m in _messages(factory, "in") if m.external_id == "b1"]
+    assert (tap.status, tap.text) == (InStatus.READ, None)
+
+
+async def test_a_template_part_goes_out_outside_the_24_hour_window(
+    inbox: Inbox, factory: sessionmaker[Session], clock: Clock, clinic_pack: BusinessPack
+) -> None:
+    sender = FakeSender()
+    runner = _runner(factory, clock, clinic_pack, sender, FakeTurn())
+    await _welcomed(runner)
+    clock.advance(hours=30)
+    with business_session(factory, BUSINESS) as session:
+        queue_reply(
+            session,
+            business_id=BUSINESS,
+            channel=CHANNEL,
+            conversation_id=KEY,
+            parts=[(TEMPLATE, '{"name": "t"}'), ("fixed", "Una risposta")],
+            now=clock(),
+        )
+    await runner.process(KEY)
+    assert sender.sent[1:] == [(ALICE, '{"name": "t"}')]
+    assert sender.kinds[1:] == [TEMPLATE]  # the text after it waits for no window: dropped
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param([("m1", "Ciao", InboundKind.TEXT)], id="text"),
+        pytest.param([("m1", None, InboundKind.ATTACHMENT)], id="voice-note"),
+        pytest.param(
+            [("m1", "Ciao", InboundKind.TEXT), ("m2", None, InboundKind.ATTACHMENT)], id="both"
+        ),
+    ],
+)
+async def test_a_staff_text_or_voice_note_gets_the_fixed_reply(
+    inbox: Inbox,
+    factory: sessionmaker[Session],
+    clock: Clock,
+    clinic_pack: BusinessPack,
+    messages: list[tuple[str, str | None, InboundKind]],
+) -> None:
+    # Review Focus 5: one fixed reply, no model call, no silence.
+    sender, turn = FakeSender(), FakeTurn()
+    runner = Runner(
+        factory,
+        pack=clinic_pack,
+        channel=CHANNEL,
+        sender=sender,
+        turn=turn,
+        now=clock,
+        fixed_reply=ONLY_BUTTONS,
+    )
+    await _welcomed(runner)
+    for mid, text, kind in messages:
+        _say(inbox, mid, text, kind=kind)
+    clock.advance(seconds=3)
+    assert await runner.process(KEY) is Outcome.DONE
+    assert turn.texts == []
+    assert _replies(sender) == [ONLY_BUTTONS]

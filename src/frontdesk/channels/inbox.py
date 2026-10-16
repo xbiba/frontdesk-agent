@@ -395,7 +395,8 @@ class Inbox:
         if paused is not None and paused > now:
             self._touch(session, key, now, pause=True)  # D6: 24 hours without messages
             return None  # the staff has the thread: nothing stored, nothing for the model
-        text = event.text if event.kind is InboundKind.TEXT else None
+        # A tap's text is its payload (W1): the run reads it, then it goes like any text.
+        text = event.text if event.kind in (InboundKind.TEXT, InboundKind.BUTTON) else None
         if self._insert(session, key, event, now, status=InStatus.PENDING, text=text):
             self._touch(session, key, now)
             return key

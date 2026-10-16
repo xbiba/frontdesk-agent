@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, update
 
 from frontdesk.api.app import create_worker_app
-from frontdesk.channels.inbox import BURST, TESTER_WELCOME, Inbox, conversation_key
+from frontdesk.channels.inbox import BURST, TESTER_WELCOME, Inbox, conversation_key, queue_reply
 from frontdesk.channels.instagram import TokenRefreshError
 from frontdesk.channels.messages import Inbound, InboundKind
 from frontdesk.channels.runner import Runner
@@ -28,10 +28,22 @@ ACCOUNT = "17841400000000001"
 ALICE = "1111111111111111"
 CODE = "mcu-prova-1234"
 KEY = conversation_key(BUSINESS, CHANNEL, ALICE)
+STAFF = "355691234567"
 
 
 async def _renewed() -> None:
     return None
+
+
+class Notified:
+    """The requests' stand-in: counts the times the worker asks it to notify."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def notify(self) -> int:
+        self.calls += 1
+        return 0
 
 
 class Service:
@@ -64,9 +76,30 @@ class Service:
             turn=FakeTurn(),
             now=self.clock,
         )
+        self.staff_sender = FakeSender()
+        self.whatsapp = Inbox(
+            self.factory,
+            business_id=BUSINESS,
+            channel="whatsapp",
+            account_id="pnid",
+            testers_only=False,
+            pairing_code=None,
+            now=self.clock,
+            allowed_users=frozenset({STAFF}),
+        )
+        staff_runner = Runner(
+            self.factory,
+            pack=pack,
+            channel="whatsapp",
+            sender=self.staff_sender,
+            turn=FakeTurn(),
+            now=self.clock,
+        )
+        self.requests = Notified()
         worker = Worker(
-            runner=runner,
-            inbox=inbox,
+            runners={CHANNEL: runner, "whatsapp": staff_runner},
+            inbox={CHANNEL: inbox, "whatsapp": self.whatsapp},
+            requests=self.requests,  # type: ignore[arg-type]
             dispatcher=self.dispatcher,
             refresh=refresh,
             purge_bookings=lambda: 0,
@@ -165,3 +198,45 @@ def test_a_renewal_that_meets_a_network_error_is_an_alert(
         r.levelno == logging.ERROR and r.msg == "channel.token_refresh_failed"
         for r in caplog.records
     )
+
+
+# --- WhatsApp W1: one worker, a runner per channel ---------------------------------------------------
+
+
+def test_each_conversation_runs_on_its_channel_s_runner(
+    app_url: str, clinic_pack: BusinessPack
+) -> None:
+    service = Service(app_url, clinic_pack)
+    staff = service.whatsapp.open(STAFF)
+    with business_session(service.factory, BUSINESS) as session:
+        queue_reply(
+            session,
+            business_id=BUSINESS,
+            channel="whatsapp",
+            conversation_id=staff,
+            parts=[("fixed", "Confermata.")],
+            now=NOW,
+        )
+    service.whatsapp.accept([Inbound("pnid", STAFF, InboundKind.TEXT, "w1", "ok", NOW)])
+    assert service.client.post(f"/tasks/conversations/{staff}").status_code == 200
+    assert service.staff_sender.sent[0] == (STAFF, "Confermata.")
+    assert service.sender.sent == []
+
+
+def test_after_a_patient_s_turn_the_worker_notifies_new_requests(
+    app_url: str, clinic_pack: BusinessPack
+) -> None:
+    service = Service(app_url, clinic_pack)
+    assert service.client.post(f"/tasks/conversations/{KEY}").status_code == 200
+    assert service.requests.calls == 1
+    staff = service.whatsapp.open(STAFF)
+    assert service.client.post(f"/tasks/conversations/{staff}").status_code == 200
+    assert service.requests.calls == 1  # a staff run sends no new request
+
+
+def test_a_task_for_an_unknown_channel_is_not_found(
+    app_url: str, clinic_pack: BusinessPack
+) -> None:
+    service = Service(app_url, clinic_pack)
+    unknown = conversation_key(BUSINESS, "telegram", ALICE)
+    assert service.client.post(f"/tasks/conversations/{unknown}").status_code == 404
