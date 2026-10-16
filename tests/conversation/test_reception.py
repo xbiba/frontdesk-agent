@@ -513,6 +513,23 @@ async def test_a_small_pack_s_documents_ride_in_the_agent_s_prompt(base: TurnRun
     assert set(reply.trace.sources) >= {"first-visit-it", "physiotherapy-it"}
 
 
+async def test_a_reply_that_repeats_the_last_one_is_sent_back(base: TurnRuntime) -> None:
+    # Run agent-14 (2026-10-16): the same list again, word for word, instead of a question.
+    listed = "Il dottore riceve venerdì e lunedì: quale giorno preferisce?"
+    script = Script(
+        [
+            _final(listed),
+            _final(listed),
+            _final("Intende gli orari di apertura o altri orari liberi?", "clarify"),
+        ]
+    )
+    chat = Chat(base, script)
+    assert (await chat.say("quando riceve il dottore?")).text == listed
+    reply = await chat.say("vorrei sapere gli orari")
+    assert reply.text == "Intende gli orari di apertura o altri orari liberi?"
+    assert reply.trace.check_reasons == ("sent_back:repeat",)
+
+
 async def test_a_search_reads_the_conversation_s_language_first(base: TurnRuntime) -> None:
     script = Script(
         [[("search_information", {"question": "Come si prepara la visita?"})], _final("Ecco.")]
@@ -837,10 +854,12 @@ async def test_a_clinic_that_confirms_its_appointments_gets_a_request(
 async def test_a_conversation_sends_ten_messages_a_minute_at_most(base: TurnRuntime) -> None:
     # Limits per Instagram user (Albi, 2026-10-13): past ten messages within a minute, a short
     # reply and no model call; a minute later, the conversation goes on.
-    script = Script([_final("Va bene.") for _ in range(11)])
+    # Two replies in turn: the same one twice in a row is sent back (run agent-14).
+    replies = ["Va bene." if number % 2 == 0 else "D'accordo." for number in range(11)]
+    script = Script([_final(reply) for reply in replies])
     chat = Chat(base, script)
-    for _ in range(10):
-        assert (await chat.say("Vorrei sapere una cosa")).text == "Va bene."
+    for reply in replies[:10]:
+        assert (await chat.say("Vorrei sapere una cosa")).text == reply
     slowed = await chat.say("Vorrei sapere una cosa")
     assert slowed.trace.rule == "rate_limit"
     assert slowed.text == "Ho ricevuto molti messaggi in poco tempo: riprovi tra un minuto."

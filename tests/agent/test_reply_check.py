@@ -252,3 +252,21 @@ def test_a_weekday_that_is_its_date_s_passes(reply: str) -> None:
     known = f"{KNOWN} 23 26 27 2 14:00"
     found = reply_problems(reply, known, booked=False, today=TUESDAY)
     assert "weekday" not in {problem.code for problem in found}
+
+
+def test_a_reply_that_repeats_the_previous_one_word_for_word_is_refused() -> None:
+    # Run agent-14 (2026-10-16): asked "vorrei sapere gli orari" right after a list of Friday's
+    # times, 3.5 Flash-Lite sent the same list again instead of asking which hours were meant.
+    previous = "Per venerdì 23 ottobre ho posto alle 10:00, 11:00 e 12:00: quale preferisce?"
+    times = frozenset({"10:00", "11:00", "12:00"})
+    found = reply_problems(
+        f" {previous}\n", f"{KNOWN} 23", booked=False, times=times, previous=previous
+    )
+    assert "repeat" in {problem.code for problem in found}
+    other = reply_problems(
+        "Intende gli orari di apertura o altri orari liberi?",
+        KNOWN,
+        booked=False,
+        previous=previous,
+    )
+    assert "repeat" not in {problem.code for problem in other}

@@ -267,16 +267,21 @@ def reply_problems(
     times: frozenset[str] = frozenset(),
     earlier: tuple[str, ...] = (),
     today: date | None = None,
+    previous: str = "",
 ) -> tuple[Problem, ...]:
     """Why `reply` may not be sent; empty when it may. `known`: everything the agent was given,
     which a number or a link must come from. `booked`: the booking tool made a booking. `times`:
     the free times the patient was shown ("10:00"); a time the reply names must be one of them or a
     time of `known` (an opening hour), and is then no number to check. `earlier`: the appointments
     the conversation made in earlier turns ("venerdì 23 ottobre, 10:00"), which it may tell again.
-    `today`: the business's date, against which a weekday next to a date is checked."""
+    `today`: the business's date, against which a weekday next to a date is checked. `previous`:
+    the agent's last message, which the reply may not repeat word for word."""
     problems = []
     if not reply.strip():
         problems.append(Problem("empty", "the reply is empty"))
+    elif previous.strip() and reply.strip() == previous.strip():
+        detail = "it repeats your previous message word for word: answer what is asked now"
+        problems.append(Problem("repeat", detail))
     named = times_named(reply)
     allowed = set(times) | {number for number in numbers_in(known) if ":" in number}
     wrong = sorted({time for _, time in named if time not in allowed})

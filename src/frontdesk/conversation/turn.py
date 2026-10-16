@@ -429,6 +429,9 @@ def _desk(
         booking=state.booking,
         documents=documents.text,
         sources=list(documents.sources),
+        previous=next(
+            (entry.text for entry in reversed(state.history) if entry.role == "assistant"), ""
+        ),
     )
 
 

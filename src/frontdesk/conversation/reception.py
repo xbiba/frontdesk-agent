@@ -255,6 +255,7 @@ def build_reception(
                 times=times,
                 earlier=earlier,
                 today=desk.today,
+                previous=desk.previous,
             )
         )
         if output.kind is ReplyKind.NOTICE and contains_clinical_terms(output.text):
