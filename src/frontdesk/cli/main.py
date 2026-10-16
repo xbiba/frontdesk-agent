@@ -32,7 +32,7 @@ from frontdesk.conversation.evaluation import (
 )
 from frontdesk.db.engine import business_session
 from frontdesk.db.migrate import upgrade_to_head
-from frontdesk.db.roles import RoleError, ensure_app_role
+from frontdesk.db.roles import RoleError, ensure_app_role, revoke_migration_record
 from frontdesk.knowledge.evaluation import (
     DatasetError,
     load_cases,
@@ -143,7 +143,9 @@ def _session(deployment: Deployment) -> Iterator[Session]:
 @db_app.command("upgrade")
 def db_upgrade(env_file: EnvFile) -> None:
     """Apply all migrations to this deployment's database."""
-    upgrade_to_head(load_settings(env_file).migration_database_url)
+    settings = load_settings(env_file)
+    upgrade_to_head(settings.migration_database_url)
+    revoke_migration_record(settings.migration_database_url, settings.database_url)
     typer.echo("database is at the latest migration")
 
 

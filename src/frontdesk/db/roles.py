@@ -31,9 +31,8 @@ _ALTER: Final = text(
 )
 
 
-# The tables it reads and writes, now and after later migrations by the owner, but never the
-# migrations' own record (final review of M4, M12: 0001's default privileges reach only a role
-# named frontdesk_app that existed when it ran).
+# The tables it reads and writes, now and after later migrations by the owner (final review of M4,
+# M12: 0001's default privileges reach only a role named frontdesk_app that existed when it ran).
 _GRANT: Final = text(
     "DO $$ DECLARE app text := current_setting('frontdesk.role'); BEGIN "
     "EXECUTE format('GRANT USAGE ON SCHEMA public TO %I', app); "
@@ -44,8 +43,14 @@ _GRANT: Final = text(
     "DELETE ON TABLES TO %I', app); "
     "EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES "
     "TO %I', app); "
-    "IF to_regclass('public.alembic_version') IS NOT NULL THEN "
-    "EXECUTE format('REVOKE ALL ON public.alembic_version FROM %I', app); END IF; END $$"
+    "END $$"
+)
+# The migrations' own record, which the default privileges reach when the role was made before
+# the first migration created it (security review of 29357c7): revoked after every upgrade too.
+_REVOKE: Final = text(
+    "DO $$ BEGIN IF to_regclass('public.alembic_version') IS NOT NULL THEN "
+    "EXECUTE format('REVOKE ALL ON public.alembic_version FROM %I', "
+    "current_setting('frontdesk.role')); END IF; END $$"
 )
 
 
@@ -69,6 +74,26 @@ def ensure_app_role(owner_url: str, app_url: str) -> str:
             connection.execute(_REMEMBER, {"role": role, "secret": str(secret)})
             connection.execute(_ALTER if powerful is not None else _CREATE)
             connection.execute(_GRANT)
+            connection.execute(_REVOKE)
     finally:
         engine.dispose()
     return role
+
+
+def revoke_migration_record(owner_url: str, app_url: str) -> None:
+    """Take back from the role of `app_url` what the default privileges gave it on the migrations'
+    record. `db upgrade` runs it after migrating; a role that does not exist is left alone."""
+    role = make_url(app_url).username
+    if role is None or not _NAME.match(role) or role == make_url(owner_url).username:
+        return
+    engine = create_engine(owner_url)
+    try:
+        with engine.begin() as connection:
+            exists = connection.scalar(
+                text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}
+            )
+            if exists:
+                connection.execute(_REMEMBER, {"role": role, "secret": ""})
+                connection.execute(_REVOKE)
+    finally:
+        engine.dispose()

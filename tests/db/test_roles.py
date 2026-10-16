@@ -6,8 +6,10 @@ import uuid
 import pytest
 from sqlalchemy import create_engine, make_url, text
 from sqlalchemy.exc import OperationalError
+from testcontainers.postgres import PostgresContainer
 
-from frontdesk.db.roles import RoleError, ensure_app_role
+from frontdesk.db.migrate import upgrade_to_head
+from frontdesk.db.roles import RoleError, ensure_app_role, revoke_migration_record
 
 pytestmark = pytest.mark.db
 
@@ -81,3 +83,33 @@ def test_the_role_may_use_the_tables_of_a_database_migrated_before_it(migrated_u
         assert connection.scalar(text(rights), {"table": "channel_messages"}) is True
         assert connection.scalar(text(rights), {"table": "alembic_version"}) is False
     engine.dispose()
+
+
+def test_a_role_made_before_the_migrations_never_holds_their_record(
+    postgres: PostgresContainer,
+) -> None:
+    # Security review of 29357c7: on a new cloud database `db app-role` runs before `db upgrade`,
+    # and alembic_version, created by the first migration, took the default privileges.
+    admin = create_engine(postgres.get_connection_url(), isolation_level="AUTOCOMMIT")
+    name = f"t_{uuid.uuid4().hex[:12]}"
+    with admin.connect() as connection:
+        connection.execute(text(f'CREATE DATABASE "{name}"'))
+    try:
+        owner = make_url(postgres.get_connection_url()).set(database=name)
+        owner_url = owner.render_as_string(hide_password=False)
+        app_url = _url(owner_url, _role(), "pass")
+        ensure_app_role(owner_url, app_url)
+        upgrade_to_head(owner_url)
+        revoke_migration_record(owner_url, app_url)
+        engine = create_engine(app_url)
+        with engine.connect() as connection:
+            rights = (
+                "SELECT has_table_privilege(current_user, :table, 'SELECT,INSERT,UPDATE,DELETE')"
+            )
+            assert connection.scalar(text(rights), {"table": "channel_messages"}) is True
+            assert connection.scalar(text(rights), {"table": "alembic_version"}) is False
+        engine.dispose()
+    finally:
+        with admin.connect() as connection:
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+        admin.dispose()
