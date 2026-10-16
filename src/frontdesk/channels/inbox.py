@@ -7,7 +7,9 @@ and the conversation it belongs to, until a turn reads it.
   the send returns (D6);
 - an echo of the staff's pauses the conversation until 24 hours pass without messages (D6);
 - in testers mode, the message of someone who is not a tester is dropped before anything is
-  stored, unless it is the pairing code (D4).
+  stored, unless it is the pairing code (D4);
+- with a list of the users let in (WhatsApp's staff, W1), any other user's event is dropped
+  before anything is stored.
 
 `sweep` and `purge` run on Cloud Scheduler: the first gives back lost work, the second keeps what
 the design keeps (D8).
@@ -144,6 +146,7 @@ class Inbox:
         testers_only: bool,
         pairing_code: str | None,
         now: Callable[[], datetime],
+        allowed_users: frozenset[str] | None = None,
     ) -> None:
         self._factory = session_factory
         self._business = business_id
@@ -152,18 +155,23 @@ class Inbox:
         self._testers_only = testers_only
         self._pairing = pairing_code
         self._now = now
+        self._allowed = allowed_users
 
     def accept(self, events: Sequence[Inbound]) -> Accepted:
         now = self._now()
         work: dict[str, None] = {}
         others: set[str] = set()
         strangers = 0
+        unlisted = 0
         with business_session(self._factory, self._business) as session:
             for event in events:
                 if event.account_id != self._account:
                     others.add(event.account_id)
                     continue
                 if not event.user_id or event.kind is InboundKind.IGNORED:
+                    continue
+                if self._allowed is not None and event.user_id not in self._allowed:
+                    unlisted += 1
                     continue
                 if event.kind is InboundKind.ECHO:
                     self._echo(session, event, now)
@@ -187,6 +195,8 @@ class Inbox:
             log_alert(logger, "channel.other_account", channel=self._channel, account_id=account)
         if strangers:
             log_event(logger, "channel.not_a_tester", channel=self._channel, count=strangers)
+        if unlisted:
+            log_event(logger, "channel.not_allowed", channel=self._channel, count=unlisted)
         return Accepted(tuple(work))
 
     def waiting(self, key: str) -> bool:
