@@ -6,7 +6,7 @@ import uuid
 import pytest
 from sqlalchemy import create_engine, make_url, text
 from sqlalchemy.exc import OperationalError
-from testcontainers.postgres import PostgresContainer
+from testcontainers.community.postgres import PostgresContainer
 
 from frontdesk.db.migrate import upgrade_to_head
 from frontdesk.db.roles import RoleError, ensure_app_role, revoke_migration_record
