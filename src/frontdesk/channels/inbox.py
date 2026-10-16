@@ -224,6 +224,16 @@ class Inbox:
                 .values(status=OutStatus.UNCERTAIN, reason="no_answer", updated_at=now)
                 .returning(ChannelMessage.conversation_id)
             ).all()
+            if stuck:
+                # The rest of a reply whose part may never have arrived is never sent, as inside a
+                # run (final review of M4, M5).
+                session.execute(
+                    update(ChannelMessage)
+                    .where(*mine, ChannelMessage.direction == OUT)
+                    .where(ChannelMessage.status == OutStatus.QUEUED)
+                    .where(ChannelMessage.conversation_id.in_(stuck))
+                    .values(status=OutStatus.DROPPED, reason="previous_uncertain", updated_at=now)
+                )
             waiting = session.scalars(
                 select(ChannelMessage.conversation_id)
                 .distinct()
