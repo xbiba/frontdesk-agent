@@ -160,6 +160,12 @@ def log_event(logger: logging.Logger, event: str, **fields: Any) -> None:
     logger.info(event, extra={"fields": fields})
 
 
+def log_warning(logger: logging.Logger, event: str, **fields: Any) -> None:
+    """An event worth a look that is no alert: written at WARNING. Same fields and rules as
+    `log_event`."""
+    logger.warning(event, extra={"fields": fields})
+
+
 def log_alert(logger: logging.Logger, event: str, **fields: Any) -> None:
     """An event a person must look at (M4): written at ERROR, the level Cloud Logging's alert rule
     watches. Same fields and rules as `log_event`."""

@@ -182,7 +182,9 @@ class Inbox:
                 if key is not None:
                     work[key] = None
         for account in sorted(others):
-            log_event(logger, "channel.other_account", channel=self._channel, account_id=account)
+            # One account per app: an event for another is a misconfiguration, and every
+            # delivery would be dropped (final review of M4, M4).
+            log_alert(logger, "channel.other_account", channel=self._channel, account_id=account)
         if strangers:
             log_event(logger, "channel.not_a_tester", channel=self._channel, count=strangers)
         return Accepted(tuple(work))

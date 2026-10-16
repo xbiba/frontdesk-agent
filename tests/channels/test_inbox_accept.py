@@ -297,6 +297,10 @@ def test_events_for_another_account_are_logged_with_its_id(
     assert work == ()
     assert _messages(factory) == []
     assert _fields(caplog, "channel.other_account") == [{"channel": CHANNEL, "account_id": "999"}]
+    # Final review of M4, M4: with one account per app, another account is a misconfiguration.
+    assert all(
+        r.levelno == logging.ERROR for r in caplog.records if r.msg == "channel.other_account"
+    )
 
 
 @pytest.mark.db
