@@ -97,6 +97,20 @@ ROUTES: Final[dict[str, ModelRoute]] = {
         # europe-west1, -west4, -west8 and -west9, retires on 2026-10-20.
         fallback="vertex-eu-gemini-flash-lite",
     ),
+    # Gemini 3.5 Flash-Lite as the reception agent, measured on the MCU cases against 3.8 Flash
+    # (Albi, 2026-10-16). GA since 2026-07-21, retiring "July 21, 2027 or later"; served on the eu
+    # multi-region (probe of 2026-10-16). Low thinking, as 3.8 Flash: 3.1 Flash-Lite with minimal
+    # thinking failed bookings and dates (run agent-10-lite). No fallback: it is measured alone.
+    "vertex-eu-gemini-flash-lite-3-5": ModelRoute(
+        route_id="vertex-eu-gemini-flash-lite-3-5",
+        provider="google-vertex",
+        model_name="gemini-3.5-flash-lite",
+        region="eu",
+        approved_for=frozenset({DataClass.EVALUATION}),
+        retires_on=date(2027, 7, 21),
+        thinking="low",
+        request_timeout_seconds=15.0,
+    ),
     # The embedding candidates of the M3 experiment (design §4.5). Neither is served on the eu
     # multi-region; both are on europe-west1 (Belgium).
     "vertex-ew1-text-multilingual-embedding-002": ModelRoute(
