@@ -9,6 +9,7 @@ it is sent, and a reply that went out without an answer is never sent again.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
@@ -116,8 +117,9 @@ class Runner:
 
     async def process(self, conversation_id: str) -> Outcome:
         """One run for a conversation: its waiting messages become a turn, then every reply
-        recorded and not yet tried goes out."""
-        claimed = self._claim(conversation_id, self._now())
+        recorded and not yet tried goes out. Each database call runs in a thread, off the event
+        loop the instance's other requests share (final review of M4, M1)."""
+        claimed = await asyncio.to_thread(self._claim, conversation_id, self._now())
         if isinstance(claimed, Outcome):
             return claimed
         try:
@@ -126,7 +128,7 @@ class Runner:
         except _LeaseLostError:
             outcome = Outcome.BUSY  # another worker holds the conversation now
         finally:
-            self._release(conversation_id, claimed.token)
+            await asyncio.to_thread(self._release, conversation_id, claimed.token)
         log_event(
             logger,
             "channel.processed",
@@ -190,23 +192,22 @@ class Runner:
         return held is not None
 
     async def _run(self, key: str, conversation: _Conversation, now: datetime) -> Outcome:
-        pending = self._pending(key)
+        pending = await asyncio.to_thread(self._pending, key)
         if not pending:
             return Outcome.IDLE
         if now - max(message.created_at for message in pending) < BURST:
             return Outcome.WAIT
         if conversation.paused_until is not None and conversation.paused_until > now:
-            with self._session() as session:
-                _mark(session, pending, InStatus.DISCARDED, now)
+            await asyncio.to_thread(self._mark_all, pending, InStatus.DISCARDED, now)
             return Outcome.PAUSED
         if self._off:
             # No turn and no attempt counted: the messages wait, and are answered when the switch
             # is back on, or failed by the purge after a day (final review of M4, M3).
             return Outcome.OFF
         if max(message.attempts for message in pending) >= MAX_ATTEMPTS:
-            self._give_up(key, pending, conversation, now)
+            await asyncio.to_thread(self._give_up, key, pending, conversation, now)
             return Outcome.FAILED
-        if self._replies_today(key, now) >= MAX_REPLIES_A_DAY:
+        if await asyncio.to_thread(self._replies_today, key, now) >= MAX_REPLIES_A_DAY:
             # Checked before the turn: past the cap, a turn would be paid for and dropped (final
             # review of M4, M8).
             log_alert(
@@ -216,10 +217,10 @@ class Runner:
                 conversation_id=key,
                 count=MAX_REPLIES_A_DAY,
             )
-            with self._session() as session:
-                _mark(session, pending, InStatus.READ, now)
+            await asyncio.to_thread(self._mark_all, pending, InStatus.READ, now)
             return Outcome.DONE
-        self._count_attempt(pending, now)  # committed first: a turn that crashes still counts
+        # Committed first: a turn that crashes still counts.
+        await asyncio.to_thread(self._count_attempt, pending, now)
         state = self._state(key, conversation, now)
         texts = [m.text for m in pending if m.kind == InboundKind.TEXT and m.text]
         replies: list[tuple[str, str]] = []
@@ -234,8 +235,14 @@ class Runner:
                 slowed = now
         if any(m.kind == InboundKind.ATTACHMENT for m in pending):
             replies.append(("fixed", self._fixed(following, FixedTextKey.ATTACHMENT)))
-        self._finish(key, conversation.token, pending, following, replies, slowed, now)
+        await asyncio.to_thread(
+            self._finish, key, conversation.token, pending, following, replies, slowed, now
+        )
         return Outcome.DONE
+
+    def _mark_all(self, pending: Sequence[_Pending], status: InStatus, now: datetime) -> None:
+        with self._session() as session:
+            _mark(session, pending, status, now)
 
     def _pending(self, key: str) -> list[_Pending]:
         with self._session() as session:
@@ -364,15 +371,16 @@ class Runner:
         )
 
     async def _deliver(self, key: str, user_id: str) -> None:
-        for message_id, text in self._queued(key):
-            blocked = self._blocked(key, text)
+        for message_id, text in await asyncio.to_thread(self._queued, key):
+            blocked = await asyncio.to_thread(self._blocked, key, text)
             if blocked is not None or text is None:
-                self._drop_queued(key, blocked or "expired")
+                await asyncio.to_thread(self._drop_queued, key, blocked or "expired")
                 return
-            if not self._take(message_id):
+            if not await asyncio.to_thread(self._take, message_id):
                 continue  # another worker took this reply: it is sent once (D9)
             outcome = await self._sender.send(user_id, text)
-            self._set(
+            await asyncio.to_thread(
+                self._set,
                 message_id,
                 status=OutStatus(outcome.status.value),
                 external_id=outcome.message_id,
@@ -386,7 +394,7 @@ class Runner:
                     conversation_id=key,
                     reason=outcome.reason,
                 )
-                self._drop_queued(key, "previous_failed")
+                await asyncio.to_thread(self._drop_queued, key, "previous_failed")
                 return
 
     def _take(self, message_id: uuid.UUID) -> bool:
