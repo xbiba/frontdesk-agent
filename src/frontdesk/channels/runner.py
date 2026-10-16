@@ -28,6 +28,7 @@ from frontdesk.channels.inbox import (
     FORGET_STATE,
     IN,
     OUT,
+    REPLY_WINDOW,
     InStatus,
     OutStatus,
     queue_reply,
@@ -48,7 +49,6 @@ type Turn = Callable[[str, ConversationState], Awaitable[tuple[TurnResult, Conve
 LEASE: Final = timedelta(seconds=120)  # longer than a turn (45 s) and its sends
 MAX_ATTEMPTS: Final = 3  # spec §4 step 8
 MAX_REPLIES_A_DAY: Final = 60  # D10
-REPLY_WINDOW: Final = timedelta(hours=24)  # Meta's window after the person's last message
 RATE_LIMIT_RULE: Final = "rate_limit"  # the engine's rule past 10 messages a minute
 _LIVE: Final = (OutStatus.QUEUED, OutStatus.SENDING, OutStatus.SENT, OutStatus.UNCERTAIN)
 

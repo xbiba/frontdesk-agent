@@ -49,6 +49,7 @@ STALE: Final = timedelta(minutes=2)  # work older than this lost its task, a sen
 KEEP_IDS: Final = timedelta(days=7)  # D8: Meta retries for 36 hours
 KEEP_SENT_TEXT: Final = timedelta(days=1)  # D8: the text of a reply, for its echo
 FORGET_CONVERSATION: Final = timedelta(days=30)  # D8
+REPLY_WINDOW: Final = timedelta(hours=24)  # Meta's window after the person's last message
 TESTER_WELCOME: Final = (
     "Modalità di prova attiva: l'assistente risponde a questo account. "
     "Test mode on: the assistant answers this account."
@@ -198,6 +199,13 @@ class Inbox:
         if unlisted:
             log_event(logger, "channel.not_allowed", channel=self._channel, count=unlisted)
         return Accepted(tuple(work))
+
+    def open(self, user_id: str) -> str:
+        """The person's conversation key, its row created when missing: the staff's thread gets
+        the bot's requests before they ever write (WhatsApp W1)."""
+        with business_session(self._factory, self._business) as session:
+            key, _ = self._open(session, user_id, self._now())
+        return key
 
     def waiting(self, key: str) -> bool:
         """Whether a message of the conversation still waits for its turn."""

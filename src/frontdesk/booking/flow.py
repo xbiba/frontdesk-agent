@@ -45,6 +45,18 @@ _PHRASES: Final[dict[str, dict[str, str]]] = {
         "it": "Prenotazione confermata: {when}, {service} con {doctor}. Per annullarla o spostarla, chiami la reception al {contact}.",
         "en": "Booking confirmed: {when}, {service} with {doctor}. To cancel or move it, call reception on {contact}.",
     },
+    # The clinic's answer to a request, from the staff's tap on WhatsApp (W1). The Albanian waits
+    # for the native speaker's review, like the others.
+    "request_confirmed": {
+        "sq": "Recepsioni e konfirmoi takimin tuaj: {when}, {service} me {doctor}.",
+        "it": "La reception ha confermato il suo appuntamento: {when}, {service} con {doctor}.",
+        "en": "Reception has confirmed your appointment: {when}, {service} with {doctor}.",
+    },
+    "request_declined": {
+        "sq": "Recepsioni nuk mund ta konfirmojë takimin e {when}: për një orar tjetër më shkruani këtu, ose telefononi recepsionin në {contact}.",
+        "it": "La reception non può confermare l'appuntamento di {when}: per un altro orario mi scriva qui, oppure chiami la reception al {contact}.",
+        "en": "Reception can't confirm the appointment on {when}: for another time write to me here, or call reception on {contact}.",
+    },
     "cancelled": {
         "sq": "Në rregull, nuk rezervova asgjë.",
         "it": "Va bene, non ho prenotato nulla.",
