@@ -21,10 +21,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def create_app(settings: Settings | None = None, *, engine: Engine | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None, *, engine: Engine | None = None, public: bool = False
+) -> FastAPI:
+    """`public`: anyone on the internet may call the service, so its health opens no database
+    connection: each call took one of the pool the worker's turns share (final review of M4,
+    M10)."""
+    app = FastAPI(title="frontdesk", docs_url=None, redoc_url=None)
+    if public:
+
+        @app.get("/health")
+        def alive() -> JSONResponse:
+            return JSONResponse({"status": "ok"})
+
+        return app
     resolved = settings or Settings()
     database = engine or make_engine(resolved.database_url)
-    app = FastAPI(title="frontdesk", docs_url=None, redoc_url=None)
 
     @app.get("/health")
     def health() -> JSONResponse:
@@ -53,7 +65,7 @@ def create_webhook_app(
     if settings is None:
         configure_logging(Settings().log_level)
     resolved = settings or Settings()
-    app = create_app(resolved, engine=engine)
+    app = create_app(resolved, engine=engine, public=True)
     app.include_router(webhook_router(ingress or build_ingress(resolved)))
     return app
 

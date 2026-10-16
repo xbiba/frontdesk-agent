@@ -67,3 +67,17 @@ def test_a_role_that_could_escape_rls_is_refused(migrated_url: str) -> None:
 def test_a_url_without_a_plain_role_and_a_password_is_refused(app_url: str) -> None:
     with pytest.raises(RoleError, match="lower-case role"):
         ensure_app_role("postgresql+psycopg://owner:x@localhost:1/db", app_url)
+
+
+def test_the_role_may_use_the_tables_of_a_database_migrated_before_it(migrated_url: str) -> None:
+    # Final review of M4, M12: migration 0001's default privileges reach only a role named
+    # frontdesk_app that existed when it ran; a role made after the migration had none.
+    role = _role()
+    app_url = _url(migrated_url, role, "pass")
+    ensure_app_role(migrated_url, app_url)
+    engine = create_engine(app_url)
+    with engine.connect() as connection:
+        rights = "SELECT has_table_privilege(current_user, :table, 'SELECT,INSERT,UPDATE,DELETE')"
+        assert connection.scalar(text(rights), {"table": "channel_messages"}) is True
+        assert connection.scalar(text(rights), {"table": "alembic_version"}) is False
+    engine.dispose()
