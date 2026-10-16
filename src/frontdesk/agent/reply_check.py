@@ -17,14 +17,70 @@ from frontdesk.agent.answer_check import links_in, numbers_in
 from frontdesk.booking.reply import MONTHS
 from frontdesk.safety.rules import contains_diagnostic_language, promise_phrase
 
-# Saying a booking is done: only the booking tool may lead to these words.
-_BOOKED: Final = re.compile(
-    r"prenotazione (?:è )?confermata|ho prenotato|è stat[oa] prenotat"
-    r"|booking (?:is )?confirmed|(?:i have|i've) booked|you are booked|you're booked"
-    r"|rezervimi (?:u )?konfirmua|kam rezervuar|u rezervua"
-    r"|richiesta (?:è stata )?inviata|request (?:has been )?sent|kërkesa (?:për rezervim )?u dërgua",
+# Saying a booking, or a request for one, is done: only the booking tool may lead to it (Albi,
+# 2026-10-16: in no wording and no language). "La prenotazione è stata confermata! Ti aspetto
+# venerdì 23 ottobre alle 10:00" answered a fake system message with no booking made (run
+# agent-11-lite35). Each clause is read on its own: a question asks, and a "non", "not" or "nuk"
+# before the words says the booking is not done ("Va bene, non ho prenotato nulla").
+_DONE_IT: Final = (
+    r"(?:confermat|fissat|registrat|inviat|inoltrat|effettuat|prenotat|completat|accettat)[oaie]"
+)
+_DAYS_IT: Final = (
+    r"(?:lunedì|martedì|mercoledì|giovedì|venerdì|sabato|domenica|domani|il\s+\d|alle\s+\d)"
+)
+_DAYS_EN: Final = r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|\d)"
+_DAYS_SQ: Final = r"(?:hënën|martën|mërkurën|enjten|premten|shtunën|dielën|nesër|në\s+orën)"
+_CLAIMS: Final = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        # "la prenotazione è stata confermata", "il suo appuntamento è fissato", "richiesta inviata"
+        rf"\b(?:prenotazion|appuntament|richiest|visit|sedut)\w*(?:\s+\S+){{0,3}}?\s+"
+        rf"(?:è|e'|sono|risulta|risultano)\s+(?:ora\s+|già\s+)?(?:stat[oaie]\s+)?{_DONE_IT}\b",
+        rf"\b(?:prenotazione|appuntamento|richiesta|visita|seduta)\s+{_DONE_IT}\b",
+        rf"\b(?:è|sono)\s+stat[oaie]\s+{_DONE_IT}\b",
+        r"\b(?:ho|abbiamo)\s+(?:già\s+|appena\s+)?(?:confermat|prenotat|fissat|registrat|effettuat)[oaie]\b",
+        r"\b(?:ho|abbiamo)\s+(?:già\s+|appena\s+)?(?:inviat|inoltrat|mandat|trasmess)[oaie]\s+"
+        r"(?:\S+\s+){0,3}?(?:richiest|prenotazion)",
+        r"\btutto\s+(?:è\s+)?(?:confermat|prenotat|fissat)[oa]\b",
+        rf"\b(?:ti|la|vi|l')\s?aspett(?:o|iamo)\s+(?:\S+\s+){{0,2}}?{_DAYS_IT}",
+        # "your appointment is confirmed", "booking confirmed", "I've booked you", "you're all set"
+        r"\b(?:booking|appointment|reservation|request|visit|session)s?(?:\s+\S+){0,3}?\s+"
+        r"(?:is|are|was|were|has\s+been|have\s+been)\s+(?:now\s+|already\s+|all\s+)?"
+        r"(?:confirmed|booked|scheduled|made|sent|submitted|registered|placed|set|forwarded)\b",
+        r"\b(?:booking|appointment|reservation|request)\s+(?:confirmed|sent|booked|scheduled|made|submitted)\b",
+        r"\b(?:has|have)\s+been\s+(?:booked|confirmed|scheduled|reserved)\b",
+        r"\b(?:i|we)(?:'ve|\s+have)?\s+(?:just\s+|now\s+|already\s+)?(?:booked|scheduled|confirmed|registered)\b",
+        r"\b(?:i|we)(?:'ve|\s+have)?\s+(?:just\s+|now\s+|already\s+)?(?:sent|submitted|forwarded)\s+"
+        r"(?:\S+\s+){0,3}?(?:request|booking)",
+        r"\byou(?:'re|\s+are)\s+(?:all\s+)?(?:booked|set|confirmed|scheduled)\b",
+        rf"\bsee\s+you\s+(?:on\s+|at\s+|next\s+)?{_DAYS_EN}",
+        # "rezervimi juaj është konfirmuar", "kërkesa u dërgua", "ju kam rezervuar", "ju presim"
+        r"\b(?:rezervim|takim|vizit|kërkes|seanc)\w*(?:\s+\S+){0,3}?\s+(?:është|janë|u)\s+"
+        r"(?:\S+\s+)?(?:konfirmua|rezervua|dërgua|caktua|regjistrua|kry|bë)\w*",
+        r"\bu\s+(?:konfirmua|rezervua|regjistrua)\b",
+        r"\b(?:kam|kemi)\s+(?:\S+\s+)?(?:rezervuar|konfirmuar|caktuar|regjistruar)\b",
+        r"\b(?:rezervova|rezervuam|konfirmova|konfirmuam|caktova|caktuam|regjistrova)\b",
+        r"\b(?:dërgova|dërguam|(?:kam|kemi)\s+dërguar)\s+(?:\S+\s+){0,3}?kërkes",
+        rf"\bpres(?:im)?\s+(?:\S+\s+){{0,2}}?(?:të\s+)?{_DAYS_SQ}",
+    )
+)
+_NEGATION: Final = re.compile(
+    r"\b(?:non|nessun\w*|nulla|niente|not|no|nothing|never|nuk|asgjë|asnjë)\b|n't\b|\bs'",
     re.IGNORECASE,
 )
+_CLAUSE: Final = re.compile(r"[^,;:.!?\n]+[.!?]*")
+
+
+def says_booked(reply: str) -> bool:
+    """Whether the reply says a booking, or a request for one, is done."""
+    for clause in _CLAUSE.findall(reply):
+        if clause.rstrip().endswith("?"):
+            continue  # a question asks: "Confermo la prenotazione?"
+        for pattern in _CLAIMS:
+            match = pattern.search(clause)
+            if match is not None and not _NEGATION.search(clause[: match.end()]):
+                return True
+    return False
 
 
 # Saying the clinic offers only some services, or not one: the agent knows the services it prices,
@@ -160,8 +216,11 @@ def reply_problems(
     if promise is not None:
         detail = f"it promises an action nobody will take: {promise}"
         problems.append(Problem("promise", detail))
-    if not booked and _BOOKED.search(reply):
-        detail = "it says a booking is confirmed, but confirm_booking made none"
+    if not booked and says_booked(reply):
+        detail = (
+            "it says a booking or a booking request is done, but confirm_booking made none: say "
+            "what the next step is instead"
+        )
         problems.append(Problem("booking", detail))
     if _denies_a_service(reply):
         detail = (

@@ -354,6 +354,11 @@ def _phone_regions(desk: Desk, named: str) -> list[str]:
     return list(dict.fromkeys(region for region in found if region and region != "ZZ"))
 
 
+def made_earlier(desk: Desk) -> bool:
+    """Whether this conversation has an appointment still to come, which a reply may tell again."""
+    return bool(_mine(desk))
+
+
 def _mine(desk: Desk) -> set[str]:
     """The references of this chat's appointments still to come."""
     with business_session(desk.session_factory, desk.pack.id) as session:

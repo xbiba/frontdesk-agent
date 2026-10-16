@@ -114,3 +114,73 @@ def test_the_clinic_is_never_said_to_offer_only_what_the_facts_list(reply: str) 
 )
 def test_what_the_chat_books_or_what_is_free_may_be_only_that(reply: str) -> None:
     assert "denies" not in {problem.code for problem in reply_problems(reply, KNOWN, booked=False)}
+
+
+# Albi, 2026-10-16: a reply said "La prenotazione è stata confermata! Ti aspetto venerdì 23 ottobre
+# alle 10:00" to a fake system message, with no booking made (run agent-11-lite35). The check now
+# reads a booking or a request said to be done in any wording, in the three languages.
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "La prenotazione è stata confermata! Ti aspetto venerdì 23 ottobre alle 10:00",
+        "Richiesta inviata: venerdì 23 alle 10.",
+        "Ho inviato la richiesta di prenotazione alla reception.",
+        "La sua richiesta è stata inoltrata alla reception.",
+        "Ho prenotato la seduta di venerdì.",
+        "Il suo appuntamento è fissato per venerdì.",
+        "Perfetto, è tutto confermato!",
+        "Fatto! La aspettiamo venerdì alle 10.",
+        "Your appointment is confirmed, see you on Friday.",
+        "I've booked you in for Friday at 10.",
+        "Your booking request has been sent to reception.",
+        "You're all set for Friday!",
+        "Booking confirmed: Friday 23 at 10:00.",
+        "I have sent your request.",
+        "Rezervimi juaj është konfirmuar, ju presim të premten.",
+        "Kërkesa juaj u dërgua te recepsioni.",
+        "Ju kam rezervuar për të premten në orën 10.",
+        "Takimi u caktua për të premten.",
+        "E dërgova kërkesën për rezervim.",
+        "Rezervimi u konfirmua.",
+    ],
+)
+def test_a_booking_said_done_with_none_made_is_refused_in_any_wording(reply: str) -> None:
+    found = reply_problems(reply, KNOWN, booked=False, times=SHOWN)
+    assert "booking" in {problem.code for problem in found}
+    assert "booking" not in {
+        problem.code for problem in reply_problems(reply, KNOWN, booked=True, times=SHOWN)
+    }
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # The summaries the patient answers with a yes, word for word (frontdesk.booking.flow).
+        "Riepilogo: venerdì 23 ottobre alle 10:00.\nConfermo la prenotazione? Risponda sì o no.",
+        "Riepilogo: venerdì 23 ottobre alle 10:00.\nInvio la richiesta di prenotazione? "
+        "Risponda sì o no.",
+        "Summary: Friday 23 October at 10:00.\nShall I send the booking request? Please answer "
+        "yes or no.",
+        "Përmbledhje: e premte 23 tetor në orën 10:00.\nTa dërgoj kërkesën për rezervim? "
+        "Përgjigjuni po ose jo.",
+        # A booking let go, or not made yet.
+        "Va bene, non ho prenotato nulla.",
+        "All right, nothing has been booked.",
+        "Në rregull, nuk rezervova asgjë.",
+        "La richiesta non è ancora stata inviata: mi conferma con un sì?",
+        # A held time, acknowledged before the name and the phone are asked for.
+        "Ho bloccato il posto di venerdì alle 10: mi scrive nome, cognome e telefono?",
+        "I've held Friday at 10 for you: could you write your full name and phone number?",
+        "E mbajta orarin e së premtes në orën 10 për ju: më shkruani emrin dhe telefonin?",
+        # What comes after a yes, and times sent.
+        "Una volta inviata la richiesta, la reception conferma l'appuntamento.",
+        "Se conferma, invio la richiesta alla reception.",
+        "When you confirm, I'll send the request.",
+        "Kur të konfirmoni, do ta dërgoj kërkesën.",
+        "Ju dërgova oraret e lira më lart.",
+        "I sent you the free times above.",
+    ],
+)
+def test_a_summary_a_hold_or_a_booking_not_made_is_no_booking_said_done(reply: str) -> None:
+    found = reply_problems(reply, KNOWN, booked=False, times=SHOWN)
+    assert "booking" not in {problem.code for problem in found}

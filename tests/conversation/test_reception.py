@@ -166,6 +166,30 @@ async def test_a_booking_the_agent_leads_is_made_by_the_tools(
     assert not any("123 4567" in text or "691234567" in text for text in texts)
 
 
+async def test_a_booking_made_in_an_earlier_turn_may_be_told_again(base: TurnRuntime) -> None:
+    # The check refuses a booking said to be done when none was made (Albi, 2026-10-16); one this
+    # conversation made earlier may be told again.
+    script = Script(
+        [
+            [("free_times", {})],
+            _final(f"{LIST}\nQuale preferisce?", "answer"),
+            [("hold_time", {"day": "2026-10-23", "time": "09:00"})],
+            _final("Nome, cognome e telefono?", "answer"),
+            [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
+            _final(SUMMARY, "answer"),
+            [("confirm_booking", {})],
+            _final(BOOKED),
+            _final("Prego! La sua prenotazione è confermata."),
+        ]
+    )
+    chat = Chat(base, script)
+    for message in ("Vorrei prenotare", "il primo", "Mario Rossi, +355 69 123 4567", "sì"):
+        await chat.say(message)
+    reply = await chat.say("grazie, è tutto a posto?")
+    assert reply.text == "Prego! La sua prenotazione è confermata."
+    assert reply.trace.check_reasons == ()
+
+
 async def test_without_the_patient_s_yes_nothing_is_booked(
     base: TurnRuntime, calendar: FixtureCalendar
 ) -> None:

@@ -24,7 +24,7 @@ from pydantic_ai.settings import ModelSettings
 
 from frontdesk.agent.classification import check_free_text
 from frontdesk.agent.prompts import instructions_for
-from frontdesk.agent.reply_check import Problem, reply_problems
+from frontdesk.agent.reply_check import Problem, reply_problems, says_booked
 from frontdesk.agent.vocab import SlotPart
 from frontdesk.conversation import reception_booking as booking
 from frontdesk.conversation import reception_hours as hours
@@ -235,7 +235,10 @@ def build_reception(
             return output  # the handoff text, or the introduction, says it all
         known = "\n".join([desk.facts, *desk.seen, desk.conversation, desk.message])
         times = booking.shown_times(desk)
-        problems = list(reply_problems(output.text, known, booked=desk.booked, times=times))
+        # A booking this conversation made in an earlier turn may be told again; the calendar is
+        # read only for a reply that says one is done.
+        booked = desk.booked or (says_booked(output.text) and booking.made_earlier(desk))
+        problems = list(reply_problems(output.text, known, booked=booked, times=times))
         if output.kind is ReplyKind.NOTICE and contains_clinical_terms(output.text):
             # Next to the medical notice, the answer is only the practical part (ADR-0006): a word
             # on the health problem there is the model talking health (security review, 2026-10-12).
