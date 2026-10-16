@@ -383,10 +383,18 @@ def _has_one(desk: Desk, appointment: Appointment) -> str:
 
 def cancel_booking(desk: Desk) -> str:
     _calendar_source(desk, desk.booking)
-    if desk.booking is not None:
-        cancel(desk.context(), desk.booking)
+    step = desk.booking
+    if step is not None:
+        if step.hold_id is not None:
+            # The time held, which the reply may call cancelled, with its day and time (final
+            # review of #48, C2): nothing else was.
+            with business_session(desk.session_factory, desk.pack.id) as session:
+                current = held(session, step.hold_id, desk.now)
+            if current is not None:
+                when = slot_time(current.start.astimezone(desk.zone), desk.language)
+                desk.released = (*desk.released, when)
+        cancel(desk.context(), step)
         desk.booking = None
-        desk.released = True
     return desk.said("Nothing is booked; the time is free again.")
 
 

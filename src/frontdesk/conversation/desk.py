@@ -42,7 +42,7 @@ class Desk:
     seen: list[str] = field(default_factory=list)  # what the tools returned this turn
     sources: list[str] = field(default_factory=list)
     booked: bool = False
-    released: bool = False  # cancel_booking let go of a held time
+    released: tuple[str, ...] = ()  # the held times cancel_booking let go of, as "venerdì 23…"
     summary: str | None = None  # the summary prepare_booking wrote this turn, shown as written
     booked_text: str | None = None  # what confirm_booking said when it booked
     rejected: list[str] = field(default_factory=list)  # the codes of the replies sent back
