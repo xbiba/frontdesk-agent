@@ -26,7 +26,7 @@ from pydantic_ai.settings import ModelSettings
 from frontdesk.agent.answer_check import numbers_in
 from frontdesk.agent.classification import check_free_text
 from frontdesk.agent.prompts import instructions_for
-from frontdesk.agent.reply_check import Problem, reply_problems, says_booked
+from frontdesk.agent.reply_check import Problem, numbers_said, reply_problems, says_booked
 from frontdesk.agent.vocab import SlotPart
 from frontdesk.conversation import reception_booking as booking
 from frontdesk.conversation import reception_hours as hours
@@ -293,7 +293,7 @@ def reply_sources(
     tools = tuple(dict.fromkeys(tool_sources))
     if not tools:
         return tuple(key for key, _ in documents)
-    quoted = numbers_in(reply) - numbers_in("\n".join(seen))
+    quoted = numbers_said(reply) - numbers_in("\n".join(seen))
     return tools + tuple(key for key, text in documents if quoted & numbers_in(text))
 
 

@@ -269,6 +269,11 @@ def wrong_weekdays(reply: str, today: date) -> list[str]:
 _LIST_MARK: Final = re.compile(r"(?m)^[ \t]*\d{1,2}[).][ \t]")
 
 
+def numbers_said(reply: str) -> set[str]:
+    """The numbers a reply states: its numbered list's own numbers are none."""
+    return numbers_in(_LIST_MARK.sub(" ", reply))
+
+
 def _without(text: str, spans: list[tuple[int, int]]) -> str:
     chars = list(text)
     for start, end in spans:

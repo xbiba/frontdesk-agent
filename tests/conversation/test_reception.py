@@ -539,6 +539,12 @@ FREE = "- 2026-10-23 (venerdì 23 ottobre): 10:00, 11:00"
             ("calendar:dr", "oliverio-it"),
             id="the-calendar-and-a-document",
         ),
+        pytest.param(
+            "Ecco i giorni:\n1. venerdì 23 ottobre: 10:00\n2. venerdì 23 ottobre: 11:00",
+            ("calendar:dr",),
+            ("calendar:dr",),
+            id="a-numbered-list-quotes-no-document",
+        ),
     ],
 )
 def test_a_reply_s_sources_are_its_tools_and_the_documents_it_quotes(
