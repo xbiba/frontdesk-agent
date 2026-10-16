@@ -110,7 +110,10 @@ def free_times(
     lines.append(_listing(desk, doctor, service, listed, fitting))
     later = [when for when in fitting if when not in listed]
     others = [when for when in days if when not in listed and when not in fitting]
-    lines.append(_other_days(desk, later or others))
+    if wish.part is not None and wish.day is None and not later and others:
+        lines.append(_none_in_part(desk, wish, others))
+    else:
+        lines.append(_other_days(desk, later or others))
     return desk.said("\n".join(lines))
 
 
@@ -155,6 +158,18 @@ def _other_days(desk: Desk, later: list[date]) -> str:
         f"Other days with free times: yes, from {later[0].isoformat()} "
         f"({day_words(later[0], desk.language)}). Call free_times with a day, or with more, for "
         "them."
+    )
+
+
+def _none_in_part(desk: Desk, wish: SlotWish, others: list[date]) -> str:
+    """Asked for a part of the day that no other day has free: the other days' times are at other
+    hours, or before the day asked from. Said as such, or the agent pages the calendar for them
+    (run agent-21: free_times six times, then reception)."""
+    return (
+        f"Other days with free times {_wish_text(desk, wish)}: none until "
+        f"{reach_words(desk, calendar_reach(desk))}. Later days are not known here: never say "
+        "there are no times after it; reception knows them. Other days have free times outside "
+        f"what was asked, from {others[0].isoformat()} ({day_words(others[0], desk.language)})."
     )
 
 

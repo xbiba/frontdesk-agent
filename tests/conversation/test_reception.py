@@ -778,6 +778,45 @@ cal-arben:
 """
 
 
+PART = """
+cal-arben:
+  blocks:
+    - {start: "2026-10-23 09:00", end: "2026-10-23 10:00"}
+    - {start: "2026-10-26 09:00", end: "2026-10-26 10:00"}
+    - {start: "2026-10-27 14:00", end: "2026-10-27 15:00"}
+  busy: []
+"""
+
+
+async def test_asked_for_an_afternoon_the_mornings_are_not_said_to_be_other_afternoons(
+    base: TurnRuntime, tmp_path: Path
+) -> None:
+    # Run agent-21: "avete qualcosa di pomeriggio?" got Tuesday's afternoon and "Other days with
+    # free times: yes, from 2026-10-23", a morning; the agent paged the calendar for more
+    # afternoons until its request limit sent the patient to reception.
+    path = tmp_path / "part.yaml"
+    path.write_text(PART, encoding="utf-8")
+    runtime = replace(base, scheduler=CalendarScheduler(FixtureCalendar(path)))
+    script = Script(
+        [
+            [("free_times", {"part": "afternoon"})],
+            _final("Martedì 27 ho posto alle 14 e alle 14:30."),
+        ]
+    )
+    await Chat(runtime, script).say("avete qualcosa di pomeriggio?")
+    (afternoon,) = script.tool_results()
+    assert "- 2026-10-27 (martedì 27 ottobre): 14:00, 14:30" in afternoon
+    assert "Other days with free times: yes" not in afternoon
+    assert (
+        "Other days with free times in the afternoon: none until 2026-11-04 (mercoledì 4 "
+        "novembre), the last day the calendar is read here." in afternoon
+    )
+    assert (
+        "Other days have free times outside what was asked, from 2026-10-23 (venerdì 23 ottobre)."
+        in afternoon
+    )
+
+
 async def test_a_full_day_is_no_closed_day_and_a_full_morning_keeps_its_start(
     base: TurnRuntime, tmp_path: Path
 ) -> None:
