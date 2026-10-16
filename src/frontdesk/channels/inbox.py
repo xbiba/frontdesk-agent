@@ -187,6 +187,20 @@ class Inbox:
             log_event(logger, "channel.not_a_tester", channel=self._channel, count=strangers)
         return Accepted(tuple(work))
 
+    def waiting(self, key: str) -> bool:
+        """Whether a message of the conversation still waits for its turn."""
+        with business_session(self._factory, self._business) as session:
+            found = session.scalar(
+                select(ChannelMessage.id)
+                .where(ChannelMessage.business_id == self._business)
+                .where(ChannelMessage.channel == self._channel)
+                .where(ChannelMessage.conversation_id == key)
+                .where(ChannelMessage.direction == IN)
+                .where(ChannelMessage.status == InStatus.PENDING)
+                .limit(1)
+            )
+        return found is not None
+
     def count_testers(self) -> int:
         with business_session(self._factory, self._business) as session:
             count = session.scalar(
