@@ -75,6 +75,32 @@ NEGATION_WORDS: Final = 2  # the words before a claim a negation may stand in
 _CLAUSE_BREAK: Final = re.compile(r"[,;:.!?\n\u2014\u2013]|\s-\s")  # em and en dashes too
 
 
+# Saying an appointment is cancelled (run agent-16, 2026-10-16: "Ho annullato l'appuntamento" to a
+# husband who asked to cancel his wife's): no tool cancels an appointment, cancel_booking only lets
+# go of a time held in this chat. Read as the claims of a booking are.
+_CANCELLED_IT: Final = r"(?:annullat|cancellat|disdett)[oaie]"
+_CANCELS: Final = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        rf"\b(?:ho|abbiamo)\s+(?:già\s+|appena\s+)?{_CANCELLED_IT}\b",
+        rf"\b(?:è|sono)\s+(?:ora\s+|già\s+)?(?:stat[oaie]\s+)?{_CANCELLED_IT}\b",
+        rf"\b(?:appuntamento|prenotazione|visita|seduta|richiesta)\s+{_CANCELLED_IT}\b",
+        r"\b(?:i|we)(?:'ve|\s+have)?\s+(?:just\s+|now\s+|already\s+)?cancell?ed\b",
+        r"\b(?:is|are|was|were|has|have)(?P<neg>\s+not|n't)?(?:\s+been)?\s+(?:now\s+)?cancell?ed\b",
+        r"\b(?:appointment|booking|visit|reservation)\s+cancell?ed\b",
+        r"\b(?:anulova|anuluam|(?:kam|kemi)\s+anuluar)\b",
+        r"\b(?:u|është|janë)\s+(?:\S+\s+)?anulua\w*",
+    )
+)
+
+
+def says_cancelled(reply: str) -> bool:
+    """Whether the reply says an appointment, or a request for one, is cancelled."""
+    return any(
+        _claims(clause, pattern) for clause in _CLAUSE_BREAK.split(reply) for pattern in _CANCELS
+    )
+
+
 def says_booked(reply: str) -> bool:
     """Whether the reply says a booking, or a request for one, is done. A question is read as any
     clause (security review, 2026-10-16): the summaries ask with no word of a booking done."""
@@ -268,6 +294,7 @@ def reply_problems(
     earlier: tuple[str, ...] = (),
     today: date | None = None,
     previous: str = "",
+    released: bool = False,
 ) -> tuple[Problem, ...]:
     """Why `reply` may not be sent; empty when it may. `known`: everything the agent was given,
     which a number or a link must come from. `booked`: the booking tool made a booking. `times`:
@@ -275,7 +302,8 @@ def reply_problems(
     time of `known` (an opening hour), and is then no number to check. `earlier`: the appointments
     the conversation made in earlier turns ("venerdì 23 ottobre, 10:00"), which it may tell again.
     `today`: the business's date, against which a weekday next to a date is checked. `previous`:
-    the agent's last message, which the reply may not repeat word for word."""
+    the agent's last message, which the reply may not repeat word for word. `released`:
+    cancel_booking let go of a held time, which the reply may call cancelled."""
     problems = []
     if not reply.strip():
         problems.append(Problem("empty", "the reply is empty"))
@@ -317,6 +345,12 @@ def reply_problems(
             "say what the next step is instead"
         )
         problems.append(Problem("booking", detail))
+    if not released and says_cancelled(reply):
+        detail = (
+            "it says an appointment is cancelled, but no tool cancelled one: you cannot cancel or "
+            "move an appointment; reception can, give its phone"
+        )
+        problems.append(Problem("cancel", detail))
     if _denies_a_service(reply):
         detail = (
             "it says the clinic offers only some services, or not one; the clinic has more than "

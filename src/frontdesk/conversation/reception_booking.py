@@ -386,6 +386,7 @@ def cancel_booking(desk: Desk) -> str:
     if desk.booking is not None:
         cancel(desk.context(), desk.booking)
         desk.booking = None
+        desk.released = True
     return desk.said("Nothing is booked; the time is free again.")
 
 

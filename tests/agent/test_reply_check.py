@@ -270,3 +270,39 @@ def test_a_reply_that_repeats_the_previous_one_word_for_word_is_refused() -> Non
         previous=previous,
     )
     assert "repeat" not in {problem.code for problem in other}
+
+
+# Run agent-16 (2026-10-16): "Ho annullato l'appuntamento" to a husband who asked to cancel his
+# wife's appointment. No tool cancels an appointment; cancel_booking lets go of a held time.
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Ho annullato l'appuntamento. Se Le serve altro, sono a Sua disposizione.",
+        "Il suo appuntamento è stato annullato.",
+        "Appuntamento annullato.",
+        "I've cancelled your appointment.",
+        "Your booking has been cancelled.",
+        "E anulova takimin.",
+        "Takimi u anulua.",
+        "Rezervimi juaj është anuluar.",
+    ],
+)
+def test_an_appointment_said_cancelled_with_none_cancelled_is_refused(reply: str) -> None:
+    assert "cancel" in {problem.code for problem in reply_problems(reply, KNOWN, booked=False)}
+    allowed = reply_problems(reply, KNOWN, booked=False, released=True)
+    assert "cancel" not in {problem.code for problem in allowed}
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Non posso annullare l'appuntamento: chiami la reception.",
+        "Non ho annullato nulla.",
+        "I can't cancel appointments here: please call reception.",
+        "Your appointment is not cancelled.",
+        "Nuk mund ta anuloj takimin: telefononi recepsionin.",
+        "Per annullarla o spostarla, chiami la reception.",
+    ],
+)
+def test_a_cancellation_not_said_done_passes(reply: str) -> None:
+    assert "cancel" not in {problem.code for problem in reply_problems(reply, KNOWN, booked=False)}

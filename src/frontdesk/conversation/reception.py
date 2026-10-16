@@ -12,6 +12,7 @@ answers instead.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import timedelta
 from enum import StrEnum
 from typing import Final
@@ -22,6 +23,7 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, Text
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 
+from frontdesk.agent.answer_check import numbers_in
 from frontdesk.agent.classification import check_free_text
 from frontdesk.agent.prompts import instructions_for
 from frontdesk.agent.reply_check import Problem, reply_problems, says_booked
@@ -256,6 +258,7 @@ def build_reception(
                 earlier=earlier,
                 today=desk.today,
                 previous=desk.previous,
+                released=desk.released,
             )
         )
         if output.kind is ReplyKind.NOTICE and contains_clinical_terms(output.text):
@@ -275,6 +278,23 @@ def build_reception(
         return output
 
     return agent
+
+
+def reply_sources(
+    reply: str,
+    tool_sources: Sequence[str],
+    seen: Sequence[str],
+    documents: Sequence[tuple[str, str]],
+) -> tuple[str, ...]:
+    """The sources of a reply: what its tools read (a search's documents, the calendar), and, when
+    the documents ride in the prompt (key and text each), every one the reply quotes a number of
+    that no tool gave (`seen`). A reply no tool explains has every document in the prompt (run
+    agent-16: a reply with the doctor's stay and the free times named the calendar alone)."""
+    tools = tuple(dict.fromkeys(tool_sources))
+    if not tools:
+        return tuple(key for key, _ in documents)
+    quoted = numbers_in(reply) - numbers_in("\n".join(seen))
+    return tools + tuple(key for key, text in documents if quoted & numbers_in(text))
 
 
 def _search(desk: Desk, question: str) -> str:

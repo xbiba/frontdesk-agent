@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.booking.calendar import FixtureCalendar
 from frontdesk.booking.scheduler import CalendarScheduler
-from frontdesk.conversation.reception import build_reception
+from frontdesk.conversation.reception import build_reception, reply_sources
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, TurnResult, TurnRuntime, handle_message
 from frontdesk.db.engine import business_session
@@ -516,6 +516,50 @@ async def test_a_small_pack_s_documents_ride_in_the_agent_s_prompt(base: TurnRun
     assert set(reply.trace.sources) == {"first-visit-it", "physiotherapy-it"}
     booked = await chat.say("venerdì che orari ci sono?")
     assert booked.trace.sources == ("calendar:dr-arben-demo",)
+
+
+STAY = ("oliverio-it", "Il dott. Oliverio è in clinica dal 23 ottobre al 2 novembre.")
+PARKING = ("parking-it", "Il parcheggio è dietro l'edificio.")
+FREE = "- 2026-10-23 (venerdì 23 ottobre): 10:00, 11:00"
+
+
+@pytest.mark.parametrize(
+    ("reply", "tools", "sources"),
+    [
+        pytest.param("C'è un parcheggio.", (), ("oliverio-it", "parking-it"), id="no-tool"),
+        pytest.param(
+            "Venerdì 23 ottobre ho posto alle 10:00.",
+            ("calendar:dr",),
+            ("calendar:dr",),
+            id="the-calendar-alone",
+        ),
+        pytest.param(
+            "È qui dal 23 ottobre al 2 novembre; venerdì 23 alle 10:00.",
+            ("calendar:dr",),
+            ("calendar:dr", "oliverio-it"),
+            id="the-calendar-and-a-document",
+        ),
+    ],
+)
+def test_a_reply_s_sources_are_its_tools_and_the_documents_it_quotes(
+    reply: str, tools: tuple[str, ...], sources: tuple[str, ...]
+) -> None:
+    assert reply_sources(reply, tools, [FREE] if tools else [], [STAY, PARKING]) == sources
+
+
+async def test_an_appointment_said_cancelled_is_sent_back(base: TurnRuntime) -> None:
+    # Run agent-16 (2026-10-16): no tool cancels an appointment.
+    script = Script(
+        [
+            _final("Ho annullato l'appuntamento."),
+            _final(
+                "Non posso annullarlo io: la reception la aiuta al +355 00 000 0000.", "handoff"
+            ),
+        ]
+    )
+    reply = await Chat(base, script).say("Sono il marito di Maria: annulli il suo appuntamento.")
+    assert "annullato" not in reply.text
+    assert reply.trace.check_reasons == ("sent_back:cancel",)
 
 
 async def test_a_reply_that_repeats_the_last_one_is_sent_back(base: TurnRuntime) -> None:
