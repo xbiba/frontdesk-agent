@@ -354,12 +354,12 @@ def _phone_regions(desk: Desk, named: str) -> list[str]:
     return list(dict.fromkeys(region for region in found if region and region != "ZZ"))
 
 
-def earlier_times(desk: Desk) -> frozenset[str]:
-    """The times ("10:00") of this conversation's appointments still to come, which a reply may
-    tell again."""
+def earlier_slots(desk: Desk) -> tuple[str, ...]:
+    """This conversation's appointments still to come, as the patient reads them ("venerdì 23
+    ottobre, 10:00"), which a reply may tell again."""
     with business_session(desk.session_factory, desk.pack.id) as session:
         starts = booked_starts(session, desk.conversation_id, desk.now)
-    return frozenset(f"{start.astimezone(desk.zone):%H:%M}" for start in starts)
+    return tuple(slot_time(start.astimezone(desk.zone), desk.language) for start in sorted(starts))
 
 
 def _mine(desk: Desk) -> set[str]:

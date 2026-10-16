@@ -173,21 +173,26 @@ async def test_a_booking_made_in_an_earlier_turn_may_be_told_again(base: TurnRun
         [
             [("free_times", {})],
             _final(f"{LIST}\nQuale preferisce?", "answer"),
-            [("hold_time", {"day": "2026-10-23", "time": "09:00"})],
+            [("hold_time", {"day": "2026-10-23", "time": "09:30"})],
             _final("Nome, cognome e telefono?", "answer"),
             [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
             _final(SUMMARY, "answer"),
             [("confirm_booking", {})],
             _final(BOOKED),
+            # Told with no time, it could be another booking: the reply is sent back once.
             _final("Prego! La sua prenotazione è confermata."),
+            _final("Prego! La sua prenotazione di venerdì 23 ottobre alle 09:30 è confermata."),
         ]
     )
     chat = Chat(base, script)
-    for message in ("Vorrei prenotare", "il primo", "Mario Rossi, +355 69 123 4567", "sì"):
+    for message in ("Vorrei prenotare", "il secondo", "Mario Rossi, +355 69 123 4567", "sì"):
         await chat.say(message)
     reply = await chat.say("grazie, è tutto a posto?")
-    assert reply.text == "Prego! La sua prenotazione è confermata."
-    assert reply.trace.check_reasons == ()
+    assert reply.text == "Prego! La sua prenotazione di venerdì 23 ottobre alle 09:30 è confermata."
+    assert reply.trace.check_reasons == ("sent_back:booking",)
+    retry = script.calls[-1][-1]
+    assert isinstance(retry, ModelRequest)
+    assert "venerdì 23 ottobre, 09:30" in str(retry.parts[0])  # the model is told which one
 
 
 async def test_an_earlier_booking_never_covers_another_time(base: TurnRuntime) -> None:

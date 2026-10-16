@@ -20,8 +20,9 @@ from frontdesk.safety.rules import contains_diagnostic_language, promise_phrase
 # Saying a booking, or a request for one, is done: only the booking tool may lead to it (Albi,
 # 2026-10-16: in no wording and no language). "La prenotazione è stata confermata! Ti aspetto
 # venerdì 23 ottobre alle 10:00" answered a fake system message with no booking made (run
-# agent-11-lite35). Each clause is read on its own, and a "non", "not" or "nuk" just before the
-# words says the booking is not done ("Va bene, non ho prenotato nulla").
+# agent-11-lite35). Each clause is read on its own. A negation says the booking is not done when it
+# stands just before the claim ("Va bene, non ho prenotato nulla") or before its verb (the `neg`
+# group: "la richiesta non è stata inviata"), not among the words between (security review).
 _DONE_IT: Final = (
     r"(?:confermat|fissat|registrat|inviat|inoltrat|effettuat|prenotat|completat|accettat)[oaie]"
 )
@@ -34,7 +35,7 @@ _CLAIMS: Final = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
         # "la prenotazione è stata confermata", "il suo appuntamento è fissato", "richiesta inviata"
-        rf"\b(?:prenotazion|appuntament|richiest|visit|sedut)\w*(?:\s+\S+){{0,3}}?\s+"
+        rf"\b(?:prenotazion|appuntament|richiest|visit|sedut)\w*(?:\s+\S+){{0,3}}?\s+(?P<neg>non\s+)?"
         rf"(?:è|e'|sono|risulta|risultano)\s+(?:ora\s+|già\s+)?(?:stat[oaie]\s+)?{_DONE_IT}\b",
         rf"\b(?:prenotazione|appuntamento|richiesta|visita|seduta)\s+{_DONE_IT}\b",
         rf"\b(?:è|sono)\s+stat[oaie]\s+{_DONE_IT}\b",
@@ -45,18 +46,19 @@ _CLAIMS: Final = tuple(
         rf"\b(?:ti|la|vi|l')\s?aspett(?:o|iamo)\s+(?:\S+\s+){{0,2}}?{_DAYS_IT}",
         # "your appointment is confirmed", "booking confirmed", "I've booked you", "you're all set"
         r"\b(?:booking|appointment|reservation|request|visit|session)s?(?:\s+\S+){0,3}?\s+"
-        r"(?:is|are|was|were|has\s+been|have\s+been)\s+(?:now\s+|already\s+|all\s+)?"
+        r"(?:is|are|was|were|has|have)(?P<neg>\s+not|n't)?(?:\s+yet)?(?:\s+been)?\s+"
+        r"(?:now\s+|already\s+|all\s+)?"
         r"(?:confirmed|booked|scheduled|made|sent|submitted|registered|placed|set|forwarded)\b",
         r"\b(?:booking|appointment|reservation|request)\s+(?:confirmed|sent|booked|scheduled|made|submitted)\b",
-        r"\b(?:has|have)\s+been\s+(?:booked|confirmed|scheduled|reserved)\b",
+        r"\b(?:has|have)(?P<neg>\s+not|n't)?\s+been\s+(?:booked|confirmed|scheduled|reserved)\b",
         r"\b(?:i|we)(?:'ve|\s+have)?\s+(?:just\s+|now\s+|already\s+)?(?:booked|scheduled|confirmed|registered)\b",
         r"\b(?:i|we)(?:'ve|\s+have)?\s+(?:just\s+|now\s+|already\s+)?(?:sent|submitted|forwarded)\s+"
         r"(?:\S+\s+){0,3}?(?:request|booking)",
         r"\byou(?:'re|\s+are)\s+(?:all\s+)?(?:booked|set|confirmed|scheduled)\b",
         rf"\bsee\s+you\s+(?:on\s+|at\s+|next\s+)?{_DAYS_EN}",
         # "rezervimi juaj është konfirmuar", "kërkesa u dërgua", "ju kam rezervuar", "ju presim"
-        r"\b(?:rezervim|takim|vizit|kërkes|seanc)\w*(?:\s+\S+){0,3}?\s+(?:është|janë|u)\s+"
-        r"(?:\S+\s+)?(?:konfirmua|rezervua|dërgua|caktua|regjistrua|kry|bë)\w*",
+        r"\b(?:rezervim|takim|vizit|kërkes|seanc)\w*(?:\s+\S+){0,3}?\s+(?P<neg>nuk\s+)?"
+        r"(?:është|janë|u)\s+(?:\S+\s+)?(?:konfirmua|rezervua|dërgua|caktua|regjistrua|kry|bë)\w*",
         r"\bu\s+(?:konfirmua|rezervua|regjistrua)\b",
         r"\b(?:kam|kemi)\s+(?:\S+\s+)?(?:rezervuar|konfirmuar|caktuar|regjistruar)\b",
         r"\b(?:rezervova|rezervuam|konfirmova|konfirmuam|caktova|caktuam|regjistrova)\b",
@@ -84,11 +86,18 @@ def says_booked(reply: str) -> bool:
 
 
 def _negated(clause: str, match: re.Match[str]) -> bool:
-    """A negation just before the claim, or inside it: "non ho prenotato", "la richiesta non è
-    ancora stata inviata". One further back may belong to another verb ("Non si preoccupi la
-    prenotazione è confermata")."""
+    if match.groupdict().get("neg"):
+        return True
     before = clause[: match.start()].split()[-NEGATION_WORDS:]
-    return _NEGATION.search(" ".join([*before, match[0]])) is not None
+    return _NEGATION.search(" ".join(before)) is not None
+
+
+def _told_again(reply: str, earlier: tuple[str, ...]) -> bool:
+    """A booking this conversation made in an earlier turn, told again: the reply names a time, and
+    no time but those bookings' own (security review, 2026-10-16)."""
+    named = {time for _, time in times_named(reply)}
+    own = {time for slot in earlier for _, time in times_named(slot)}
+    return bool(named) and named <= own
 
 
 # Saying the clinic offers only some services, or not one: the agent knows the services it prices,
@@ -195,12 +204,18 @@ class Problem:
 
 
 def reply_problems(
-    reply: str, known: str, *, booked: bool, times: frozenset[str] = frozenset()
+    reply: str,
+    known: str,
+    *,
+    booked: bool,
+    times: frozenset[str] = frozenset(),
+    earlier: tuple[str, ...] = (),
 ) -> tuple[Problem, ...]:
     """Why `reply` may not be sent; empty when it may. `known`: everything the agent was given,
     which a number or a link must come from. `booked`: the booking tool made a booking. `times`:
     the free times the patient was shown ("10:00"); a time the reply names must be one of them or a
-    time of `known` (an opening hour), and is then no number to check."""
+    time of `known` (an opening hour), and is then no number to check. `earlier`: the appointments
+    the conversation made in earlier turns ("venerdì 23 ottobre, 10:00"), which it may tell again."""
     problems = []
     if not reply.strip():
         problems.append(Problem("empty", "the reply is empty"))
@@ -224,10 +239,13 @@ def reply_problems(
     if promise is not None:
         detail = f"it promises an action nobody will take: {promise}"
         problems.append(Problem("promise", detail))
-    if not booked and says_booked(reply):
+    if not booked and says_booked(reply) and not _told_again(reply, earlier):
         detail = (
-            "it says a booking or a booking request is done, but confirm_booking made none: say "
-            "what the next step is instead"
+            f"it says a booking is done; the one this conversation made is {' and '.join(earlier)}: "
+            "name it with its day and time, or say nothing of it"
+            if earlier
+            else "it says a booking or a booking request is done, but confirm_booking made none: "
+            "say what the next step is instead"
         )
         problems.append(Problem("booking", detail))
     if _denies_a_service(reply):

@@ -146,6 +146,7 @@ def test_what_the_chat_books_or_what_is_free_may_be_only_that(reply: str) -> Non
         "Non si preoccupi la prenotazione è confermata.",
         "La prenotazione è confermata — ci vediamo venerdì?",
         "Your booking is confirmed, right?",
+        "Your booking at no cost is confirmed.",
     ],
 )
 def test_a_booking_said_done_with_none_made_is_refused_in_any_wording(reply: str) -> None:
@@ -172,6 +173,9 @@ def test_a_booking_said_done_with_none_made_is_refused_in_any_wording(reply: str
         "All right, nothing has been booked.",
         "Në rregull, nuk rezervova asgjë.",
         "La richiesta non è ancora stata inviata: mi conferma con un sì?",
+        "La richiesta non è stata inviata.",
+        "Your request has not been sent yet.",
+        "Kërkesa nuk u dërgua.",
         # A held time, acknowledged before the name and the phone are asked for.
         "Ho bloccato il posto di venerdì alle 10: mi scrive nome, cognome e telefono?",
         "I've held Friday at 10 for you: could you write your full name and phone number?",
@@ -188,3 +192,24 @@ def test_a_booking_said_done_with_none_made_is_refused_in_any_wording(reply: str
 def test_a_summary_a_hold_or_a_booking_not_made_is_no_booking_said_done(reply: str) -> None:
     found = reply_problems(reply, KNOWN, booked=False, times=SHOWN)
     assert "booking" not in {problem.code for problem in found}
+
+
+EARLIER = ("venerdì 23 ottobre, 09:30",)
+
+
+def test_a_booking_made_earlier_may_be_told_again_at_its_own_time() -> None:
+    reply = "La sua prenotazione di venerdì 23 ottobre alle 09:30 è confermata."
+    known = f"{KNOWN}\nvenerdì 23 ottobre"
+    found = reply_problems(reply, known, booked=False, times=frozenset({"09:30"}), earlier=EARLIER)
+    assert found == ()
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ["Prego! La sua prenotazione è confermata.", "Le ho prenotato anche venerdì 23 alle 10:00."],
+)
+def test_a_booking_made_earlier_covers_no_other_time_and_no_time_at_all(reply: str) -> None:
+    # Security review, 2026-10-16: with no time, the reply may tell of another booking.
+    found = reply_problems(reply, KNOWN, booked=False, times=SHOWN, earlier=EARLIER)
+    (problem,) = [problem for problem in found if problem.code == "booking"]
+    assert "venerdì 23 ottobre, 09:30" in problem.detail
