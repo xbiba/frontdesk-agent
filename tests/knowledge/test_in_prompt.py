@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.db.engine import business_session
-from frontdesk.knowledge.in_prompt import documents_for, knowledge_chars
+from frontdesk.knowledge.in_prompt import NONE_VALID, documents_for, knowledge_chars
 from frontdesk.knowledge.retrieval import valid_chunks
 from frontdesk.tenancy.loader import load_pack
 from frontdesk.tenancy.pack import BusinessPack
@@ -40,7 +40,7 @@ def test_a_business_without_knowledge_has_none_in_the_prompt(
     factory = activate_pack(clinic_pack)
     with business_session(factory, "no-such-business") as session:
         assert knowledge_chars(session, "no-such-business") == 0
-        assert documents_for(session, "no-such-business", TODAY, "it").text == ""
+        assert documents_for(session, "no-such-business", TODAY, "it").text == NONE_VALID
 
 
 def test_the_documents_come_in_the_conversation_s_language(
@@ -52,7 +52,11 @@ def test_the_documents_come_in_the_conversation_s_language(
         english = documents_for(session, clinic_pack.id, TODAY, "en")
     assert italian.sources == ("first-visit-it", "physiotherapy-it")
     assert english.sources == ("parking-en",)
-    assert english.text.startswith("[Parking and access \u203a Parking]\nKlinika Demo has six")
+    # Fenced as data (final review of #48, M5).
+    assert english.text.startswith(
+        '<document key="parking-en">\n[Parking and access \u203a Parking]\nKlinika Demo has six'
+    )
+    assert english.text.endswith("</document>")
 
 
 def test_a_language_with_no_valid_document_gets_every_language(

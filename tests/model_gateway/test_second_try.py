@@ -4,7 +4,7 @@ and so is the rest of the turn; a tool's own retry stays with the first."""
 from __future__ import annotations
 
 from pydantic import BaseModel
-from pydantic_ai import Agent, ModelResponse, ModelRetry, RunContext, ToolCallPart
+from pydantic_ai import Agent, ModelResponse, ModelRetry, RunContext, TextPart, ToolCallPart
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
@@ -78,3 +78,12 @@ async def test_a_tool_s_own_retry_stays_with_the_first_model() -> None:
     first = _model("first", [call, {"text": "good"}], seen)
     result = await _agent(first, _model("second", [], seen)).run("hi")
     assert (result.output.text, seen) == ("good", ["first", "first"])
+
+
+async def test_a_reply_with_no_tool_call_is_written_again_by_the_second_model() -> None:
+    # Final review of #48, M4: the model answered with text where the reply's tool was due.
+    seen: list[str] = []
+    first = _model("first", [ModelResponse(parts=[TextPart("ciao")])], seen)
+    second = _model("second", [{"text": "good"}], seen)
+    result = await _agent(first, second).run("hi")
+    assert (result.output.text, seen) == ("good", ["first", "second"])

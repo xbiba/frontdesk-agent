@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import math
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Final, Protocol
 
 from frontdesk.db.models import EMBEDDING_DIM
 from frontdesk.safety.normalize import tokens
@@ -64,6 +64,12 @@ class FastEmbedEmbedder:
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         return [[float(value) for value in vector] for vector in self._model.embed(list(texts))]
+
+
+# The most characters of approved documents, every language counted, that ride in the prompt
+# (frontdesk.knowledge.in_prompt): about 3,500 tokens at 4 characters a token (Albi, 2026-10-16:
+# "sotto 3-4 mila token"). A deployment with no embedder holds no more.
+IN_PROMPT_CHARS: Final = 14_000
 
 
 class NoEmbedder:

@@ -36,9 +36,9 @@ from frontdesk.conversation.desk import Desk
 from frontdesk.conversation.reception import ReceptionReply, build_reception
 from frontdesk.conversation.turn import TurnRuntime
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
-from frontdesk.knowledge.embedders import Embedder, NoEmbedder, build_embedder
+from frontdesk.knowledge.embedders import IN_PROMPT_CHARS, Embedder, NoEmbedder, build_embedder
 from frontdesk.knowledge.facts import load_catalog
-from frontdesk.knowledge.in_prompt import IN_PROMPT_CHARS, knowledge_chars
+from frontdesk.knowledge.in_prompt import knowledge_chars
 from frontdesk.knowledge.versions import check_embedder
 from frontdesk.model_gateway.costs import load_budget
 from frontdesk.model_gateway.daily_cap import CappedModel, DailyCap

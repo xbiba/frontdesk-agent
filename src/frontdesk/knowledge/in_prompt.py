@@ -13,32 +13,20 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Final
 
-from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from frontdesk.db.models import Chunk
 from frontdesk.knowledge.evidence import neutralized
 from frontdesk.knowledge.retrieval import chunk_evidence, valid_chunks
-from frontdesk.knowledge.versions import active_version_id
+from frontdesk.knowledge.versions import active_version_id, version_chars
 from frontdesk.tenancy.pack import Language
 
-# The most characters of approved documents, every language counted, that ride in the prompt: about
-# 3,500 tokens at 4 characters a token (Albi: "sotto 3-4 mila token").
-IN_PROMPT_CHARS: Final = 14_000
+NONE_VALID: Final = "No document is valid today."  # never an empty section (final review, M3)
 
 
 def knowledge_chars(session: Session, business_id: str) -> int:
     """The characters of the active version's documents, in every language and period."""
     version_id = active_version_id(session, business_id)
-    if version_id is None:
-        return 0
-    size = func.sum(func.length(Chunk.heading) + func.length(Chunk.content))
-    total = session.scalar(
-        select(func.coalesce(size, 0)).where(
-            Chunk.business_id == business_id, Chunk.knowledge_version_id == version_id
-        )
-    )
-    return int(total or 0)
+    return 0 if version_id is None else version_chars(session, version_id)
 
 
 @dataclass(frozen=True)
@@ -55,7 +43,8 @@ class PromptDocuments:
 def documents_for(
     session: Session, business_id: str, today: date, language: Language
 ) -> PromptDocuments:
-    """The active documents valid today, in `language` when it has some, else in every language."""
+    """The active documents valid today, in `language` when it has some, else in every language.
+    Each is fenced as data, its angle brackets turned to quotes (final review of #48, M5)."""
     chunks = valid_chunks(session, business_id=business_id, today=today)
     chosen = [chunk for chunk in chunks if chunk.language == language] or chunks
     blocks: dict[str, list[str]] = {}
@@ -63,4 +52,7 @@ def documents_for(
         item = neutralized(chunk_evidence(chunk))
         blocks.setdefault(chunk.document_key, []).append(f"[{item.title}]\n{item.content}")
     texts = tuple((key, "\n\n".join(parts)) for key, parts in blocks.items())
-    return PromptDocuments("\n\n".join(text for _, text in texts), texts)
+    if not texts:
+        return PromptDocuments(NONE_VALID)
+    fenced = "\n".join(f'<document key="{key}">\n{text}\n</document>' for key, text in texts)
+    return PromptDocuments(fenced, texts)

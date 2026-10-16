@@ -21,12 +21,12 @@ from enum import StrEnum
 from itertools import groupby
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.orm import Session
 
 from frontdesk.db.models import EMBEDDING_DIM, Chunk, Document, KnowledgeVersion, Record
 from frontdesk.knowledge.chunking import chunk_markdown
-from frontdesk.knowledge.embedders import Embedder, NoEmbedder
+from frontdesk.knowledge.embedders import IN_PROMPT_CHARS, Embedder, NoEmbedder
 from frontdesk.safety.normalize import normalize
 from frontdesk.tenancy.pack import BusinessPack
 
@@ -136,6 +136,13 @@ def activate(session: Session, version_id: uuid.UUID, embedder: Embedder, *, now
     )
     if business_id is None:
         raise KnowledgeStateError(f"knowledge version {version_id} is not approved")
+    size = version_chars(session, version_id)
+    if embedder.identity == NoEmbedder.identity and size > IN_PROMPT_CHARS:
+        # Running workers would put it whole in every prompt (final review of #48, M1).
+        raise KnowledgeStateError(
+            f"knowledge version {version_id} has {size} characters of documents, more than the "
+            f"{IN_PROMPT_CHARS} the prompt holds: it must be searched, with an embedder"
+        )
     _embed_chunks(session, version_id, embedder)
     _retire_active(session, business_id, now)
     _transition(
@@ -323,6 +330,15 @@ def _clear_vectors(session: Session, version_id: uuid.UUID) -> None:
     session.execute(
         update(Chunk).where(Chunk.knowledge_version_id == version_id).values(embedding=None)
     )
+
+
+def version_chars(session: Session, version_id: uuid.UUID) -> int:
+    """The characters of a version's documents, in every language and period."""
+    size = func.sum(func.length(Chunk.heading) + func.length(Chunk.content))
+    total = session.scalar(
+        select(func.coalesce(size, 0)).where(Chunk.knowledge_version_id == version_id)
+    )
+    return int(total or 0)
 
 
 def _embed_chunks(session: Session, version_id: uuid.UUID, embedder: Embedder) -> int:

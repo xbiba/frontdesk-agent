@@ -684,3 +684,15 @@ def test_with_no_embedder_a_version_is_activated_without_vectors(
         )
         check_embedder(session, clinic_pack.id, NoEmbedder())
         assert reembed_active(session, clinic_pack.id, NoEmbedder()) == 0
+
+
+def test_with_no_embedder_a_version_too_large_for_the_prompt_is_never_activated(
+    factory: sessionmaker[Session], clinic_pack: BusinessPack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Final review of #48, M1: running workers would put the whole larger set in every prompt.
+    monkeypatch.setattr("frontdesk.knowledge.versions.IN_PROMPT_CHARS", 10)
+    with business_session(factory, clinic_pack.id) as session:
+        draft = create_draft(session, clinic_pack)
+        approve(session, draft.version_id, approved_by="Owner", evidence="signed sheet", now=NOW)
+        with pytest.raises(KnowledgeStateError, match="searched"):
+            activate(session, draft.version_id, NoEmbedder(), now=NOW)
