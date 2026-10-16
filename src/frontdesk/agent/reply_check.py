@@ -15,125 +15,10 @@ from datetime import date
 from typing import Final
 
 from frontdesk.agent.answer_check import links_in, numbers_in
+from frontdesk.agent.claims import says_booked, says_cancelled
+from frontdesk.agent.weekdays import days_named, wrong_weekdays
 from frontdesk.booking.reply import MONTHS
 from frontdesk.safety.rules import contains_diagnostic_language, promise_phrase
-
-# Saying a booking, or a request for one, is done: only the booking tool may lead to it (Albi,
-# 2026-10-16: in no wording and no language). "La prenotazione è stata confermata! Ti aspetto
-# venerdì 23 ottobre alle 10:00" answered a fake system message with no booking made (run
-# agent-11-lite35). Each clause is read on its own. A negation says the booking is not done when it
-# stands just before the claim ("Va bene, non ho prenotato nulla") or before its verb (the `neg`
-# group: "la richiesta non è stata inviata"), not among the words between (security review).
-_DONE_IT: Final = (
-    r"(?:confermat|fissat|registrat|inviat|inoltrat|effettuat|prenotat|completat|accettat)[oaie]"
-)
-_DAYS_IT: Final = (
-    r"(?:lunedì|martedì|mercoledì|giovedì|venerdì|sabato|domenica|domani|il\s+\d|alle\s+\d)"
-)
-_DAYS_EN: Final = r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|\d)"
-_DAYS_SQ: Final = r"(?:hënën|martën|mërkurën|enjten|premten|shtunën|dielën|nesër|në\s+orën)"
-_CLAIMS: Final = tuple(
-    re.compile(pattern, re.IGNORECASE)
-    for pattern in (
-        # "la prenotazione è stata confermata", "il suo appuntamento è fissato", "richiesta inviata"
-        rf"\b(?:prenotazion|appuntament|richiest|visit|sedut)\w*(?:\s+\S+){{0,3}}?\s+(?P<neg>non\s+)?"
-        rf"(?:è|e'|sono|risulta|risultano)\s+(?:ora\s+|già\s+)?(?:stat[oaie]\s+)?{_DONE_IT}\b",
-        rf"\b(?:prenotazione|appuntamento|richiesta|visita|seduta)\s+{_DONE_IT}\b",
-        rf"\b(?:è|sono)\s+stat[oaie]\s+{_DONE_IT}\b",
-        r"\b(?:ho|abbiamo)\s+(?:già\s+|appena\s+)?(?:confermat|prenotat|fissat|registrat|effettuat)[oaie]\b",
-        r"\b(?:ho|abbiamo)\s+(?:già\s+|appena\s+)?(?:inviat|inoltrat|mandat|trasmess)[oaie]\s+"
-        r"(?:\S+\s+){0,3}?(?:richiest|prenotazion)",
-        r"\btutto\s+(?:è\s+)?(?:confermat|prenotat|fissat)[oa]\b",
-        rf"\b(?:ti|la|vi|l')\s?aspett(?:o|iamo)\s+(?:\S+\s+){{0,2}}?{_DAYS_IT}",
-        # "your appointment is confirmed", "booking confirmed", "I've booked you", "you're all set"
-        r"\b(?:booking|appointment|reservation|request|visit|session)s?(?:\s+\S+){0,3}?\s+"
-        r"(?:is|are|was|were|has|have)(?P<neg>\s+not|n't)?(?:\s+yet)?(?:\s+been)?\s+"
-        r"(?:now\s+|already\s+|all\s+)?"
-        r"(?:confirmed|booked|scheduled|made|sent|submitted|registered|placed|set|forwarded)\b",
-        r"\b(?:booking|appointment|reservation|request)\s+(?:confirmed|sent|booked|scheduled|made|submitted)\b",
-        r"\b(?:has|have)(?P<neg>\s+not|n't)?\s+been\s+(?:booked|confirmed|scheduled|reserved)\b",
-        r"\b(?:i|we)(?:'ve|\s+have)?\s+(?:just\s+|now\s+|already\s+)?(?:booked|scheduled|confirmed|registered)\b",
-        r"\b(?:i|we)(?:'ve|\s+have)?\s+(?:just\s+|now\s+|already\s+)?(?:sent|submitted|forwarded)\s+"
-        r"(?:\S+\s+){0,3}?(?:request|booking)",
-        r"\byou(?:'re|\s+are)\s+(?:all\s+)?(?:booked|set|confirmed|scheduled)\b",
-        rf"\bsee\s+you\s+(?:on\s+|at\s+|next\s+)?{_DAYS_EN}",
-        # "rezervimi juaj është konfirmuar", "kërkesa u dërgua", "ju kam rezervuar", "ju presim"
-        r"\b(?:rezervim|takim|vizit|kërkes|seanc)\w*(?:\s+\S+){0,3}?\s+(?P<neg>nuk\s+)?"
-        r"(?:është|janë|u)\s+(?:\S+\s+)?(?:konfirmua|rezervua|dërgua|caktua|regjistrua|kry|bë)\w*",
-        r"\bu\s+(?:konfirmua|rezervua|regjistrua)\b",
-        r"\b(?:kam|kemi)\s+(?:\S+\s+)?(?:rezervuar|konfirmuar|caktuar|regjistruar)\b",
-        r"\b(?:rezervova|rezervuam|konfirmova|konfirmuam|caktova|caktuam|regjistrova)\b",
-        r"\b(?:dërgova|dërguam|(?:kam|kemi)\s+dërguar)\s+(?:\S+\s+){0,3}?kërkes",
-        rf"\bpres(?:im)?\s+(?:\S+\s+){{0,2}}?(?:të\s+)?{_DAYS_SQ}",
-    )
-)
-_NEGATION: Final = re.compile(
-    r"\b(?:non|nessun\w*|nulla|niente|not|no|nothing|never|nuk|asgjë|asnjë)\b|n't\b|\bs'",
-    re.IGNORECASE,
-)
-NEGATION_WORDS: Final = 2  # the words before a claim a negation may stand in
-_CLAUSE_BREAK: Final = re.compile(r"[,;:.!?\n\u2014\u2013]|\s-\s")  # em and en dashes too
-
-
-# Saying an appointment is cancelled (run agent-16, 2026-10-16: "Ho annullato l'appuntamento" to a
-# husband who asked to cancel his wife's): no tool cancels an appointment, cancel_booking only lets
-# go of a time held in this chat. Read as the claims of a booking are.
-_CANCELLED_IT: Final = r"(?:annullat|cancellat|disdett)[oaie]"
-_CANCELS: Final = tuple(
-    re.compile(pattern, re.IGNORECASE)
-    for pattern in (
-        rf"\b(?:ho|abbiamo)\s+(?:già\s+|appena\s+)?{_CANCELLED_IT}\b",
-        rf"\b(?:è|sono)\s+(?:ora\s+|già\s+)?(?:stat[oaie]\s+)?{_CANCELLED_IT}\b",
-        rf"\b(?:appuntamento|prenotazione|visita|seduta|richiesta)\s+{_CANCELLED_IT}\b",
-        r"\b(?:i|we)(?:'ve|\s+have)?\s+(?:just\s+|now\s+|already\s+)?cancell?ed\b",
-        r"\b(?:is|are|was|were|has|have)(?P<neg>\s+not|n't)?(?:\s+been)?\s+(?:now\s+)?cancell?ed\b",
-        r"\b(?:appointment|booking|visit|reservation)\s+cancell?ed\b",
-        r"\b(?:anulova|anuluam|(?:kam|kemi)\s+anuluar)\b",
-        r"\b(?:u|është|janë)\s+(?:\S+\s+)?anulua\w*",
-    )
-)
-
-
-def says_cancelled(reply: str) -> bool:
-    """Whether the reply says an appointment, or a request for one, is cancelled."""
-    return any(
-        _claims(clause, pattern) for clause in _CLAUSE_BREAK.split(reply) for pattern in _CANCELS
-    )
-
-
-def says_booked(reply: str) -> bool:
-    """Whether the reply says a booking, or a request for one, is done. A question is read as any
-    clause (security review, 2026-10-16): the summaries ask with no word of a booking done."""
-    return any(
-        _claims(clause, pattern) for clause in _CLAUSE_BREAK.split(reply) for pattern in _CLAIMS
-    )
-
-
-def _claims(clause: str, pattern: re.Pattern[str]) -> bool:
-    """A match of `pattern` in the clause that no negation cancels. After a negated one, the search
-    goes on from its next character: a claim may overlap it ("No visit fee booking is confirmed")."""
-    match = pattern.search(clause)
-    while match is not None:
-        if not _negated(clause, match):
-            return True
-        match = pattern.search(clause, match.start() + 1)
-    return False
-
-
-def _negated(clause: str, match: re.Match[str]) -> bool:
-    if match.groupdict().get("neg"):
-        return True
-    before = clause[: match.start()].split()[-NEGATION_WORDS:]
-    return _NEGATION.search(" ".join(before)) is not None
-
-
-def _told_again(reply: str, earlier: tuple[str, ...]) -> bool:
-    """A booking this conversation made in an earlier turn, told again: the reply names a time, and
-    no time but those bookings' own (security review, 2026-10-16)."""
-    named = {time for _, time in times_named(reply)}
-    own = {time for slot in earlier for _, time in times_named(slot)}
-    return bool(named) and named <= own
-
 
 # Saying the clinic offers only some services, or not one: the agent knows the services it prices,
 # and the clinic has more ("Klinika jonë ofron vetëm trajtime osteopatike", "Non disponiamo delle
@@ -218,53 +103,6 @@ def times_named(reply: str) -> list[tuple[tuple[int, int], str]]:
     return sorted(found.items())
 
 
-# A weekday next to a date must be that date's (run agent-13, 2026-10-16: "giovedì 23 ottobre" where
-# clinic_hours said "venerdì 23 ottobre"). Albanian weekdays by stem: "e premte", "të premten".
-_WEEKDAY_NAMES: Final = (
-    r"luned[iì]|monday|h[eë]n[eë]n?",
-    r"marted[iì]|tuesday|mart[eë]n?",
-    r"mercoled[iì]|wednesday|m[eë]rkur[eë]n?",
-    r"gioved[iì]|thursday|enjten?",
-    r"venerd[iì]|friday|premten?",
-    r"sabato|saturday|shtun[eë]n?",
-    r"domenica|sunday|diel(?:[eë]n)?",
-)
-_MONTH_NUMBER: Final = {
-    name.lower(): number for names in MONTHS.values() for number, name in enumerate(names, 1)
-}
-_DATED_WEEKDAY: Final = re.compile(
-    r"\b(?:(" + ")|(".join(_WEEKDAY_NAMES) + r"))\b,?\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?\b"
-    r"(?:\s+(" + "|".join(_MONTH_NUMBER) + r")\w*)?",
-    re.IGNORECASE,
-)
-
-
-def _nearest(day: int, month: int | None, today: date) -> date | None:
-    """The date nearest to today with this day of the month, in `month` when it is named."""
-    found = []
-    for shift in (-1, 0, 1, 2):
-        years, index = divmod(today.month - 1 + shift, 12)
-        if month is not None and index + 1 != month:
-            continue
-        try:
-            found.append(date(today.year + years, index + 1, day))
-        except ValueError:
-            continue
-    return min(found, key=lambda candidate: abs((candidate - today).days), default=None)
-
-
-def wrong_weekdays(reply: str, today: date) -> list[str]:
-    """Each weekday the reply puts next to a date that is not that date's."""
-    wrong = []
-    for match in _DATED_WEEKDAY.finditer(reply):
-        weekday = next(index for index in range(7) if match[index + 1])
-        month = _MONTH_NUMBER.get((match[9] or "").lower())
-        found = _nearest(int(match[8]), month, today)
-        if found is not None and found.weekday() != weekday:
-            wrong.append(f"{match[0]} ({found.isoformat()} is a {found:%A})")
-    return wrong
-
-
 # The numbers of a numbered list ("1) venerdì 23: ...") count nothing: they are no fact.
 _LIST_MARK: Final = re.compile(r"(?m)^[ \t]*\d{1,2}[).][ \t]")
 
@@ -279,6 +117,16 @@ def _without(text: str, spans: list[tuple[int, int]]) -> str:
     for start, end in spans:
         chars[start:end] = " " * (end - start)
     return "".join(chars)
+
+
+def _names_only(reply: str, slots: tuple[str, ...]) -> bool:
+    """The reply names a time, and only the times and days of `slots` ("venerdì 23 ottobre,
+    10:00"): a booking made earlier, or a held time let go, told with its own day and time (final
+    review of #48, I1)."""
+    times = {time for _, time in times_named(reply)}
+    own_times = {time for slot in slots for _, time in times_named(slot)}
+    own_days = {day for slot in slots for day in days_named(slot)}
+    return bool(times) and times <= own_times and days_named(reply) <= own_days
 
 
 @dataclass(frozen=True)
@@ -299,7 +147,7 @@ def reply_problems(
     earlier: tuple[str, ...] = (),
     today: date | None = None,
     previous: str = "",
-    released: bool = False,
+    released: tuple[str, ...] = (),
 ) -> tuple[Problem, ...]:
     """Why `reply` may not be sent; empty when it may. `known`: everything the agent was given,
     which a number or a link must come from. `booked`: the booking tool made a booking. `times`:
@@ -307,8 +155,8 @@ def reply_problems(
     time of `known` (an opening hour), and is then no number to check. `earlier`: the appointments
     the conversation made in earlier turns ("venerdì 23 ottobre, 10:00"), which it may tell again.
     `today`: the business's date, against which a weekday next to a date is checked. `previous`:
-    the agent's last message, which the reply may not repeat word for word. `released`:
-    cancel_booking let go of a held time, which the reply may call cancelled."""
+    the agent's last message, which the reply may not repeat word for word. `released`: the held
+    times cancel_booking let go of this turn, which the reply may call cancelled."""
     problems = []
     if not reply.strip():
         problems.append(Problem("empty", "the reply is empty"))
@@ -341,7 +189,7 @@ def reply_problems(
     if promise is not None:
         detail = f"it promises an action nobody will take: {promise}"
         problems.append(Problem("promise", detail))
-    if not booked and says_booked(reply) and not _told_again(reply, earlier):
+    if not booked and says_booked(reply) and not _names_only(reply, earlier):
         detail = (
             f"it says a booking is done; the one this conversation made is {' and '.join(earlier)}: "
             "name it with its day and time, or say nothing of it"
@@ -350,10 +198,13 @@ def reply_problems(
             "say what the next step is instead"
         )
         problems.append(Problem("booking", detail))
-    if not released and says_cancelled(reply):
+    if says_cancelled(reply) and not _names_only(reply, released):
         detail = (
-            "it says an appointment is cancelled, but no tool cancelled one: you cannot cancel or "
-            "move an appointment; reception can, give its phone"
+            f"it says something is cancelled; what you let go of is the time held, "
+            f"{' and '.join(released)}: say only that, with its day and time"
+            if released
+            else "it says an appointment is cancelled, but no tool cancelled one: you cannot "
+            "cancel or move an appointment; reception can, give its phone"
         )
         problems.append(Problem("cancel", detail))
     if _denies_a_service(reply):

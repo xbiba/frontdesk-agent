@@ -4,7 +4,7 @@ from datetime import date
 
 import pytest
 
-from frontdesk.agent.reply_check import reply_problems
+from frontdesk.agent.reply_check import reply_problems, wrong_weekdays
 
 KNOWN = "Trattamento osteopatico: 40 EUR. Telefono: +355 69 443 9339. Sito: www.clinicamcu.com"
 
@@ -289,8 +289,6 @@ def test_a_reply_that_repeats_the_previous_one_word_for_word_is_refused() -> Non
 )
 def test_an_appointment_said_cancelled_with_none_cancelled_is_refused(reply: str) -> None:
     assert "cancel" in {problem.code for problem in reply_problems(reply, KNOWN, booked=False)}
-    allowed = reply_problems(reply, KNOWN, booked=False, released=True)
-    assert "cancel" not in {problem.code for problem in allowed}
 
 
 @pytest.mark.parametrize(
@@ -306,3 +304,103 @@ def test_an_appointment_said_cancelled_with_none_cancelled_is_refused(reply: str
 )
 def test_a_cancellation_not_said_done_passes(reply: str) -> None:
     assert "cancel" not in {problem.code for problem in reply_problems(reply, KNOWN, booked=False)}
+
+
+# Final review of #48, C1: a claim with its day and time inside, or in other shapes, still passed.
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "La sua prenotazione di venerdì 23 ottobre alle 09:30 è confermata.",
+        "La prenotazione delle 09:30 è confermata.",
+        "Your booking for 10:00 is confirmed.",
+        "Your appointment on Friday at 10 is confirmed.",
+        "Rezervimi juaj për të premten 23 tetor në orën 10:00 është konfirmuar.",
+        "Prenotazione per venerdì 23 alle 10 confermata.",
+        "Le confermo l'appuntamento di venerdì 23 alle 10.",
+        "Ci vediamo venerdì 23 alle 10!",
+        "Shihemi të premten në orën 10!",
+        "It's booked!",
+    ],
+)
+def test_a_claim_with_its_day_and_time_inside_is_refused(reply: str) -> None:
+    assert "booking" in {problem.code for problem in reply_problems(reply, KNOWN, booked=False)}
+
+
+# Final review of #48, I4: right replies that read as a booking done.
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Quando la richiesta è inviata, la reception conferma l'appuntamento.",
+        "Once the request is sent, reception confirms the appointment.",
+        "Appointments are booked by phone with reception.",
+        "Gli appuntamenti sono fissati dalla reception.",
+        "Takimet janë caktuar nga recepsioni.",
+        "Il pagamento della visita è accettato in contanti o con carta.",
+        "La prima visita è effettuata dal dott. Oliverio.",
+        "Each visit is scheduled for 30 minutes.",
+        "La aspettiamo domani dalle 9 alle 17.",
+        "Vi aspettiamo dal lunedì al venerdì dalle 8 alle 19.",
+        "Friday at 10 has been reserved for you: could you write your name?",
+        "Le confermo l'appuntamento di venerdì 23 alle 10?",
+    ],
+)
+def test_a_right_reply_about_bookings_is_no_booking_said_done(reply: str) -> None:
+    assert "booking" not in {problem.code for problem in reply_problems(reply, KNOWN, booked=False)}
+
+
+FRIDAY_16 = date(2026, 10, 16)
+
+
+# Final review of #48, C3 and I3: dates past the middle of the month, clock times and day lists.
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "1. venerdì 30: 9:00\n2. sabato 31: 9:00\n3. domenica 1: 10:00\n4. lunedì 2: 9:00",
+        "1. Friday 30: 9:00\n2. Sunday 1: 10:00\n3. Monday 2: 9:00",
+        "1. e premte 30: 9:00\n2. e diel 1: 10:00\n3. e hënë 2: 9:00",
+        "Il dott. Oliverio è qui fino a lunedì 2.",
+        "Domenica 1° novembre ho posto alle 10.",
+        "Il sabato 9:00-14:00, dal lunedì al venerdì 8:00-19:00.",
+        "I'm holding Friday 10:00 for you.",
+        "Il dott. Oliverio riceve sabato e domenica 24 e 25 ottobre.",
+    ],
+)
+def test_a_weekday_of_a_coming_date_or_of_an_hour_passes(reply: str) -> None:
+    assert not wrong_weekdays(reply, FRIDAY_16)
+
+
+def test_a_coming_date_is_found_past_the_middle_of_the_month() -> None:
+    # 2 November 2026 is a Monday, so "domenica 2" is wrong and "lunedì 2" right.
+    assert wrong_weekdays("Ho posto domenica 2.", FRIDAY_16) == [
+        "domenica 2 (2026-11-02 is a Monday)"
+    ]
+
+
+SLOT = ("venerdì 23 ottobre, 09:30",)
+
+
+def test_an_earlier_booking_is_told_again_with_its_day_and_time() -> None:
+    # Final review of #48, I1 and I2: the day counts as well as the time.
+    told = "La sua prenotazione è confermata: venerdì 23 ottobre alle 09:30."
+    known = f"{KNOWN} 23 ottobre"
+    times = frozenset({"09:30"})
+    assert reply_problems(told, known, booked=False, times=times, earlier=SLOT) == ()
+    alone = reply_problems(told, known, booked=False, times=times)
+    assert "booking" in {problem.code for problem in alone}
+    other_day = "La sua prenotazione è confermata: venerdì 30 ottobre alle 09:30."
+    found = reply_problems(other_day, f"{known} 30", booked=False, times=times, earlier=SLOT)
+    assert "booking" in {problem.code for problem in found}
+
+
+def test_a_released_time_covers_no_other_cancellation() -> None:
+    # Final review of #48, C2: letting go of a held time is no cancellation of anything else.
+    own = "Ho annullato il posto di venerdì 23 ottobre alle 09:30."
+    other = "Ho annullato l'appuntamento di sua moglie."
+    known = f"{KNOWN} 23 ottobre"
+    times = frozenset({"09:30"})
+    assert "cancel" not in {
+        p.code for p in reply_problems(own, known, booked=False, times=times, released=SLOT)
+    }
+    assert "cancel" in {
+        p.code for p in reply_problems(other, known, booked=False, times=times, released=SLOT)
+    }
