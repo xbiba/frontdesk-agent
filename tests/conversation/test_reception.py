@@ -190,6 +190,30 @@ async def test_a_booking_made_in_an_earlier_turn_may_be_told_again(base: TurnRun
     assert reply.trace.check_reasons == ()
 
 
+async def test_an_earlier_booking_never_covers_another_time(base: TurnRuntime) -> None:
+    # Security review, 2026-10-16: the earlier booking lets a reply tell it again, at its own time.
+    script = Script(
+        [
+            [("free_times", {})],
+            _final(f"{LIST}\nQuale preferisce?", "answer"),
+            [("hold_time", {"day": "2026-10-23", "time": "09:00"})],
+            _final("Nome, cognome e telefono?", "answer"),
+            [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
+            _final(SUMMARY, "answer"),
+            [("confirm_booking", {})],
+            _final(BOOKED),
+            _final("Le ho prenotato anche lunedì 26 alle 9:30."),
+            _final("Ha già un appuntamento: per un altro, la reception la aiuta."),
+        ]
+    )
+    chat = Chat(base, script)
+    for message in ("Vorrei prenotare", "il primo", "Mario Rossi, +355 69 123 4567", "sì"):
+        await chat.say(message)
+    reply = await chat.say("e anche lunedì alle 9:30?")
+    assert reply.text == "Ha già un appuntamento: per un altro, la reception la aiuta."
+    assert "booking" in reply.trace.check_reasons[0]
+
+
 async def test_without_the_patient_s_yes_nothing_is_booked(
     base: TurnRuntime, calendar: FixtureCalendar
 ) -> None:

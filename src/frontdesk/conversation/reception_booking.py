@@ -22,7 +22,7 @@ import phonenumbers
 from frontdesk.agent.vocab import ClarifyField, SlotPart
 from frontdesk.booking.calendar import CalendarUnavailableError
 from frontdesk.booking.flow import affirms, format_phone, phrase, read_phone, valid_name
-from frontdesk.booking.holds import attach, booked_events, held
+from frontdesk.booking.holds import attach, booked_events, booked_starts, held
 from frontdesk.booking.reply import SlotWish, booking_target, day_words, slot_time
 from frontdesk.booking.scheduler import Appointment
 from frontdesk.booking.slots import Slot
@@ -354,9 +354,12 @@ def _phone_regions(desk: Desk, named: str) -> list[str]:
     return list(dict.fromkeys(region for region in found if region and region != "ZZ"))
 
 
-def made_earlier(desk: Desk) -> bool:
-    """Whether this conversation has an appointment still to come, which a reply may tell again."""
-    return bool(_mine(desk))
+def earlier_times(desk: Desk) -> frozenset[str]:
+    """The times ("10:00") of this conversation's appointments still to come, which a reply may
+    tell again."""
+    with business_session(desk.session_factory, desk.pack.id) as session:
+        starts = booked_starts(session, desk.conversation_id, desk.now)
+    return frozenset(f"{start.astimezone(desk.zone):%H:%M}" for start in starts)
 
 
 def _mine(desk: Desk) -> set[str]:

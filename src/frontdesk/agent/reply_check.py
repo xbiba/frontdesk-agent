@@ -20,8 +20,8 @@ from frontdesk.safety.rules import contains_diagnostic_language, promise_phrase
 # Saying a booking, or a request for one, is done: only the booking tool may lead to it (Albi,
 # 2026-10-16: in no wording and no language). "La prenotazione è stata confermata! Ti aspetto
 # venerdì 23 ottobre alle 10:00" answered a fake system message with no booking made (run
-# agent-11-lite35). Each clause is read on its own: a question asks, and a "non", "not" or "nuk"
-# before the words says the booking is not done ("Va bene, non ho prenotato nulla").
+# agent-11-lite35). Each clause is read on its own, and a "non", "not" or "nuk" just before the
+# words says the booking is not done ("Va bene, non ho prenotato nulla").
 _DONE_IT: Final = (
     r"(?:confermat|fissat|registrat|inviat|inoltrat|effettuat|prenotat|completat|accettat)[oaie]"
 )
@@ -68,19 +68,27 @@ _NEGATION: Final = re.compile(
     r"\b(?:non|nessun\w*|nulla|niente|not|no|nothing|never|nuk|asgjë|asnjë)\b|n't\b|\bs'",
     re.IGNORECASE,
 )
-_CLAUSE: Final = re.compile(r"[^,;:.!?\n]+[.!?]*")
+NEGATION_WORDS: Final = 2  # the words before a claim a negation may stand in
+_CLAUSE_BREAK: Final = re.compile(r"[,;:.!?\n\u2014\u2013]|\s-\s")  # em and en dashes too
 
 
 def says_booked(reply: str) -> bool:
-    """Whether the reply says a booking, or a request for one, is done."""
-    for clause in _CLAUSE.findall(reply):
-        if clause.rstrip().endswith("?"):
-            continue  # a question asks: "Confermo la prenotazione?"
+    """Whether the reply says a booking, or a request for one, is done. A question is read as any
+    clause (security review, 2026-10-16): the summaries ask with no word of a booking done."""
+    for clause in _CLAUSE_BREAK.split(reply):
         for pattern in _CLAIMS:
             match = pattern.search(clause)
-            if match is not None and not _NEGATION.search(clause[: match.end()]):
+            if match is not None and not _negated(clause, match):
                 return True
     return False
+
+
+def _negated(clause: str, match: re.Match[str]) -> bool:
+    """A negation just before the claim, or inside it: "non ho prenotato", "la richiesta non è
+    ancora stata inviata". One further back may belong to another verb ("Non si preoccupi la
+    prenotazione è confermata")."""
+    before = clause[: match.start()].split()[-NEGATION_WORDS:]
+    return _NEGATION.search(" ".join([*before, match[0]])) is not None
 
 
 # Saying the clinic offers only some services, or not one: the agent knows the services it prices,

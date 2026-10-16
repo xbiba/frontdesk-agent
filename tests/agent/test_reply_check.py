@@ -142,6 +142,10 @@ def test_what_the_chat_books_or_what_is_free_may_be_only_that(reply: str) -> Non
         "Takimi u caktua për të premten.",
         "E dërgova kërkesën për rezervim.",
         "Rezervimi u konfirmua.",
+        # A negation of another verb, a question after a dash (security review, 2026-10-16).
+        "Non si preoccupi la prenotazione è confermata.",
+        "La prenotazione è confermata — ci vediamo venerdì?",
+        "Your booking is confirmed, right?",
     ],
 )
 def test_a_booking_said_done_with_none_made_is_refused_in_any_wording(reply: str) -> None:
