@@ -63,6 +63,7 @@ from frontdesk.db.engine import business_session
 from frontdesk.knowledge.embedders import Embedder
 from frontdesk.knowledge.evidence import Evidence, EvidenceKind
 from frontdesk.knowledge.facts import Catalog, load_catalog
+from frontdesk.knowledge.in_prompt import PromptDocuments, documents_for
 from frontdesk.model_gateway.daily_cap import SpendCapReachedError
 from frontdesk.model_gateway.hedging import fallback_turn
 from frontdesk.observability.logs import log_event
@@ -201,6 +202,9 @@ class TurnRuntime:
     # The reception agent leads the conversation when set (FRONTDESK_CONVERSATION=agent).
     reception: Agent[Desk, ReceptionReply] | None = None
     reception_prompt_version: str | None = None
+    # A small pack's documents ride in the agent's prompt, and it has no search tool
+    # (frontdesk.knowledge.in_prompt, Albi, 2026-10-16).
+    documents_in_prompt: bool = False
 
 
 async def handle_message(
@@ -402,6 +406,11 @@ def _desk(
     books = runtime.scheduler is not None and calendar is not None and calendar.chat_booking
     with business_session(runtime.session_factory, pack.id) as session:
         facts = render_facts(session, pack, catalog, language, runtime.today(), chat_booking=books)
+        documents = (
+            documents_for(session, pack.id, runtime.today(), language)
+            if runtime.documents_in_prompt
+            else PromptDocuments("", ())
+        )
     return Desk(
         pack=pack,
         catalog=catalog,
@@ -418,6 +427,8 @@ def _desk(
         facts=facts,
         conversation="\n".join(entry.text for entry in state.history),
         booking=state.booking,
+        documents=documents.text,
+        sources=list(documents.sources),
     )
 
 

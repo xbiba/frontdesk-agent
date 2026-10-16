@@ -503,6 +503,16 @@ async def test_a_confirmation_in_other_words_is_shown_as_code_wrote_it(
     assert reply.text.count(PRIVACY) == 1
 
 
+async def test_a_small_pack_s_documents_ride_in_the_agent_s_prompt(base: TurnRuntime) -> None:
+    # Albi, 2026-10-16: no search; the documents in the conversation's language are its sources.
+    script = Script([_final("Sì, c'è un parcheggio.")])
+    reply = await Chat(replace(base, documents_in_prompt=True), script).say("C'è parcheggio?")
+    request = script.calls[0][-1]
+    assert isinstance(request, ModelRequest)
+    assert "Clinic documents:\n[" in (request.instructions or "")
+    assert set(reply.trace.sources) >= {"first-visit-it", "physiotherapy-it"}
+
+
 async def test_a_search_reads_the_conversation_s_language_first(base: TurnRuntime) -> None:
     script = Script(
         [[("search_information", {"question": "Come si prepara la visita?"})], _final("Ecco.")]

@@ -35,6 +35,7 @@ class Desk:
     facts: str
     conversation: str  # the conversation so far, as text: a number in it may be repeated
     booking: BookingStep | None
+    documents: str = ""  # the clinic's documents, when they ride in the prompt
     seen: list[str] = field(default_factory=list)  # what the tools returned this turn
     sources: list[str] = field(default_factory=list)
     booked: bool = False

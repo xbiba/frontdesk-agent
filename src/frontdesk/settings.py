@@ -12,6 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class EmbeddingBackend(StrEnum):
     HASH = "hash"
     FASTEMBED = "fastembed"
+    NONE = "none"  # a small pack's knowledge rides in the prompt: nothing is searched (2026-10-16)
 
 
 class CalendarBackend(StrEnum):

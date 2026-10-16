@@ -66,9 +66,23 @@ class FastEmbedEmbedder:
         return [[float(value) for value in vector] for vector in self._model.embed(list(texts))]
 
 
+class NoEmbedder:
+    """No embedder (Albi, 2026-10-16): a deployment whose knowledge rides in the prompt searches
+    nothing (frontdesk.knowledge.in_prompt), and its image holds no model. Its versions are
+    activated without vectors."""
+
+    dimension = EMBEDDING_DIM
+    identity = "none"
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        raise RuntimeError("this deployment has no embedder: its knowledge is in the prompt")
+
+
 def build_embedder(backend: EmbeddingBackend) -> Embedder:
     if backend is EmbeddingBackend.HASH:
         return HashEmbedder()
+    if backend is EmbeddingBackend.NONE:
+        return NoEmbedder()
     return FastEmbedEmbedder()
 
 

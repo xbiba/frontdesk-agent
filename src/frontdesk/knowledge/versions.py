@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from frontdesk.db.models import EMBEDDING_DIM, Chunk, Document, KnowledgeVersion, Record
 from frontdesk.knowledge.chunking import chunk_markdown
-from frontdesk.knowledge.embedders import Embedder
+from frontdesk.knowledge.embedders import Embedder, NoEmbedder
 from frontdesk.safety.normalize import normalize
 from frontdesk.tenancy.pack import BusinessPack
 
@@ -326,6 +326,8 @@ def _clear_vectors(session: Session, version_id: uuid.UUID) -> None:
 
 
 def _embed_chunks(session: Session, version_id: uuid.UUID, embedder: Embedder) -> int:
+    if embedder.identity == NoEmbedder.identity:
+        return 0  # the knowledge rides in the prompt: no vectors
     rows = session.execute(
         select(Chunk.id, Chunk.heading, Chunk.content).where(
             Chunk.knowledge_version_id == version_id, Chunk.embedding.is_(None)

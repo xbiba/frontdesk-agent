@@ -36,8 +36,9 @@ from frontdesk.conversation.desk import Desk
 from frontdesk.conversation.reception import ReceptionReply, build_reception
 from frontdesk.conversation.turn import TurnRuntime
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
-from frontdesk.knowledge.embedders import Embedder, build_embedder
+from frontdesk.knowledge.embedders import Embedder, NoEmbedder, build_embedder
 from frontdesk.knowledge.facts import load_catalog
+from frontdesk.knowledge.in_prompt import IN_PROMPT_CHARS, knowledge_chars
 from frontdesk.knowledge.versions import check_embedder
 from frontdesk.model_gateway.costs import load_budget
 from frontdesk.model_gateway.daily_cap import CappedModel, DailyCap
@@ -209,6 +210,7 @@ def build_turn_runtime(
     with business_session(deployment.session_factory, pack.id) as session:
         catalog = load_catalog(session, pack.id)
         check_embedder(session, pack.id, deployment.embedder)
+        in_prompt = _documents_in_prompt(deployment, knowledge_chars(session, pack.id))
     if catalog is None:
         raise NoActiveKnowledgeError(pack.id)
     services = ToolServices(
@@ -232,7 +234,10 @@ def build_turn_runtime(
             # The offline path of a deployment the agent leads: the rules, then the agent's stand-in.
             reception_prompt = read_prompt(pack.profile, "reception")
             reception = build_reception(
-                demo_reception_model(), pack.profile, instructions=reception_prompt.text
+                demo_reception_model(),
+                pack.profile,
+                instructions=reception_prompt.text,
+                search=not in_prompt,
             )
             reception_version = reception_prompt.version
     else:
@@ -258,6 +263,7 @@ def build_turn_runtime(
                 pack.profile,
                 model_settings=live_model_settings(route, max_tokens=route.output_limits.agent),
                 instructions=reception_prompt.text,
+                search=not in_prompt,
             )
             reception_version = reception_prompt.version
     return TurnRuntime(
@@ -268,6 +274,7 @@ def build_turn_runtime(
         responder_prompt_version=responder_prompt.version,
         reception=reception,
         reception_prompt_version=reception_version,
+        documents_in_prompt=in_prompt,
         session_factory=deployment.session_factory,
         embedder=deployment.embedder,
         today=business_today,
@@ -283,6 +290,21 @@ def build_turn_runtime(
             else None
         ),
     )
+
+
+def _documents_in_prompt(deployment: Deployment, size: int) -> bool:
+    """Whether the reception agent reads the documents in its prompt instead of searching them
+    (Albi, 2026-10-16): a small pack's, `size` characters up to IN_PROMPT_CHARS. A deployment with
+    no embedder (FRONTDESK_EMBEDDING_BACKEND=none) has nothing to search with otherwise."""
+    agent = deployment.settings.conversation is Conversation.AGENT
+    in_prompt = agent and size <= IN_PROMPT_CHARS
+    if not in_prompt and isinstance(deployment.embedder, NoEmbedder):
+        searched = f"{size} characters of documents" if agent else "the pipeline's documents"
+        raise ValueError(
+            f"{searched} are searched, more than the {IN_PROMPT_CHARS} the agent's prompt holds: "
+            "FRONTDESK_EMBEDDING_BACKEND=none leaves no embedder to search them"
+        )
+    return in_prompt
 
 
 def build_scheduler(settings: Settings, *, write: bool = False) -> Scheduler | None:

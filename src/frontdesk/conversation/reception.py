@@ -101,6 +101,8 @@ def render_situation(desk: Desk) -> str:
     if desk.booking is not None:
         lines.append(f"Booking under way: {_booking_state(desk, desk.booking)}")
     lines.append(f"Clinic facts:\n{desk.facts}")
+    if desk.documents:
+        lines.append(f"Clinic documents:\n{desk.documents}")
     return "\n\n".join(lines)
 
 
@@ -123,8 +125,10 @@ def build_reception(
     *,
     model_settings: ModelSettings | None = None,
     instructions: str | None = None,
+    search: bool = True,
 ) -> Agent[Desk, ReceptionReply]:
-    """`instructions` is the prompt text a caller has already read (`read_prompt`)."""
+    """`instructions` is the prompt text a caller has already read (`read_prompt`). `search`: the
+    agent searches the documents; without it they ride in its prompt (Desk.documents)."""
     if not isinstance(model, Model):
         raise TypeError(
             f"the reception agent needs a Model object, not {type(model).__name__}: build live "
@@ -144,15 +148,19 @@ def build_reception(
     def situation(ctx: RunContext[Desk]) -> str:
         return render_situation(ctx.deps)
 
-    @agent.tool
-    def search_information(ctx: RunContext[Desk], question: str) -> str:
-        """Search the clinic's approved documents: which days a doctor is in, how a visit works,
-        what to bring, payment and other practical questions. Use only what the passages say.
+    if search:
 
-        Args:
-            question: A short practical question, without names, numbers, contact or health details.
-        """
-        return _search(ctx.deps, question)
+        @agent.tool
+        def search_information(ctx: RunContext[Desk], question: str) -> str:
+            """Search the clinic's approved documents: which days a doctor is in, how a visit
+            works, what to bring, payment and other practical questions. Use only what the
+            passages say.
+
+            Args:
+                question: A short practical question, without names, numbers, contact or health
+                    details.
+            """
+            return _search(ctx.deps, question)
 
     @agent.tool
     def clinic_hours(ctx: RunContext[Desk], day: str | None = None) -> str:
@@ -233,7 +241,7 @@ def build_reception(
             or (output.kind is ReplyKind.GREETING and desk.first_turn)
         ):
             return output  # the handoff text, or the introduction, says it all
-        known = "\n".join([desk.facts, *desk.seen, desk.conversation, desk.message])
+        known = "\n".join([desk.facts, desk.documents, *desk.seen, desk.conversation, desk.message])
         times = booking.shown_times(desk)
         # A booking this conversation made in an earlier turn may be told again; the calendar is
         # read only for a reply that says one is done.

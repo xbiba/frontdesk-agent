@@ -9,6 +9,7 @@ chunk id: ids are random, so the same knowledge would rank differently in every 
 
 from __future__ import annotations
 
+import sys
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -184,6 +185,20 @@ def hybrid_search(
     }
     rankings = [[row.id for row in ranking] for ranking in ranked]
     return _load(session, rrf_fuse(rankings, places)[:limit], max_chars)
+
+
+def valid_chunks(session: Session, *, business_id: str, today: date) -> list[RetrievedChunk]:
+    """Every chunk of the business's active knowledge valid today, in the order of their places:
+    the knowledge a small pack gives the agent whole (frontdesk.knowledge.in_prompt)."""
+    version_id = active_version_id(session, business_id)
+    if version_id is None:
+        return []
+    placed = session.execute(
+        _eligible(business_id, version_id, today).order_by(
+            Document.doc_key.collate("C"), Chunk.ordinal
+        )
+    ).all()
+    return _load(session, [(row.id, 0.0) for row in placed], max_chars=sys.maxsize)
 
 
 def chunk_evidence(chunk: RetrievedChunk) -> Evidence:

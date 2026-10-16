@@ -24,7 +24,7 @@ from frontdesk.booking.scheduler import CalendarScheduler
 from frontdesk.composition import Deployment, build_scheduler, build_turn_runtime, open_deployment
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, handle_message
-from frontdesk.knowledge.embedders import HashEmbedder
+from frontdesk.knowledge.embedders import HashEmbedder, NoEmbedder
 from frontdesk.model_gateway import google_tokens
 from frontdesk.model_gateway.daily_cap import CappedModel
 from frontdesk.model_gateway.routes import (
@@ -677,3 +677,52 @@ def test_a_daily_cap_needs_the_prices_and_meters_every_agent(
     priced = _deployment(clinic_pack, factory, app_url=app_url, prices_file=prices, **capped)
     runtime = build_turn_runtime(priced, data_class=DataClass.EVALUATION)
     assert isinstance(runtime.classifier.model, CappedModel)
+
+
+def _tools(agent: Any) -> set[str]:
+    return {name for toolset in agent.toolsets for name in getattr(toolset, "tools", {})}
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(("limit", "in_prompt"), [(None, True), (10, False)])
+def test_a_small_pack_s_documents_ride_in_the_prompt_and_a_large_one_s_are_searched(
+    activate_pack: Activate,
+    app_url: str,
+    clinic_pack: BusinessPack,
+    monkeypatch: pytest.MonkeyPatch,
+    limit: int | None,
+    in_prompt: bool,
+) -> None:
+    # Albi, 2026-10-16: below the limit, every document in the prompt and no search tool.
+    if limit is not None:
+        monkeypatch.setattr("frontdesk.composition.IN_PROMPT_CHARS", limit)
+    deployment = _deployment(
+        clinic_pack, activate_pack(clinic_pack), app_url=app_url, conversation="agent"
+    )
+    runtime = build_turn_runtime(deployment, data_class=DataClass.EVALUATION)
+    assert runtime.documents_in_prompt is in_prompt
+    assert runtime.reception is not None
+    assert ("search_information" in _tools(runtime.reception)) is not in_prompt
+
+
+@pytest.mark.db
+@pytest.mark.parametrize(
+    ("conversation", "limit"), [("agent", 10), ("pipeline", None)], ids=["large-pack", "pipeline"]
+)
+def test_a_deployment_without_an_embedder_never_has_documents_to_search(
+    activate_pack: Activate,
+    app_url: str,
+    clinic_pack: BusinessPack,
+    monkeypatch: pytest.MonkeyPatch,
+    conversation: str,
+    limit: int | None,
+) -> None:
+    if limit is not None:
+        monkeypatch.setattr("frontdesk.composition.IN_PROMPT_CHARS", limit)
+    factory = activate_pack(clinic_pack, NoEmbedder())
+    deployment = replace(
+        _deployment(clinic_pack, factory, app_url=app_url, conversation=conversation),
+        embedder=NoEmbedder(),
+    )
+    with pytest.raises(ValueError, match="no embedder to search them"):
+        build_turn_runtime(deployment, data_class=DataClass.EVALUATION)
