@@ -3,7 +3,9 @@
 Two patients never get the same time: the database refuses overlapping holds of one doctor, even in
 parallel. Name and phone live on a hold only while it is held, at most HOLD_LIFETIME: booking or
 cancelling drops them, and an expired hold is deleted by the next hold and by `purge`. A booked hold
-keeps the doctor, the time and the calendar's event id, until its slot has passed.
+keeps the doctor, the time and the calendar's event id, until its slot has passed. A booking the
+clinic confirms (WhatsApp W1, migration 0008) is a request: it keeps the patient's name for the
+staff's message until it is decided, and the patient's language for the answer.
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import StrEnum
 from typing import Any, Final, cast
 
 from sqlalchemy import CursorResult, delete, func, or_, select, update
@@ -22,6 +25,14 @@ from frontdesk.db.models import BookingHold
 
 HOLD_LIFETIME: Final = timedelta(minutes=15)
 _EXCLUSION_VIOLATION: Final = "23P01"
+
+
+class RequestStatus(StrEnum):
+    PENDING = "pending"  # waits for the staff
+    DECIDING = "deciding"  # a tap claimed it; cal.com is being told
+    CONFIRMED = "confirmed"
+    DECLINED = "declined"
+    GONE = "gone"  # no longer pending on cal.com: decided or cancelled there
 
 
 @dataclass(frozen=True)
@@ -103,17 +114,27 @@ def held(session: Session, hold_id: uuid.UUID, now: datetime) -> Hold | None:
     return Hold(row.id, row.doctor_id, row.service_id, start, end, row.name, row.phone)
 
 
-def mark_booked(session: Session, hold_id: uuid.UUID, event_id: str) -> None:
-    """The appointment exists in the calendar: the hold keeps the time, drops name and phone."""
+def mark_booked(
+    session: Session,
+    hold_id: uuid.UUID,
+    event_id: str,
+    *,
+    pending: bool = False,
+    language: str | None = None,
+) -> None:
+    """The appointment exists in the calendar: the hold keeps the time and drops the phone. A
+    pending one is a request, which keeps the name until the clinic decides it."""
     session.execute(
         update(BookingHold)
         .where(BookingHold.id == hold_id, BookingHold.status == "held")
         .values(
             status="booked",
-            name=None,
+            name=BookingHold.name if pending else None,
             phone=None,
             event_id=event_id,
             expires_at=func.upper(BookingHold.during),
+            request_status=RequestStatus.PENDING.value if pending else None,
+            language=language,
         )
     )
 

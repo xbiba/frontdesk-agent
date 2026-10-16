@@ -111,7 +111,8 @@ class OrderLookupAttempts(Base):
 
 class BookingHold(Base):
     """A slot taken while a patient books it from the chat, then booked (migration 0005). Name and
-    phone live here only while it is held; a booked hold keeps none."""
+    phone live here only while it is held; a booked hold keeps none, except a request the clinic
+    decides, which keeps the name until it is decided (migration 0008)."""
 
     __tablename__ = "booking_holds"
 
@@ -127,6 +128,11 @@ class BookingHold(Base):
     phone: Mapped[str | None] = mapped_column(String(32))
     event_id: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    request_status: Mapped[str | None] = mapped_column(String(16))
+    language: Mapped[str | None] = mapped_column(String(2))
+    decided_by: Mapped[str | None] = mapped_column(String(80))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class DailySpend(Base):

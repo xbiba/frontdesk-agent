@@ -947,6 +947,15 @@ async def test_a_clinic_that_confirms_its_appointments_gets_a_request(
         "reception conferma l'appuntamento"
     )
     assert "confermata" not in reply.text
+    with business_session(base.session_factory, base.pack.id) as session:
+        (row,) = session.scalars(select(BookingHold))
+        assert (row.status, row.request_status, row.name, row.phone, row.language) == (
+            "booked",
+            "pending",
+            "Mario Rossi",
+            None,
+            "it",
+        )
 
 
 async def test_a_conversation_sends_ten_messages_a_minute_at_most(base: TurnRuntime) -> None:
