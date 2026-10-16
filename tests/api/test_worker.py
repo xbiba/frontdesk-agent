@@ -4,12 +4,13 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
 
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, update
 
 from frontdesk.api.app import create_worker_app
-from frontdesk.channels.inbox import TESTER_WELCOME, Inbox, conversation_key
+from frontdesk.channels.inbox import BURST, TESTER_WELCOME, Inbox, conversation_key
 from frontdesk.channels.instagram import TokenRefreshError
 from frontdesk.channels.messages import Inbound, InboundKind
 from frontdesk.channels.runner import Runner
@@ -54,6 +55,7 @@ class Service:
             now=self.clock,
         )
         inbox.accept([Inbound(ACCOUNT, ALICE, InboundKind.TEXT, "pair", CODE, NOW)])
+        self.inbox = inbox
         runner = Runner(
             self.factory,
             pack=pack,
@@ -129,6 +131,34 @@ def test_a_failed_renewal_is_an_alert(
         raise TokenRefreshError("status 400")
 
     service = Service(app_url, clinic_pack, refresh=refused)
+    with caplog.at_level(logging.INFO, logger="frontdesk.api.worker"):
+        assert service.client.post("/tasks/refresh-token").status_code == 502
+    assert any(
+        r.levelno == logging.ERROR and r.msg == "channel.token_refresh_failed"
+        for r in caplog.records
+    )
+
+
+def test_a_message_left_waiting_by_a_run_gets_a_task_again(
+    app_url: str, clinic_pack: BusinessPack
+) -> None:
+    # Final review of M4, M2: a message younger than the burst window, or one that came during a
+    # turn, waited for the sweep, 2 to 12 minutes.
+    service = Service(app_url, clinic_pack)
+    service.client.post(f"/tasks/conversations/{KEY}")  # the welcome goes out
+    service.inbox.accept([Inbound(ACCOUNT, ALICE, InboundKind.TEXT, "m1", "Ciao", NOW)])
+    assert service.client.post(f"/tasks/conversations/{KEY}").status_code == 200
+    assert service.dispatcher.calls == [(KEY, BURST)]
+
+
+def test_a_renewal_that_meets_a_network_error_is_an_alert(
+    app_url: str, clinic_pack: BusinessPack, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Final review of M4, M9: a network error escaped as a 500, with no alert.
+    async def unreachable() -> None:
+        raise httpx2.ConnectError("no route")
+
+    service = Service(app_url, clinic_pack, refresh=unreachable)
     with caplog.at_level(logging.INFO, logger="frontdesk.api.worker"):
         assert service.client.post("/tasks/refresh-token").status_code == 502
     assert any(

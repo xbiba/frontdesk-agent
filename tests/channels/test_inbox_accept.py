@@ -163,6 +163,17 @@ def test_the_pairing_code_delivered_again_is_not_a_turn(
 
 
 @pytest.mark.db
+def test_a_tester_who_sends_the_code_again_sends_nothing_to_the_model(
+    inbox: Inbox, factory: sessionmaker[Session]
+) -> None:
+    # Final review of M4, M7: the code is a secret; once paired it was an ordinary text.
+    _paired(inbox)
+    assert inbox.accept([_text(f" {CODE}", "again")]).work == ()
+    again = [m for m in _messages(factory) if m.external_id == "again"]
+    assert [(m.status, m.text) for m in again] == [(InStatus.READ, None)]
+
+
+@pytest.mark.db
 def test_a_tester_message_is_stored_once_and_gives_work_until_read(
     inbox: Inbox, factory: sessionmaker[Session]
 ) -> None:
@@ -286,6 +297,10 @@ def test_events_for_another_account_are_logged_with_its_id(
     assert work == ()
     assert _messages(factory) == []
     assert _fields(caplog, "channel.other_account") == [{"channel": CHANNEL, "account_id": "999"}]
+    # Final review of M4, M4: with one account per app, another account is a misconfiguration.
+    assert all(
+        r.levelno == logging.ERROR for r in caplog.records if r.msg == "channel.other_account"
+    )
 
 
 @pytest.mark.db

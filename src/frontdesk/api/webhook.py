@@ -14,7 +14,7 @@ from starlette.concurrency import run_in_threadpool
 from frontdesk.channels.dispatch import DispatchError
 from frontdesk.channels.inbox import BURST
 from frontdesk.channels.wiring import Ingress
-from frontdesk.observability.logs import log_alert, log_event
+from frontdesk.observability.logs import log_alert, log_warning
 
 logger = logging.getLogger(__name__)
 MAX_BODY_BYTES: Final = 1_000_000
@@ -56,7 +56,9 @@ def webhook_router(ingress: Ingress) -> APIRouter:
         if body is None:
             return Response(status_code=413)
         if not ingress.webhook.signature_ok(body, request.headers.get("x-hub-signature-256")):
-            log_event(logger, "channel.bad_signature", channel=channel)
+            # A warning: a wrong app secret drops every delivery, yet anyone may post an
+            # unsigned body (final review of M4, M4).
+            log_warning(logger, "channel.bad_signature", channel=channel)
             return Response(status_code=403)
         if ingress.off:
             return Response(status_code=200)

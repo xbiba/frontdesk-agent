@@ -182,10 +182,26 @@ class Inbox:
                 if key is not None:
                     work[key] = None
         for account in sorted(others):
-            log_event(logger, "channel.other_account", channel=self._channel, account_id=account)
+            # One account per app: an event for another is a misconfiguration, and every
+            # delivery would be dropped (final review of M4, M4).
+            log_alert(logger, "channel.other_account", channel=self._channel, account_id=account)
         if strangers:
             log_event(logger, "channel.not_a_tester", channel=self._channel, count=strangers)
         return Accepted(tuple(work))
+
+    def waiting(self, key: str) -> bool:
+        """Whether a message of the conversation still waits for its turn."""
+        with business_session(self._factory, self._business) as session:
+            found = session.scalar(
+                select(ChannelMessage.id)
+                .where(ChannelMessage.business_id == self._business)
+                .where(ChannelMessage.channel == self._channel)
+                .where(ChannelMessage.conversation_id == key)
+                .where(ChannelMessage.direction == IN)
+                .where(ChannelMessage.status == InStatus.PENDING)
+                .limit(1)
+            )
+        return found is not None
 
     def count_testers(self) -> int:
         with business_session(self._factory, self._business) as session:
@@ -224,6 +240,16 @@ class Inbox:
                 .values(status=OutStatus.UNCERTAIN, reason="no_answer", updated_at=now)
                 .returning(ChannelMessage.conversation_id)
             ).all()
+            if stuck:
+                # The rest of a reply whose part may never have arrived is never sent, as inside a
+                # run (final review of M4, M5).
+                session.execute(
+                    update(ChannelMessage)
+                    .where(*mine, ChannelMessage.direction == OUT)
+                    .where(ChannelMessage.status == OutStatus.QUEUED)
+                    .where(ChannelMessage.conversation_id.in_(stuck))
+                    .values(status=OutStatus.DROPPED, reason="previous_uncertain", updated_at=now)
+                )
             waiting = session.scalars(
                 select(ChannelMessage.conversation_id)
                 .distinct()
@@ -307,11 +333,15 @@ class Inbox:
     def _is_tester(self, session: Session, user_id: str) -> bool:
         return session.get(ChannelTester, (self._business, self._channel, user_id)) is not None
 
+    def _is_code(self, event: Inbound) -> bool:
+        """The message is the pairing code (D4), a secret."""
+        if self._pairing is None or event.kind is not InboundKind.TEXT or event.text is None:
+            return False
+        return hmac.compare_digest(event.text.strip().encode(), self._pairing.encode())
+
     def _pair(self, session: Session, event: Inbound, now: datetime) -> str | None:
         """Someone who is not a tester: dropped, unless the message is the pairing code (D4)."""
-        if self._pairing is None or event.kind is not InboundKind.TEXT or event.text is None:
-            return None
-        if not hmac.compare_digest(event.text.strip().encode(), self._pairing.encode()):
+        if not self._is_code(event):
             return None
         session.execute(
             insert(ChannelTester)
@@ -339,6 +369,11 @@ class Inbox:
 
     def _message(self, session: Session, event: Inbound, now: datetime) -> str | None:
         key, paused = self._open(session, event.user_id, now)
+        if self._is_code(event):
+            # A tester who sends the code again: stored as read with no text, like the first
+            # time, never a turn (final review of M4, M7).
+            self._insert(session, key, event, now, status=InStatus.READ, text=None)
+            return None
         if paused is not None and paused > now:
             self._touch(session, key, now, pause=True)  # D6: 24 hours without messages
             return None  # the staff has the thread: nothing stored, nothing for the model

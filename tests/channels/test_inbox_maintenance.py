@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import Update, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
-from frontdesk.channels.inbox import Inbox, InStatus, OutStatus, conversation_key
+from frontdesk.channels.inbox import Inbox, InStatus, OutStatus, conversation_key, queue_reply
 from frontdesk.channels.messages import Inbound, InboundKind
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
 from frontdesk.db.models import ChannelConversation, ChannelMessage
@@ -154,3 +154,30 @@ def test_a_quiet_conversation_forgets_its_state_then_goes(
     clock.advance(days=23)
     assert inbox.purge().conversations == 1
     assert _conversation(factory) is None
+
+
+def test_after_an_uncertain_part_the_rest_of_the_reply_is_never_sent(
+    inbox: Inbox, factory: sessionmaker[Session], clock: Clock
+) -> None:
+    # Final review of M4, M5: the worker died while sending part 1 of 2; the sweep made part 1
+    # uncertain and gave the conversation back, and part 2 went out alone.
+    with business_session(factory, BUSINESS) as session:
+        queue_reply(
+            session,
+            business_id=BUSINESS,
+            channel=CHANNEL,
+            conversation_id=KEY,
+            parts=[("reply", "parte 1"), ("reply", "parte 2")],
+            now=NOW,
+        )
+    part_one = (
+        update(ChannelMessage)
+        .where(ChannelMessage.direction == "out")
+        .where(ChannelMessage.text == "parte 1")
+    )
+    _run(factory, part_one.values(status=OutStatus.SENDING, updated_at=NOW))
+    clock.advance(minutes=3)
+    inbox.sweep()
+    statuses = {m.text: (m.status, m.reason) for m in _messages(factory, "out")}
+    assert statuses["parte 1"] == (OutStatus.UNCERTAIN, "no_answer")
+    assert statuses["parte 2"] == (OutStatus.DROPPED, "previous_uncertain")

@@ -99,8 +99,13 @@ def _id(value: object) -> str:
 
 
 def _text(message: Mapping[str, Any]) -> str | None:
+    """The message's text, without NUL characters: Postgres refuses them, and a delivery it
+    refused came back from Meta for 36 hours (final review of M4, M11)."""
     text = message.get("text")
-    return text.strip() if isinstance(text, str) and text.strip() else None
+    if not isinstance(text, str):
+        return None
+    kept = text.replace("\x00", "").strip()
+    return kept or None
 
 
 def _time(value: object) -> datetime | None:

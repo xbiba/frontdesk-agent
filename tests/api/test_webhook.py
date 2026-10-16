@@ -102,13 +102,20 @@ def test_a_signed_delivery_is_stored_and_its_conversation_dispatched(app_url: st
     assert sink.calls == [(KEY, BURST)]
 
 
-def test_an_unsigned_delivery_is_refused_and_stores_nothing(app_url: str) -> None:
+def test_an_unsigned_delivery_is_refused_and_stores_nothing(
+    app_url: str, caplog: pytest.LogCaptureFixture
+) -> None:
     client, sink, inbox = _app(app_url)
     body = _delivery(CODE)
-    assert _post(client, body, None).status_code == 403
-    assert _post(client, body, "sha256=" + "0" * 64).status_code == 403
+    with caplog.at_level(logging.INFO, logger="frontdesk.api.webhook"):
+        assert _post(client, body, None).status_code == 403
+        assert _post(client, body, "sha256=" + "0" * 64).status_code == 403
     assert inbox.count_testers() == 0
     assert sink.calls == []
+    # Final review of M4, M4: a wrong app secret drops every delivery. A warning, not an alert:
+    # anyone on the internet may post an unsigned body.
+    levels = {r.levelno for r in caplog.records if r.msg == "channel.bad_signature"}
+    assert levels == {logging.WARNING}
 
 
 def test_a_delivery_too_large_is_refused(app_url: str) -> None:
