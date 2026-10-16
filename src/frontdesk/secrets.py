@@ -27,6 +27,7 @@ SECRET_IDS: Final = {
     "instagram_app_secret": "frontdesk-instagram-app-secret",
     "instagram_verify_token": "frontdesk-instagram-verify-token",
     "instagram_pairing_code": "frontdesk-instagram-pairing-code",
+    "whatsapp_token": "frontdesk-whatsapp-token",
 }
 _API: Final = "https://secretmanager.googleapis.com/v1"
 

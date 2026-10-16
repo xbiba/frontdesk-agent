@@ -24,6 +24,7 @@ from frontdesk.cli.live import eval_report, live_turns, read_cases
 from frontdesk.cli.live_chat import run_live_chat
 from frontdesk.cli.publish import publish_knowledge
 from frontdesk.cli.runtime import build_runtime, without_knowledge
+from frontdesk.cli.whatsapp import send_template
 from frontdesk.composition import Deployment, NoActiveKnowledgeError, open_deployment
 from frontdesk.conversation.evaluation import (
     render_turn_markdown,
@@ -75,12 +76,14 @@ eval_app = typer.Typer(no_args_is_help=True, help="Evaluations.")
 calendar_app = typer.Typer(no_args_is_help=True, help="The doctors' calendars.")
 bookings_app = typer.Typer(no_args_is_help=True, help="Bookings from the chat.")
 instagram_app = typer.Typer(no_args_is_help=True, help="The Instagram channel (M4).")
+whatsapp_app = typer.Typer(no_args_is_help=True, help="WhatsApp for the reception (W1).")
 app.add_typer(db_app, name="db")
 app.add_typer(knowledge_app, name="knowledge")
 app.add_typer(eval_app, name="eval")
 app.add_typer(calendar_app, name="calendar")
 app.add_typer(bookings_app, name="bookings")
 app.add_typer(instagram_app, name="instagram")
+app.add_typer(whatsapp_app, name="whatsapp")
 
 EnvFile = Annotated[
     Path, typer.Option("--env-file", exists=True, dir_okay=False, help="The deployment's env file.")
@@ -527,3 +530,9 @@ def instagram_testers(
 ) -> None:
     """Count the testers, or remove them all."""
     raise typer.Exit(show_testers(load_settings(env_file), clear=clear))
+
+
+@whatsapp_app.command("template")
+def whatsapp_template(env_file: EnvFile) -> None:
+    """Send the booking request template to Meta's approval, in the staff's language."""
+    raise typer.Exit(asyncio.run(send_template(load_settings(env_file))))
