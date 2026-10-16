@@ -77,12 +77,12 @@ _CLAUSE_BREAK: Final = re.compile(r"[,;:.!?\n\u2014\u2013]|\s-\s")  # em and en 
 def says_booked(reply: str) -> bool:
     """Whether the reply says a booking, or a request for one, is done. A question is read as any
     clause (security review, 2026-10-16): the summaries ask with no word of a booking done."""
-    for clause in _CLAUSE_BREAK.split(reply):
-        for pattern in _CLAIMS:
-            match = pattern.search(clause)
-            if match is not None and not _negated(clause, match):
-                return True
-    return False
+    return any(
+        not _negated(clause, match)
+        for clause in _CLAUSE_BREAK.split(reply)
+        for pattern in _CLAIMS
+        for match in pattern.finditer(clause)  # every match: a negated one may come first
+    )
 
 
 def _negated(clause: str, match: re.Match[str]) -> bool:

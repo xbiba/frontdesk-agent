@@ -147,6 +147,7 @@ def test_what_the_chat_books_or_what_is_free_may_be_only_that(reply: str) -> Non
         "La prenotazione è confermata — ci vediamo venerdì?",
         "Your booking is confirmed, right?",
         "Your booking at no cost is confirmed.",
+        "The request is not sent but your booking is confirmed.",
     ],
 )
 def test_a_booking_said_done_with_none_made_is_refused_in_any_wording(reply: str) -> None:
