@@ -1,5 +1,7 @@
 """The reception agent's reply may use only what it was given (Albi, 2026-10-12)."""
 
+from datetime import date
+
 import pytest
 
 from frontdesk.agent.reply_check import reply_problems
@@ -215,3 +217,38 @@ def test_a_booking_made_earlier_covers_no_other_time_and_no_time_at_all(reply: s
     found = reply_problems(reply, KNOWN, booked=False, times=SHOWN, earlier=EARLIER)
     (problem,) = [problem for problem in found if problem.code == "booking"]
     assert "venerdì 23 ottobre, 09:30" in problem.detail
+
+
+# Run agent-13 (2026-10-16): 3.5 Flash-Lite wrote "giovedì 23 ottobre" where clinic_hours said
+# "venerdì 23 ottobre". A weekday next to a date must be that date's.
+TUESDAY = date(2026, 10, 20)
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Il dott. Oliverio è in clinica giovedì 23 ottobre dalle 9 alle 13.",
+        "Dr. Oliverio is in on Thursday, 23 October.",
+        "Dr. Oliverio është në klinikë të enjten 23 tetor.",
+        "Ho posto lunedì 27.",
+    ],
+)
+def test_a_weekday_that_is_not_its_date_s_is_refused(reply: str) -> None:
+    found = reply_problems(reply, f"{KNOWN} 23 27", booked=False, today=TUESDAY)
+    assert "weekday" in {problem.code for problem in found}
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Il dott. Oliverio è in clinica venerdì 23 ottobre e lunedì 26 ottobre.",
+        "Dr. Oliverio is in on Friday, 23 October, and on Monday 26.",
+        "Dr. Oliverio është në klinikë të premten 23 tetor dhe e hënë 26 tetor.",
+        "Dal 23 ottobre al 2 novembre: oggi è martedì.",
+        "Martedì 27 ottobre, 14:00.",
+    ],
+)
+def test_a_weekday_that_is_its_date_s_passes(reply: str) -> None:
+    known = f"{KNOWN} 23 26 27 2 14:00"
+    found = reply_problems(reply, known, booked=False, today=TUESDAY)
+    assert "weekday" not in {problem.code for problem in found}

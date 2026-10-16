@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date
 from typing import Final
 
 from frontdesk.agent.answer_check import links_in, numbers_in
@@ -191,6 +192,53 @@ def times_named(reply: str) -> list[tuple[tuple[int, int], str]]:
     return sorted(found.items())
 
 
+# A weekday next to a date must be that date's (run agent-13, 2026-10-16: "giovedì 23 ottobre" where
+# clinic_hours said "venerdì 23 ottobre"). Albanian weekdays by stem: "e premte", "të premten".
+_WEEKDAY_NAMES: Final = (
+    r"luned[iì]|monday|h[eë]n[eë]n?",
+    r"marted[iì]|tuesday|mart[eë]n?",
+    r"mercoled[iì]|wednesday|m[eë]rkur[eë]n?",
+    r"gioved[iì]|thursday|enjten?",
+    r"venerd[iì]|friday|premten?",
+    r"sabato|saturday|shtun[eë]n?",
+    r"domenica|sunday|diel(?:[eë]n)?",
+)
+_MONTH_NUMBER: Final = {
+    name.lower(): number for names in MONTHS.values() for number, name in enumerate(names, 1)
+}
+_DATED_WEEKDAY: Final = re.compile(
+    r"\b(?:(" + ")|(".join(_WEEKDAY_NAMES) + r"))\b,?\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?\b"
+    r"(?:\s+(" + "|".join(_MONTH_NUMBER) + r")\w*)?",
+    re.IGNORECASE,
+)
+
+
+def _nearest(day: int, month: int | None, today: date) -> date | None:
+    """The date nearest to today with this day of the month, in `month` when it is named."""
+    found = []
+    for shift in (-1, 0, 1, 2):
+        years, index = divmod(today.month - 1 + shift, 12)
+        if month is not None and index + 1 != month:
+            continue
+        try:
+            found.append(date(today.year + years, index + 1, day))
+        except ValueError:
+            continue
+    return min(found, key=lambda candidate: abs((candidate - today).days), default=None)
+
+
+def wrong_weekdays(reply: str, today: date) -> list[str]:
+    """Each weekday the reply puts next to a date that is not that date's."""
+    wrong = []
+    for match in _DATED_WEEKDAY.finditer(reply):
+        weekday = next(index for index in range(7) if match[index + 1])
+        month = _MONTH_NUMBER.get((match[9] or "").lower())
+        found = _nearest(int(match[8]), month, today)
+        if found is not None and found.weekday() != weekday:
+            wrong.append(f"{match[0]} ({found.isoformat()} is a {found:%A})")
+    return wrong
+
+
 # The numbers of a numbered list ("1) venerdì 23: ...") count nothing: they are no fact.
 _LIST_MARK: Final = re.compile(r"(?m)^[ \t]*\d{1,2}[).][ \t]")
 
@@ -218,12 +266,14 @@ def reply_problems(
     booked: bool,
     times: frozenset[str] = frozenset(),
     earlier: tuple[str, ...] = (),
+    today: date | None = None,
 ) -> tuple[Problem, ...]:
     """Why `reply` may not be sent; empty when it may. `known`: everything the agent was given,
     which a number or a link must come from. `booked`: the booking tool made a booking. `times`:
     the free times the patient was shown ("10:00"); a time the reply names must be one of them or a
     time of `known` (an opening hour), and is then no number to check. `earlier`: the appointments
-    the conversation made in earlier turns ("venerdì 23 ottobre, 10:00"), which it may tell again."""
+    the conversation made in earlier turns ("venerdì 23 ottobre, 10:00"), which it may tell again.
+    `today`: the business's date, against which a weekday next to a date is checked."""
     problems = []
     if not reply.strip():
         problems.append(Problem("empty", "the reply is empty"))
@@ -241,6 +291,12 @@ def reply_problems(
     new_links = sorted(links_in(reply) - links_in(known))
     if new_links:
         problems.append(Problem("links", f"links that are in no fact: {', '.join(new_links)}"))
+    wrong = wrong_weekdays(reply, today) if today is not None else []
+    if wrong:
+        detail = (
+            f"weekdays that are not their dates': {'; '.join(wrong)}; write them as the tools do"
+        )
+        problems.append(Problem("weekday", detail))
     if contains_diagnostic_language(reply):
         problems.append(Problem("diagnosis", "it reads like a diagnosis or medical advice"))
     promise = promise_phrase(reply)

@@ -248,7 +248,14 @@ def build_reception(
         told = not desk.booked and says_booked(output.text)
         earlier = booking.earlier_slots(desk) if told else ()
         problems = list(
-            reply_problems(output.text, known, booked=desk.booked, times=times, earlier=earlier)
+            reply_problems(
+                output.text,
+                known,
+                booked=desk.booked,
+                times=times,
+                earlier=earlier,
+                today=desk.today,
+            )
         )
         if output.kind is ReplyKind.NOTICE and contains_clinical_terms(output.text):
             # Next to the medical notice, the answer is only the practical part (ADR-0006): a word
