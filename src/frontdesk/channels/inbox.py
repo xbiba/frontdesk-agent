@@ -307,11 +307,15 @@ class Inbox:
     def _is_tester(self, session: Session, user_id: str) -> bool:
         return session.get(ChannelTester, (self._business, self._channel, user_id)) is not None
 
+    def _is_code(self, event: Inbound) -> bool:
+        """The message is the pairing code (D4), a secret."""
+        if self._pairing is None or event.kind is not InboundKind.TEXT or event.text is None:
+            return False
+        return hmac.compare_digest(event.text.strip().encode(), self._pairing.encode())
+
     def _pair(self, session: Session, event: Inbound, now: datetime) -> str | None:
         """Someone who is not a tester: dropped, unless the message is the pairing code (D4)."""
-        if self._pairing is None or event.kind is not InboundKind.TEXT or event.text is None:
-            return None
-        if not hmac.compare_digest(event.text.strip().encode(), self._pairing.encode()):
+        if not self._is_code(event):
             return None
         session.execute(
             insert(ChannelTester)
@@ -339,6 +343,11 @@ class Inbox:
 
     def _message(self, session: Session, event: Inbound, now: datetime) -> str | None:
         key, paused = self._open(session, event.user_id, now)
+        if self._is_code(event):
+            # A tester who sends the code again: stored as read with no text, like the first
+            # time, never a turn (final review of M4, M7).
+            self._insert(session, key, event, now, status=InStatus.READ, text=None)
+            return None
         if paused is not None and paused > now:
             self._touch(session, key, now, pause=True)  # D6: 24 hours without messages
             return None  # the staff has the thread: nothing stored, nothing for the model

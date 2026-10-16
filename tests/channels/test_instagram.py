@@ -73,6 +73,12 @@ def test_a_text_message_is_read() -> None:
     )
 
 
+def test_a_nul_character_is_dropped_from_a_text() -> None:
+    # Final review of M4, M11: Postgres refuses U+0000, and Meta redelivered the body for 36 hours.
+    (event,) = parse_events(_delivery(_from_person(text="Siete\x00 aperti?")))
+    assert event.text == "Siete aperti?"
+
+
 def test_a_story_reply_counts_as_text() -> None:
     reply = {"story": {"url": "https://cdn.example/s", "id": "s1"}}
     (event,) = parse_events(_delivery(_from_person(text="Quanto costa?", reply_to=reply)))
