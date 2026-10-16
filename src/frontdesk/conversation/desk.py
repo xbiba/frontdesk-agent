@@ -36,6 +36,8 @@ class Desk:
     conversation: str  # the conversation so far, as text: a number in it may be repeated
     booking: BookingStep | None
     documents: str = ""  # the clinic's documents, when they ride in the prompt
+    # Their keys: the sources of a reply no tool explains (a calendar's reply has the calendar's).
+    document_sources: tuple[str, ...] = ()
     previous: str = ""  # the agent's last message, which a reply may not repeat word for word
     seen: list[str] = field(default_factory=list)  # what the tools returned this turn
     sources: list[str] = field(default_factory=list)

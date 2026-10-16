@@ -504,13 +504,18 @@ async def test_a_confirmation_in_other_words_is_shown_as_code_wrote_it(
 
 
 async def test_a_small_pack_s_documents_ride_in_the_agent_s_prompt(base: TurnRuntime) -> None:
-    # Albi, 2026-10-16: no search; the documents in the conversation's language are its sources.
-    script = Script([_final("Sì, c'è un parcheggio.")])
-    reply = await Chat(replace(base, documents_in_prompt=True), script).say("C'è parcheggio?")
+    # Albi, 2026-10-16: no search. A reply no tool explains has the documents in the conversation's
+    # language as its sources; one the calendar explains, the calendar alone (run agent-14: every
+    # booking turn went to review for the documents it had in its prompt).
+    script = Script([_final("Sì, c'è un parcheggio."), [("free_times", {})], _final(FRIDAY)])
+    chat = Chat(replace(base, documents_in_prompt=True), script)
+    reply = await chat.say("C'è parcheggio?")
     request = script.calls[0][-1]
     assert isinstance(request, ModelRequest)
     assert "Clinic documents:\n[" in (request.instructions or "")
-    assert set(reply.trace.sources) >= {"first-visit-it", "physiotherapy-it"}
+    assert set(reply.trace.sources) == {"first-visit-it", "physiotherapy-it"}
+    booked = await chat.say("venerdì che orari ci sono?")
+    assert booked.trace.sources == ("calendar:dr-arben-demo",)
 
 
 async def test_a_reply_that_repeats_the_last_one_is_sent_back(base: TurnRuntime) -> None:

@@ -357,7 +357,7 @@ async def _reception(
         rule="pass",
         category=Category.ADMINISTRATIVE,
         intent=intent,
-        sources=tuple(dict.fromkeys(desk.sources)),
+        sources=tuple(dict.fromkeys(desk.sources)) or desk.document_sources,
         booking=desk.booking,
         check_reasons=_sent_back(desk),
     )
@@ -428,7 +428,7 @@ def _desk(
         conversation="\n".join(entry.text for entry in state.history),
         booking=state.booking,
         documents=documents.text,
-        sources=list(documents.sources),
+        document_sources=documents.sources,
         previous=next(
             (entry.text for entry in reversed(state.history) if entry.role == "assistant"), ""
         ),
