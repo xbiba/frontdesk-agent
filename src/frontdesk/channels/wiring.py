@@ -17,6 +17,7 @@ from frontdesk.channels.instagram import INSTAGRAM, InstagramWebhook
 from frontdesk.channels.messages import WebhookReader
 from frontdesk.db.engine import make_engine, make_session_factory
 from frontdesk.model_gateway.google_tokens import google_token_source
+from frontdesk.model_gateway.routes import DataClass, require_route
 from frontdesk.secrets import CLOUD_SCOPE, SECRET_IDS, add_secret_version, read_secret
 from frontdesk.settings import InstagramMode, Settings
 from frontdesk.tenancy.loader import load_pack
@@ -92,6 +93,10 @@ def build_ingress(settings: Settings) -> Ingress:
     pack = load_pack(settings.require_business_pack())
     instagram_policy(pack)
     testers = settings.instagram_mode is InstagramMode.TESTERS
+    if not testers:
+        # Live mode stores patients' messages: refused here too when the worker could not answer
+        # them (final review of M4, M6).
+        require_route(settings.model_route, DataClass.PATIENT_DERIVED)
     inbox = Inbox(
         make_session_factory(make_engine(settings.database_url)),
         business_id=pack.id,
@@ -119,7 +124,6 @@ def build_worker(settings: Settings) -> Worker:
     from frontdesk.composition import build_turn_runtime, open_deployment
     from frontdesk.conversation.turn import handle_message
     from frontdesk.db.engine import business_session
-    from frontdesk.model_gateway.routes import DataClass
 
     deployment = open_deployment(settings)
     pack = narrow(deployment.pack, instagram_policy(deployment.pack))

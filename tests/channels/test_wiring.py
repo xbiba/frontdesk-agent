@@ -84,6 +84,10 @@ def test_live_mode_is_refused_on_a_route_not_approved_for_patient_data(pack_dir:
     )
     with pytest.raises(UnapprovedRouteError, match="patient_derived"):
         build_worker(settings)
+    # Final review of M4, M6: the webhook refuses it too, or it would store patients' messages that
+    # nobody answers until the purge.
+    with pytest.raises(UnapprovedRouteError, match="patient_derived"):
+        build_ingress(settings)
 
 
 @pytest.mark.db
