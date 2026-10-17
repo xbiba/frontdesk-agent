@@ -613,3 +613,44 @@ async def test_a_staff_text_or_voice_note_gets_the_fixed_reply(
     assert await runner.process(KEY) is Outcome.DONE
     assert turn.texts == []
     assert _replies(sender) == [ONLY_BUTTONS]
+
+
+# --- Final review of W1, I2: one failed send never takes the next requests with it ---------------
+
+
+def _queue(factory: sessionmaker[Session], clock: Clock, *parts: tuple[str, str]) -> None:
+    with business_session(factory, BUSINESS) as session:
+        queue_reply(
+            session,
+            business_id=BUSINESS,
+            channel=CHANNEL,
+            conversation_id=KEY,
+            parts=list(parts),
+            now=clock(),
+        )
+
+
+async def test_a_failed_template_does_not_stop_the_next_one(
+    inbox: Inbox, factory: sessionmaker[Session], clock: Clock, clinic_pack: BusinessPack
+) -> None:
+    sender = FakeSender()
+    runner = _runner(factory, clock, clinic_pack, sender, FakeTurn())
+    await _welcomed(runner)
+    _queue(factory, clock, (TEMPLATE, "richiesta A"), (TEMPLATE, "richiesta B"))
+    sender._outcomes.append(SendOutcome(SendStatus.FAILED, reason="status_500"))
+    await runner.process(KEY)
+    assert _replies(sender) == ["richiesta A", "richiesta B"]
+    statuses = {m.text: m.status for m in _messages(factory, "out")}
+    assert (statuses["richiesta A"], statuses["richiesta B"]) == (OutStatus.FAILED, OutStatus.SENT)
+
+
+async def test_a_reply_that_cannot_go_leaves_the_templates_after_it(
+    inbox: Inbox, factory: sessionmaker[Session], clock: Clock, clinic_pack: BusinessPack
+) -> None:
+    sender = FakeSender()
+    runner = _runner(factory, clock, clinic_pack, sender, FakeTurn())
+    await _welcomed(runner)
+    clock.advance(hours=30)  # the reply's window has closed; a template has none
+    _queue(factory, clock, ("fixed", "Confermata."), (TEMPLATE, "richiesta"))
+    await runner.process(KEY)
+    assert _replies(sender) == ["richiesta"]

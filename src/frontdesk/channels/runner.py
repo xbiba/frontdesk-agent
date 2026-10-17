@@ -387,11 +387,19 @@ class Runner:
         )
 
     async def _deliver(self, key: str, user_id: str) -> None:
+        """Every queued part, in order. A part that cannot go, or fails, takes the rest of the
+        replies with it (D9); a template is a request of its own and never goes with them: it
+        waits for the switch, or goes after them (final review of W1, I2)."""
+        stopped = False
         for message_id, kind, text in await asyncio.to_thread(self._queued, key):
+            if stopped and kind != TEMPLATE:
+                continue  # dropped with the part before it
             blocked = await asyncio.to_thread(self._blocked, key, text, kind)
             if blocked is not None or text is None:
-                await asyncio.to_thread(self._drop_queued, key, blocked or "expired")
-                return
+                if kind != TEMPLATE:
+                    await asyncio.to_thread(self._drop_queued, key, blocked or "expired")
+                    stopped = True
+                continue
             if not await asyncio.to_thread(self._take, message_id):
                 continue  # another worker took this reply: it is sent once (D9)
             outcome = await self._sender.send(user_id, text, kind)
@@ -410,8 +418,9 @@ class Runner:
                     conversation_id=key,
                     reason=outcome.reason,
                 )
-                await asyncio.to_thread(self._drop_queued, key, "previous_failed")
-                return
+                if kind != TEMPLATE:
+                    await asyncio.to_thread(self._drop_queued, key, "previous_failed")
+                    stopped = True
 
     def _take(self, message_id: uuid.UUID) -> bool:
         """The reply goes to this worker alone: from queued to sending, once."""
@@ -471,6 +480,7 @@ class Runner:
                 .where(ChannelMessage.conversation_id == key)
                 .where(ChannelMessage.direction == OUT)
                 .where(ChannelMessage.status == OutStatus.QUEUED)
+                .where(ChannelMessage.kind != TEMPLATE)
                 .values(status=OutStatus.DROPPED, reason=reason, updated_at=self._now())
             )
         if reason == "window":

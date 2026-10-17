@@ -33,6 +33,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.channels.messages import Inbound, InboundKind
+from frontdesk.channels.whatsapp import TEMPLATE
 from frontdesk.db.engine import business_session
 from frontdesk.db.models import ChannelConversation, ChannelMessage, ChannelTester
 from frontdesk.observability.logs import log_alert, log_event
@@ -265,6 +266,7 @@ class Inbox:
                     update(ChannelMessage)
                     .where(*mine, ChannelMessage.direction == OUT)
                     .where(ChannelMessage.status == OutStatus.QUEUED)
+                    .where(ChannelMessage.kind != TEMPLATE)  # a request of its own (W1, I2)
                     .where(ChannelMessage.conversation_id.in_(stuck))
                     .values(status=OutStatus.DROPPED, reason="previous_uncertain", updated_at=now)
                 )
