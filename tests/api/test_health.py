@@ -53,6 +53,6 @@ def test_the_public_webhook_s_health_never_opens_a_database_connection() -> None
         verify_token="verify",
         off=False,
     )
-    app = create_webhook_app(Settings(), ingress=ingress, engine=engine)
+    app = create_webhook_app(Settings(), ingresses=(ingress,), engine=engine)
     response = TestClient(app).get("/health")
     assert (response.status_code, response.json()) == (200, {"status": "ok"})

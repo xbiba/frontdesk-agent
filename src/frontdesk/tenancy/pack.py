@@ -122,9 +122,11 @@ class ChannelPolicy(Frozen):
 
 
 class Channels(Frozen):
-    """The channels the business answers on, each with its policy (M4: Instagram)."""
+    """The channels the business answers on, each with its policy (M4: Instagram). WhatsApp (W1)
+    is the reception's: booking requests to decide, no model."""
 
     instagram: ChannelPolicy | None = None
+    whatsapp: ChannelPolicy | None = None
 
 
 class OpeningHours(Frozen):

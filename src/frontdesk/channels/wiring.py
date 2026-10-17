@@ -1,5 +1,6 @@
-"""The Instagram channel of one deployment (M4, ADR-0011): the webhook's part and the worker's part,
-built from the settings. The webhook's part loads nothing of the model, the embedder or the turn."""
+"""The channels of one deployment (M4, ADR-0011; WhatsApp W1): the webhook's part and the worker's
+part, built from the settings. The webhook's part loads nothing of the model, the embedder or the
+turn. WhatsApp is the reception's: its numbers come from the staff list, and it runs no model."""
 
 from __future__ import annotations
 
@@ -15,6 +16,8 @@ from frontdesk.channels.dispatch import CloudTasksDispatcher, Dispatcher
 from frontdesk.channels.inbox import Inbox
 from frontdesk.channels.instagram import INSTAGRAM, InstagramWebhook
 from frontdesk.channels.messages import WebhookReader
+from frontdesk.channels.staff import Staff, read_staff
+from frontdesk.channels.whatsapp import WHATSAPP, WhatsAppWebhook
 from frontdesk.db.engine import make_engine, make_session_factory
 from frontdesk.model_gateway.google_tokens import google_token_source
 from frontdesk.model_gateway.routes import DataClass, require_route
@@ -118,12 +121,41 @@ def build_ingress(settings: Settings) -> Ingress:
     )
 
 
+def build_ingresses(settings: Settings) -> tuple[Ingress, ...]:
+    """Instagram's ingress, and WhatsApp's when the pack lists the channel (W1)."""
+    instagram = build_ingress(settings)
+    pack = load_pack(settings.require_business_pack())
+    if pack.channels.whatsapp is None:
+        return (instagram,)
+    staff = _staff(settings)
+    inbox = Inbox(
+        make_session_factory(make_engine(settings.database_url)),
+        business_id=pack.id,
+        channel=WHATSAPP,
+        account_id=_phone_number(settings),
+        testers_only=False,
+        pairing_code=None,
+        now=_utc_now,
+        allowed_users=frozenset(member.user_id for member in staff),
+    )
+    whatsapp = Ingress(
+        webhook=WhatsAppWebhook(channel_secret(settings, "whatsapp_app_secret")),
+        inbox=inbox,
+        dispatcher=instagram.dispatcher,
+        verify_token=channel_secret(settings, "whatsapp_verify_token"),
+        off=settings.whatsapp_off,
+    )
+    return (instagram, whatsapp)
+
+
 def build_worker(settings: Settings) -> Worker:
     # Only the worker loads the model, the embedder and the engine's turn.
     from frontdesk.booking.holds import purge
     from frontdesk.channels.instagram import InstagramSender, refresh_token
     from frontdesk.channels.policy import narrow
+    from frontdesk.channels.requests import Requests, only_buttons
     from frontdesk.channels.runner import Runner
+    from frontdesk.channels.whatsapp import WhatsAppSender
     from frontdesk.composition import build_turn_runtime, open_deployment
     from frontdesk.conversation.turn import handle_message
     from frontdesk.db.engine import business_session
@@ -171,14 +203,73 @@ def build_worker(settings: Settings) -> Worker:
         pairing_code=None,
         now=deployment.now,
     )
+    dispatcher = _dispatcher(settings)
+    runners: dict[str, Runner] = {INSTAGRAM: runner}
+    inboxes: dict[str, Inbox] = {INSTAGRAM: inbox}
+    requests = None
+    if deployment.pack.channels.whatsapp is not None:
+        if runtime.scheduler is None:
+            raise ValueError("WhatsApp's booking requests need the pack's calendar")
+        staff = _staff(settings)
+        staff_inbox = Inbox(
+            deployment.session_factory,
+            business_id=pack.id,
+            channel=WHATSAPP,
+            account_id=_phone_number(settings),
+            testers_only=False,
+            pairing_code=None,
+            now=deployment.now,
+            allowed_users=frozenset(member.user_id for member in staff),
+        )
+        requests = Requests(
+            deployment.session_factory,
+            pack=pack,
+            scheduler=runtime.scheduler,
+            staff=staff,
+            whatsapp=staff_inbox,
+            dispatcher=dispatcher,
+            now=deployment.now,
+            language=settings.whatsapp_staff_language,
+        )
+        whatsapp_token = channel_secret(settings, "whatsapp_token")
+        runners[WHATSAPP] = Runner(
+            deployment.session_factory,
+            pack=pack,
+            channel=WHATSAPP,
+            sender=WhatsAppSender(
+                lambda: whatsapp_token,
+                client,
+                phone_number_id=_phone_number(settings),
+                api_version=settings.whatsapp_api_version,
+            ),
+            turn=turn,  # never called: the staff's thread has its fixed reply in W1
+            now=deployment.now,
+            off=settings.whatsapp_off,
+            buttons=requests.decide,
+            fixed_reply=only_buttons(settings.whatsapp_staff_language),
+        )
+        inboxes[WHATSAPP] = staff_inbox
     return Worker(
-        runners={INSTAGRAM: runner},
-        inbox={INSTAGRAM: inbox},
-        requests=None,
-        dispatcher=_dispatcher(settings),
+        runners=runners,
+        inbox=inboxes,
+        requests=requests,
+        dispatcher=dispatcher,
         refresh=refresh,
         purge_bookings=purge_bookings,
     )
+
+
+def _staff(settings: Settings) -> tuple[Staff, ...]:
+    """The staff list from its secret: a bad one stops the build, naming the entry."""
+    return read_staff(channel_secret(settings, "whatsapp_staff"))
+
+
+def _phone_number(settings: Settings) -> str:
+    if not settings.whatsapp_phone_number_id:
+        raise ValueError(
+            "FRONTDESK_WHATSAPP_PHONE_NUMBER_ID is not set: Meta's WhatsApp > API Setup shows it"
+        )
+    return settings.whatsapp_phone_number_id
 
 
 def _account(settings: Settings) -> str:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
@@ -54,19 +55,20 @@ def create_app(
 def create_webhook_app(
     settings: Settings | None = None,
     *,
-    ingress: Ingress | None = None,
+    ingresses: Sequence[Ingress] | None = None,
     engine: Engine | None = None,
 ) -> FastAPI:
-    """The public service that receives a channel's webhooks (M4). Built from the environment when
-    uvicorn calls it with no argument."""
+    """The public service that receives the channels' webhooks (M4, W1), one route each. Built
+    from the environment when uvicorn calls it with no argument."""
     from frontdesk.api.webhook import webhook_router
-    from frontdesk.channels.wiring import build_ingress
+    from frontdesk.channels.wiring import build_ingresses
 
     if settings is None:
         configure_logging(Settings().log_level)
     resolved = settings or Settings()
     app = create_app(resolved, engine=engine, public=True)
-    app.include_router(webhook_router(ingress or build_ingress(resolved)))
+    for ingress in ingresses or build_ingresses(resolved):
+        app.include_router(webhook_router(ingress))
     return app
 
 
