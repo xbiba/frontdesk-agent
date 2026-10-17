@@ -106,6 +106,7 @@ def free_times(
         service_id=service,
         offered=offered,
         shown=tuple(dict.fromkeys((*shown, *offered))),
+        shown_at=desk.now,
     )
     lines.append(_listing(desk, doctor, service, listed, fitting))
     later = [when for when in fitting if when not in listed]

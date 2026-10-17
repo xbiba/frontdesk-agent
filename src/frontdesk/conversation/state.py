@@ -48,6 +48,8 @@ class BookingStep(BaseModel):
     service_id: str
     offered: tuple[datetime, ...] = ()
     shown: tuple[datetime, ...] = ()  # every time offered so far: "other times" are the rest
+    # When the times were last shown: the name and phone may come for a hold's lifetime after.
+    shown_at: datetime | None = None
     hold_id: uuid.UUID | None = None
     # The reception agent: the turn whose reply showed the summary; only the next message may say yes.
     summary_turn: int | None = None

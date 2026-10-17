@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.booking.calendar import FixtureCalendar
+from frontdesk.booking.holds import HOLD_LIFETIME
 from frontdesk.booking.scheduler import CalendarScheduler
 from frontdesk.conversation.reception import build_reception, reply_sources
 from frontdesk.conversation.state import ConversationState
@@ -391,6 +392,46 @@ async def test_personal_data_outside_a_held_time_is_turned_away_and_not_kept(
     assert reply.text == base.pack.fixed_texts["it"][FixedTextKey.PERSONAL_DATA]  # type: ignore[index]
     assert script.calls == []
     assert chat.state.history == ()
+
+
+@pytest.mark.parametrize("message", ["+355 69 123 4567", "Mi chiamo Mario Rossi, +355 69 123 4567"])
+async def test_the_name_and_phone_reach_the_agent_once_the_times_are_shown(
+    base: TurnRuntime, message: str
+) -> None:
+    # Run agent-23 (Albi, 2026-10-17): "the second one" was ambiguous, the agent rightly asked
+    # which time, and the phone the patient sent next got the personal-data text: the booking
+    # stopped there. A booking is under way from the free times shown, before any hold.
+    script = Script(
+        [
+            [("free_times", {})],
+            _final(f"{LIST}\nQuale preferisce?"),
+            _final("Intende venerdì 23 o lunedì 26?", "clarify"),
+            _final("Grazie. Quale giorno preferisce, venerdì 23 o lunedì 26?", "clarify"),
+        ]
+    )
+    chat = Chat(base, script)
+    await chat.say("Vorrei prenotare")
+    await chat.say("il secondo")
+    reply = await chat.say(message)
+    assert reply.trace.rule == "pass"
+    assert reply.text == "Grazie. Quale giorno preferisce, venerdì 23 o lunedì 26?"
+    assert len(script.calls) == 4  # the agent read it
+
+
+async def test_the_times_shown_let_the_phone_through_for_a_hold_s_lifetime_only(
+    base: TurnRuntime,
+) -> None:
+    # Security review of the fix (2026-10-17): the step with the times stays in the state until a
+    # booking ends, so the filter opens for as long as a hold would live, not for days.
+    clock = [NOW]
+    runtime = replace(base, now=lambda: clock[0])
+    script = Script([[("free_times", {})], _final(f"{LIST}\nQuale preferisce?")])
+    chat = Chat(runtime, script)
+    await chat.say("Vorrei prenotare")
+    clock[0] = NOW + HOLD_LIFETIME + timedelta(minutes=1)
+    reply = await chat.say("Il mio numero è +355 69 123 4567, mi richiamate?")
+    assert reply.trace.rule == "personal_data:phone"
+    assert len(script.calls) == 2  # the agent never saw it
 
 
 async def test_only_the_name_and_phone_pass_while_a_time_is_held(base: TurnRuntime) -> None:
