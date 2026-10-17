@@ -3,6 +3,7 @@ first tap decides on the calendar, and the patient hears the answer on Instagram
 is open. The calendar is the fixture's; the dispatcher records its calls."""
 
 import asyncio
+import logging
 import threading
 import time
 import uuid
@@ -443,3 +444,41 @@ async def test_a_dispatch_failure_after_the_decision_still_answers_the_staff(
     assert decision.reply == CONFIRMED
     # The patient's answer waits queued: the sweep gives it its task.
     assert [kind for _, kind, _ in setup.out("instagram")] == ["fixed"]
+
+
+# --- Final review of W1, I5: what cal.com answered is in the logs ---------------------------------
+
+
+def _fields(caplog: pytest.LogCaptureFixture, event: str) -> list[tuple[int, object]]:
+    return [
+        (record.levelno, getattr(record, "fields", None))
+        for record in caplog.records
+        if record.msg == event
+    ]
+
+
+async def test_a_calendar_that_does_not_answer_is_an_alert_with_its_status(
+    factory: sessionmaker[Session],
+    pack: BusinessPack,
+    scheduler: CalendarScheduler,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    setup = Setup(factory, pack, DownScheduler(scheduler))
+    hold_id = setup.request(setup.patient_key())
+    with caplog.at_level(logging.INFO, logger="frontdesk.channels.requests"):
+        await setup.requests.decide(ANA.user_id, payload(hold_id, accept=True))
+    assert _fields(caplog, "requests.calendar_unavailable") == [
+        (logging.ERROR, {"reason": "status 503"})
+    ]
+
+
+async def test_a_request_gone_from_cal_com_is_logged(
+    setup: Setup, caplog: pytest.LogCaptureFixture
+) -> None:
+    hold_id = setup.request(setup.patient_key())
+    setup.scheduler.decide(
+        setup.pack, "dr-arben-demo", TEN, TEN + timedelta(minutes=30), hold_id.hex, accept=False
+    )
+    with caplog.at_level(logging.INFO, logger="frontdesk.channels.requests"):
+        await setup.requests.decide(ANA.user_id, payload(hold_id, accept=True))
+    assert [level for level, _ in _fields(caplog, "requests.gone")] == [logging.INFO]

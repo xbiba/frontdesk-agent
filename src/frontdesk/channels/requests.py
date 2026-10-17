@@ -34,7 +34,7 @@ from frontdesk.channels.templates import BOOKING_REQUEST
 from frontdesk.channels.whatsapp import TEMPLATE, WHATSAPP, Template
 from frontdesk.db.engine import business_session
 from frontdesk.db.models import BookingHold, ChannelMessage
-from frontdesk.observability.logs import log_event
+from frontdesk.observability.logs import log_alert, log_event
 from frontdesk.tenancy.pack import BusinessPack, Language
 
 logger = logging.getLogger(__name__)
@@ -191,10 +191,14 @@ class Requests:
                 request.reference,
                 accept=accept,
             )
-        except CalendarUnavailableError:
+        except CalendarUnavailableError as error:
+            # The message is a status, never content (frontdesk.booking.calcom): the first tap that
+            # meets a refusal names its cause (final review of W1, I5).
+            log_alert(logger, "requests.calendar_unavailable", reason=str(error))
             self._set(hold_id, RequestStatus.PENDING)
             return Decision(self._say("unavailable"))
         except RequestGoneError:
+            log_event(logger, "requests.gone")
             self._set(hold_id, RequestStatus.GONE)
             return Decision(self._say("gone"))
         except Exception:
