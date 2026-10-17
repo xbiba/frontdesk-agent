@@ -924,12 +924,11 @@ def _with_disclosure(pack: BusinessPack, language: Language, result: TurnResult)
 
 
 def _expected_fields(state: ConversationState, runtime: TurnRuntime) -> frozenset[PersonalField]:
-    """The personal data a message may hold: when the reception agent holds a time, the name and
-    the phone it asks for, and their corrections while the summary waits for a yes. Nothing else,
-    and never outside a booking (security review of the agent, 2026-10-12)."""
-    step = state.booking
-    asking = step is not None and step.stage in {BookingStage.NAME, BookingStage.CONFIRM}
-    if runtime.reception is None or not asking:
+    """The personal data a message may hold: the name and the phone, from the moment a booking is
+    under way, with the free times shown (Albi, 2026-10-17: a phone sent before the time was held,
+    after an ambiguous choice, stopped the booking), to the summary's yes. Nothing else, and never
+    outside a booking (security review of the agent, 2026-10-12)."""
+    if runtime.reception is None or state.booking is None:
         return frozenset()
     return frozenset({PersonalField.NAME, PersonalField.PHONE})
 
