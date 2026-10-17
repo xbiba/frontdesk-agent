@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from frontdesk.channels.templates import booking_request_definition
 from frontdesk.cli.main import app
-from frontdesk.cli.whatsapp import send_template
+from frontdesk.cli.whatsapp import check_number, send_template
 from frontdesk.settings import Settings
 
 WABA = "102938475610"
@@ -73,3 +73,34 @@ async def test_a_refused_template_prints_meta_s_code_and_fails(
     output = capsys.readouterr()
     assert "status 400, code 100" in output.err
     assert "t0ken" not in output.out + output.err
+
+
+async def test_check_prints_the_number_s_name(capsys: pytest.CaptureFixture[str]) -> None:
+    seen: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        answer = {"display_phone_number": "+1 555-078-3881", "verified_name": "Test Number"}
+        return httpx2.Response(200, json={**answer, "id": "106540352242922"})
+
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    settings = _settings(whatsapp_phone_number_id="106540352242922")
+    assert await check_number(settings, client=client) == 0
+    (request,) = seen
+    assert request.url.path == "/v25.0/106540352242922"
+    assert request.url.params["fields"] == "display_phone_number,verified_name"
+    output = capsys.readouterr().out
+    assert output == "number +1 555-078-3881: Test Number\n"
+    assert "t0ken" not in output
+
+
+async def test_a_number_meta_does_not_know_fails_the_check(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(400, json={"error": {"code": 100}})
+
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    settings = _settings(whatsapp_phone_number_id="1")
+    assert await check_number(settings, client=client) == 1
+    assert capsys.readouterr().err == "error: Meta did not find the number: status 400, code 100\n"

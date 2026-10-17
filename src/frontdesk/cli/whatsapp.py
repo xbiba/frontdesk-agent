@@ -1,5 +1,5 @@
 """`frontdesk whatsapp ...` (W1): the booking request template, sent to Meta's approval as soon as
-WhatsApp is added to the app (Albi, 2026-10-17)."""
+WhatsApp is added to the app (Albi, 2026-10-17), and the check of the bot's number."""
 
 from __future__ import annotations
 
@@ -37,6 +37,33 @@ async def send_template(settings: Settings, *, client: httpx2.AsyncClient | None
         )
         return 1
     typer.echo(f"template {BOOKING_REQUEST} ({language}): {answer.get('status', 'sent')}")
+    return 0
+
+
+async def check_number(settings: Settings, *, client: httpx2.AsyncClient | None = None) -> int:
+    """Print the bot's number and its name as Meta knows them: the token and the number's ID
+    work together."""
+    number = settings.whatsapp_phone_number_id
+    if not number:
+        typer.echo("error: FRONTDESK_WHATSAPP_PHONE_NUMBER_ID is not set", err=True)
+        return 1
+    token = channel_secret(settings, "whatsapp_token")
+    async with client or httpx2.AsyncClient(timeout=15.0) as http:
+        response = await http.get(
+            f"{GRAPH}/{settings.whatsapp_api_version}/{number}",
+            params={"fields": "display_phone_number,verified_name"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    answer = _json(response)
+    if response.status_code != 200:
+        error = answer.get("error")
+        code = error.get("code") if isinstance(error, dict) else None
+        typer.echo(
+            f"error: Meta did not find the number: status {response.status_code}, code {code}",
+            err=True,
+        )
+        return 1
+    typer.echo(f"number {answer.get('display_phone_number')}: {answer.get('verified_name')}")
     return 0
 
 

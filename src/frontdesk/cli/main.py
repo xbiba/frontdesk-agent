@@ -24,7 +24,7 @@ from frontdesk.cli.live import eval_report, live_turns, read_cases
 from frontdesk.cli.live_chat import run_live_chat
 from frontdesk.cli.publish import publish_knowledge
 from frontdesk.cli.runtime import build_runtime, without_knowledge
-from frontdesk.cli.whatsapp import send_template
+from frontdesk.cli.whatsapp import check_number, send_template
 from frontdesk.composition import Deployment, NoActiveKnowledgeError, open_deployment
 from frontdesk.conversation.evaluation import (
     render_turn_markdown,
@@ -536,3 +536,9 @@ def instagram_testers(
 def whatsapp_template(env_file: EnvFile) -> None:
     """Send the booking request template to Meta's approval, in the staff's language."""
     raise typer.Exit(asyncio.run(send_template(load_settings(env_file))))
+
+
+@whatsapp_app.command("check")
+def whatsapp_check(env_file: EnvFile) -> None:
+    """Print the bot's number and its name as Meta knows them."""
+    raise typer.Exit(asyncio.run(check_number(load_settings(env_file))))
