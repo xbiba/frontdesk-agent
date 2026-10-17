@@ -230,6 +230,7 @@ def build_worker(settings: Settings) -> Worker:
             dispatcher=dispatcher,
             now=deployment.now,
             language=settings.whatsapp_staff_language,
+            patient_off=settings.instagram_off,
         )
         whatsapp_token = channel_secret(settings, "whatsapp_token")
         runners[WHATSAPP] = Runner(

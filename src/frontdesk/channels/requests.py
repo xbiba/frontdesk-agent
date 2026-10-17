@@ -33,7 +33,7 @@ from frontdesk.channels.staff import Role, Staff
 from frontdesk.channels.templates import BOOKING_REQUEST
 from frontdesk.channels.whatsapp import TEMPLATE, WHATSAPP, Template
 from frontdesk.db.engine import business_session
-from frontdesk.db.models import BookingHold, ChannelMessage
+from frontdesk.db.models import BookingHold, ChannelConversation, ChannelMessage
 from frontdesk.observability.logs import log_alert, log_event
 from frontdesk.tenancy.pack import BusinessPack, Language
 
@@ -123,7 +123,10 @@ class Requests:
         dispatcher: Dispatcher,
         now: Callable[[], datetime],
         language: str = "it",
+        patient_off: bool = False,
     ) -> None:
+        """`patient_off` is the patients' channel switched off: no answer reaches them, and the
+        staff is asked to call."""
         self._factory = session_factory
         self._pack = pack
         self._scheduler = scheduler
@@ -132,6 +135,7 @@ class Requests:
         self._dispatcher = dispatcher
         self._now = now
         self._language = cast(Language, language)  # the settings allow it or sq
+        self._patient_off = patient_off
         self._zone = ZoneInfo(pack.timezone)
 
     async def notify(self) -> int:
@@ -323,6 +327,15 @@ class Requests:
                 .where(ChannelMessage.direction == IN)
             )
             if last is None or now - last > REPLY_WINDOW:
+                return False
+            # The patients' runner drops a reply when the clinic's staff has the thread, or when
+            # the channel is switched off: the staff calls instead (spec §6; final review, I3).
+            paused = session.scalar(
+                select(ChannelConversation.paused_until)
+                .where(ChannelConversation.business_id == self._pack.id)
+                .where(ChannelConversation.conversation_id == request.conversation_id)
+            )
+            if self._patient_off or (paused is not None and paused > now):
                 return False
             queue_reply(
                 session,

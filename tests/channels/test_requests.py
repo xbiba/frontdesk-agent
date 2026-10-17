@@ -26,7 +26,7 @@ from frontdesk.channels.requests import Requests, only_buttons, payload
 from frontdesk.channels.staff import Role, Staff
 from frontdesk.channels.whatsapp import TEMPLATE, Template
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
-from frontdesk.db.models import BookingHold, ChannelMessage
+from frontdesk.db.models import BookingHold, ChannelConversation, ChannelMessage
 from frontdesk.tenancy.pack import BusinessPack, CalendarIntegration, Integrations
 from tests.channels.fakes import Clock, RecordingDispatcher
 
@@ -336,16 +336,37 @@ async def test_a_tap_from_someone_not_on_the_list_decides_nothing(
     assert setup.row(hold_id).request_status == "pending"
 
 
-@pytest.mark.parametrize("gone", ["window", "purged"])
+@pytest.mark.parametrize("gone", ["window", "purged", "staff", "switch"])
 async def test_a_closed_window_or_a_purged_conversation_tells_the_staff_to_call(
     setup: Setup, gone: str
 ) -> None:
-    # Review Focus 4.
-    if gone == "window":
-        hold_id = setup.request(setup.patient_key())
-        setup.clock.advance(hours=25)
-    else:
+    # Review Focus 4; and, from the final review of W1 (I3, spec §6), a thread the clinic's staff
+    # has taken on Instagram, or Instagram switched off: the answer would be dropped unsent.
+    if gone == "purged":
         hold_id = setup.request("instagram-" + "0" * 40)
+    else:
+        patient = setup.patient_key()
+        hold_id = setup.request(patient)
+    if gone == "window":
+        setup.clock.advance(hours=25)
+    if gone == "staff":
+        with business_session(setup.factory, setup.pack.id) as session:
+            session.execute(
+                update(ChannelConversation)
+                .where(ChannelConversation.conversation_id == patient)
+                .values(paused_until=NOW + timedelta(hours=1))
+            )
+    if gone == "switch":
+        setup.requests = Requests(
+            setup.factory,
+            pack=setup.pack,
+            scheduler=setup.scheduler,
+            staff=(ANA, BESA, DOCTOR),
+            whatsapp=setup.whatsapp,
+            dispatcher=setup.dispatcher,
+            now=setup.clock,
+            patient_off=True,
+        )
     decision = await setup.requests.decide(ANA.user_id, payload(hold_id, accept=True))
     assert decision.reply.startswith("Confermata: ")
     assert decision.reply.endswith(CALL)
