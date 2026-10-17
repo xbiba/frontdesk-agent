@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, Final, cast
 
-from sqlalchemy import CursorResult, delete, func, or_, select, update
+from sqlalchemy import ColumnElement, CursorResult, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import Range
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -139,6 +139,14 @@ def mark_booked(
     )
 
 
+def _standing() -> ColumnElement[bool]:
+    """An appointment, or a request not yet refused: a declined or gone request is neither."""
+    return or_(
+        BookingHold.request_status.is_(None),
+        BookingHold.request_status.not_in([RequestStatus.DECLINED.value, RequestStatus.GONE.value]),
+    )
+
+
 def booked_starts(session: Session, conversation_id: str, now: datetime) -> list[datetime]:
     """When the conversation's appointments still to come begin."""
     return [
@@ -148,6 +156,7 @@ def booked_starts(session: Session, conversation_id: str, now: datetime) -> list
                 BookingHold.conversation_id == conversation_id,
                 BookingHold.status == "booked",
                 BookingHold.expires_at > now,
+                _standing(),
             )
         )
         if during.lower is not None
@@ -163,6 +172,7 @@ def booked_events(session: Session, conversation_id: str, now: datetime) -> list
                 BookingHold.conversation_id == conversation_id,
                 BookingHold.status == "booked",
                 BookingHold.expires_at > now,
+                _standing(),
             )
         )
         if event_id is not None

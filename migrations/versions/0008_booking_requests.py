@@ -6,7 +6,9 @@ Revises: 0007
 
 The request's status, the patient's language for the answer, who decided and when, and when the
 staff was told. A pending request keeps the patient's name for the staff's message until it is
-decided; the phone is never kept once booked. Row-level security is the table's own (0005).
+decided; the phone is never kept once booked. A declined or gone request no longer takes its time:
+cal.com offers it again, and the chat must be able to hold it (final review of W1, I4). Row-level
+security is the table's own (0005).
 """
 
 import sqlalchemy as sa
@@ -18,6 +20,10 @@ branch_labels = None
 depends_on = None
 
 _OLD_CHECK = "status = 'held' OR (name IS NULL AND phone IS NULL)"
+_OVERLAP = (
+    "ALTER TABLE booking_holds ADD CONSTRAINT ex_booking_holds_overlap "
+    "EXCLUDE USING gist (business_id WITH =, doctor_id WITH =, during WITH &&)"
+)
 # NULL IN (...) is NULL, which a check lets pass: the status is tested for NULL first.
 _NEW_CHECK = (
     "status = 'held' OR (phone IS NULL AND (name IS NULL OR (request_status IS NOT NULL AND "
@@ -45,11 +51,22 @@ def upgrade() -> None:
         "booking_holds",
         ["business_id", "request_status", "notified_at"],
     )
+    op.execute("ALTER TABLE booking_holds DROP CONSTRAINT ex_booking_holds_overlap")
+    op.execute(
+        f"{_OVERLAP} WHERE (request_status IS NULL OR request_status NOT IN ('declined', 'gone'))"
+    )
 
 
 def downgrade() -> None:
     op.drop_index("ix_booking_holds_requests", "booking_holds")
+    # The table forces row-level security on its owner too: without lifting it, an owner that is no
+    # superuser would change no row here.
+    op.execute("ALTER TABLE booking_holds NO FORCE ROW LEVEL SECURITY")
+    op.execute("DELETE FROM booking_holds WHERE request_status IN ('declined', 'gone')")
     op.execute("UPDATE booking_holds SET name = NULL WHERE status = 'booked'")
+    op.execute("ALTER TABLE booking_holds FORCE ROW LEVEL SECURITY")
+    op.execute("ALTER TABLE booking_holds DROP CONSTRAINT ex_booking_holds_overlap")
+    op.execute(_OVERLAP)
     op.drop_constraint("ck_booking_holds_no_personal_data_once_booked", "booking_holds")
     op.create_check_constraint(
         "ck_booking_holds_no_personal_data_once_booked", "booking_holds", _OLD_CHECK
