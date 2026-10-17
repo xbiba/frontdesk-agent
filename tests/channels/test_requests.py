@@ -13,7 +13,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.booking.calendar import CalendarUnavailableError, FixtureCalendar
@@ -376,3 +376,70 @@ def test_the_staff_s_texts_get_one_fixed_reply_in_their_language() -> None:
     assert (
         only_buttons("sq") == "Për momentin u përgjigjem vetëm butonave të kërkesave për rezervim."
     )
+
+
+# --- Final review of W1, I1: a claim that never finishes ------------------------------------------
+
+
+async def test_a_stale_claim_can_be_decided_again(setup: Setup) -> None:
+    # The worker that claimed it died before cal.com answered: the request stayed DECIDING.
+    hold_id = setup.request(setup.patient_key())
+    with business_session(setup.factory, setup.pack.id) as session:
+        session.execute(
+            update(BookingHold).values(
+                request_status="deciding", decided_at=NOW - timedelta(minutes=10)
+            )
+        )
+    decision = await setup.requests.decide(ANA.user_id, payload(hold_id, accept=True))
+    assert decision.reply == CONFIRMED
+    assert setup.scheduler.decided == [(hold_id.hex, True)]
+
+
+async def test_a_fresh_claim_is_left_to_the_colleague(setup: Setup) -> None:
+    hold_id = setup.request(setup.patient_key())
+    with business_session(setup.factory, setup.pack.id) as session:
+        session.execute(
+            update(BookingHold).values(
+                request_status="deciding", decided_at=NOW - timedelta(minutes=1)
+            )
+        )
+    decision = await setup.requests.decide(ANA.user_id, payload(hold_id, accept=True))
+    assert decision.reply == "Un collega la sta decidendo proprio ora."
+    assert setup.scheduler.decided == []
+
+
+class BrokenScheduler(SlowScheduler):
+    def decide(self, *args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("a pack without the doctor's calendar")
+
+
+async def test_an_unexpected_error_puts_the_request_back(
+    factory: sessionmaker[Session], pack: BusinessPack, scheduler: CalendarScheduler
+) -> None:
+    setup = Setup(factory, pack, BrokenScheduler(scheduler))
+    hold_id = setup.request(setup.patient_key())
+    with pytest.raises(RuntimeError):
+        await setup.requests.decide(ANA.user_id, payload(hold_id, accept=True))
+    row = setup.row(hold_id)
+    assert (row.request_status, row.name, row.decided_at) == ("pending", "Mario Rossi", None)
+
+
+async def test_a_dispatch_failure_after_the_decision_still_answers_the_staff(
+    factory: sessionmaker[Session], pack: BusinessPack, scheduler: CalendarScheduler
+) -> None:
+    setup = Setup(factory, pack, scheduler)
+    patient = setup.patient_key()
+    hold_id = setup.request(patient)
+    setup.requests = Requests(
+        factory,
+        pack=pack,
+        scheduler=scheduler,
+        staff=(ANA, BESA, DOCTOR),
+        whatsapp=setup.whatsapp,
+        dispatcher=RecordingDispatcher(fail=True),
+        now=setup.clock,
+    )
+    decision = await setup.requests.decide(ANA.user_id, payload(hold_id, accept=True))
+    assert decision.reply == CONFIRMED
+    # The patient's answer waits queued: the sweep gives it its task.
+    assert [kind for _, kind, _ in setup.out("instagram")] == ["fixed"]

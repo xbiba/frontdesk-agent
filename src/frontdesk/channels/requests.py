@@ -16,10 +16,10 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Final, cast
+from typing import Any, Final, cast
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select, update
+from sqlalchemy import CursorResult, and_, func, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.booking.calendar import CalendarUnavailableError, RequestGoneError
@@ -27,7 +27,7 @@ from frontdesk.booking.flow import phrase
 from frontdesk.booking.holds import RequestStatus
 from frontdesk.booking.reply import slot_time
 from frontdesk.booking.scheduler import Scheduler
-from frontdesk.channels.dispatch import Dispatcher
+from frontdesk.channels.dispatch import Dispatcher, DispatchError
 from frontdesk.channels.inbox import IN, REPLY_WINDOW, Inbox, queue_reply
 from frontdesk.channels.staff import Role, Staff
 from frontdesk.channels.templates import BOOKING_REQUEST
@@ -41,6 +41,8 @@ logger = logging.getLogger(__name__)
 
 PAYLOAD: Final = re.compile(r"^request:([0-9a-f]{32}):(confirm|decline)$")
 _NOW: Final = timedelta(0)
+# A claim older than this lost its worker: cal.com answers in seconds (final review of W1, I1).
+STALE_CLAIM: Final = timedelta(minutes=5)
 # The staff's replies: Italian by default, Albanian with FRONTDESK_WHATSAPP_STAFF_LANGUAGE=sq.
 _COPY: Final[dict[str, dict[str, str]]] = {
     "it": {
@@ -190,11 +192,14 @@ class Requests:
                 accept=accept,
             )
         except CalendarUnavailableError:
-            self._set(hold_id, RequestStatus.PENDING, keep_name=True)
+            self._set(hold_id, RequestStatus.PENDING)
             return Decision(self._say("unavailable"))
         except RequestGoneError:
             self._set(hold_id, RequestStatus.GONE)
             return Decision(self._say("gone"))
+        except Exception:
+            self._set(hold_id, RequestStatus.PENDING)  # the next tap can decide it
+            raise
         told = self._decided(request, member, accept=accept)
         reply = self._say(
             "confirmed" if accept else "declined",
@@ -206,7 +211,11 @@ class Requests:
         log_event(logger, "requests.decided", accept=accept, patient_told=told)
         if not told:
             return Decision(f"{reply} {self._say('call')}")
-        await self._dispatcher.dispatch(request.conversation_id, delay=_NOW)
+        try:
+            await self._dispatcher.dispatch(request.conversation_id, delay=_NOW)
+        except DispatchError:
+            # The decision stands and the patient's answer is queued: the sweep gives it its task.
+            log_event(logger, "requests.dispatch_failed")
         return Decision(reply)
 
     def _template(self, row: BookingHold) -> Template:
@@ -221,13 +230,23 @@ class Requests:
         return Template(BOOKING_REQUEST, self._language, params, payloads)
 
     def _claim(self, hold_id: uuid.UUID) -> _Request | None:
-        """PENDING to DECIDING in one UPDATE: of two taps at once, one gets the request."""
+        """PENDING to DECIDING in one UPDATE: of two taps at once, one gets the request. A claim
+        whose worker died is taken again after STALE_CLAIM. Until the decision, decided_at holds
+        the claim's time."""
+        now = self._now()
+        claimable = or_(
+            BookingHold.request_status == RequestStatus.PENDING.value,
+            and_(
+                BookingHold.request_status == RequestStatus.DECIDING.value,
+                BookingHold.decided_at < now - STALE_CLAIM,
+            ),
+        )
         with business_session(self._factory, self._pack.id) as session:
             row = session.execute(
                 update(BookingHold)
                 .where(BookingHold.id == hold_id)
-                .where(BookingHold.request_status == RequestStatus.PENDING.value)
-                .values(request_status=RequestStatus.DECIDING.value)
+                .where(claimable)
+                .values(request_status=RequestStatus.DECIDING.value, decided_at=now)
                 .returning(BookingHold)
             ).scalar_one_or_none()
             if row is None or row.during.lower is None or row.during.upper is None:
@@ -260,11 +279,11 @@ class Requests:
                 return self._say(key, staff=row.decided_by or "-", time=f"{at:%H:%M}")
             return self._say("gone")
 
-    def _set(self, hold_id: uuid.UUID, status: RequestStatus, *, keep_name: bool = False) -> None:
-        """Back to PENDING when cal.com did not answer; GONE, without the name, when the request
-        is no longer pending there."""
-        values: dict[str, object] = {"request_status": status.value}
-        if not keep_name:
+    def _set(self, hold_id: uuid.UUID, status: RequestStatus) -> None:
+        """Back to PENDING, unclaimed, when cal.com did not answer or the decision failed; GONE,
+        without the name, when the request is no longer pending there."""
+        values: dict[str, object] = {"request_status": status.value, "decided_at": None}
+        if status is not RequestStatus.PENDING:
             values.update(name=None, decided_at=self._now())
         with business_session(self._factory, self._pack.id) as session:
             session.execute(
@@ -280,9 +299,10 @@ class Requests:
         now = self._now()
         status = RequestStatus.CONFIRMED if accept else RequestStatus.DECLINED
         with business_session(self._factory, self._pack.id) as session:
-            session.execute(
+            written = session.execute(
                 update(BookingHold)
                 .where(BookingHold.id == request.hold_id)
+                .where(BookingHold.request_status == RequestStatus.DECIDING.value)
                 .values(
                     request_status=status.value,
                     decided_by=member.name,
@@ -290,6 +310,8 @@ class Requests:
                     name=None,
                 )
             )
+            if cast(CursorResult[Any], written).rowcount == 0:
+                return False  # another tap took the request after this claim went stale
             last = session.scalar(
                 select(func.max(ChannelMessage.created_at))
                 .where(ChannelMessage.business_id == self._pack.id)
