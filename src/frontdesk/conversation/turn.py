@@ -40,6 +40,7 @@ from frontdesk.agent.responder import (
 )
 from frontdesk.agent.vocab import ADMINISTRATIVE_INTENTS, Category, ClarifyField, Intent
 from frontdesk.booking.calendar import CalendarUnavailableError
+from frontdesk.booking.holds import HOLD_LIFETIME
 from frontdesk.booking.reply import booking_target, compose_slots, find_slots
 from frontdesk.booking.scheduler import Scheduler
 from frontdesk.conversation.compose import (
@@ -926,9 +927,15 @@ def _with_disclosure(pack: BusinessPack, language: Language, result: TurnResult)
 def _expected_fields(state: ConversationState, runtime: TurnRuntime) -> frozenset[PersonalField]:
     """The personal data a message may hold: the name and the phone, from the moment a booking is
     under way, with the free times shown (Albi, 2026-10-17: a phone sent before the time was held,
-    after an ambiguous choice, stopped the booking), to the summary's yes. Nothing else, and never
-    outside a booking (security review of the agent, 2026-10-12)."""
-    if runtime.reception is None or state.booking is None:
+    after an ambiguous choice, stopped the booking), to the summary's yes. Times shown open the
+    filter for a hold's lifetime, not for as long as the state lasts (security review of the fix).
+    Nothing else, and never outside a booking (security review of the agent, 2026-10-12)."""
+    step = state.booking
+    if runtime.reception is None or step is None:
+        return frozenset()
+    if step.stage is BookingStage.CHOOSE and (
+        step.shown_at is None or runtime.now() - step.shown_at > HOLD_LIFETIME
+    ):
         return frozenset()
     return frozenset({PersonalField.NAME, PersonalField.PHONE})
 
