@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
-from frontdesk.channels.wiring import build_ingress, build_worker
+from frontdesk.channels.wiring import build_ingress, build_ingresses, build_worker
 from frontdesk.model_gateway.routes import UnapprovedRouteError
 from frontdesk.settings import InstagramMode, Settings
 from frontdesk.tenancy.loader import load_pack
@@ -96,4 +96,79 @@ def test_the_worker_side_is_built_for_testers(
 ) -> None:
     activate_pack(load_pack(pack_dir))
     worker = build_worker(_settings(pack_dir, database_url=app_url))
-    assert worker.runner is not None
+    assert set(worker.runners) == {"instagram"}
+    assert worker.requests is None
+
+
+# --- WhatsApp W1 ----------------------------------------------------------------------------------
+STAFF = '[{"phone": "+355 69 123 4567", "name": "Ana", "role": "reception"}]'
+FIXTURE = "cal-arben: {blocks: [], busy: []}\n"
+
+
+@pytest.fixture
+def whatsapp_dir(tmp_path: Path, businesses_dir: Path) -> Path:
+    """The demo clinic with Instagram, WhatsApp and a calendar whose bookings the clinic confirms."""
+    target = tmp_path / "demo-clinic-whatsapp"
+    shutil.copytree(businesses_dir / "demo-clinic", target)
+    with (target / "business.yaml").open("a", encoding="utf-8") as file:
+        file.write(
+            "\nchannels:\n  instagram: {}\n  whatsapp: {}\n"
+            "integrations:\n  calendar:\n    credentials_ref: fixture\n"
+            "    calendars: {dr-arben-demo: cal-arben}\n"
+            "    requires_confirmation: true\n"
+        )
+    (tmp_path / "calendar.yaml").write_text(FIXTURE, encoding="utf-8")
+    return target
+
+
+def _whatsapp(pack: Path, **fields: Any) -> Settings:
+    values: dict[str, Any] = {
+        "whatsapp_phone_number_id": "106540352242922",
+        "whatsapp_app_secret": SecretStr("wa-app-secret"),
+        "whatsapp_verify_token": SecretStr("wa-verify"),
+        "whatsapp_staff": SecretStr(STAFF),
+        "whatsapp_token": SecretStr("wa-t0ken"),
+        "calendar_backend": "fixture",
+        "calendar_fixture": pack.parent / "calendar.yaml",
+        **fields,
+    }
+    return _settings(pack, **values)
+
+
+def test_the_whatsapp_side_is_built_only_for_a_pack_that_lists_it(
+    pack_dir: Path, whatsapp_dir: Path
+) -> None:
+    assert [item.webhook.name for item in build_ingresses(_settings(pack_dir))] == ["instagram"]
+    instagram, whatsapp = build_ingresses(_whatsapp(whatsapp_dir))
+    assert (instagram.webhook.name, whatsapp.webhook.name) == ("instagram", "whatsapp")
+    assert whatsapp.verify_token == "wa-verify"
+    assert whatsapp.off is False
+
+
+@pytest.mark.db
+def test_the_worker_serves_whatsapp_when_the_pack_lists_it(
+    whatsapp_dir: Path, app_url: str, activate_pack: Any
+) -> None:
+    activate_pack(load_pack(whatsapp_dir))
+    worker = build_worker(_whatsapp(whatsapp_dir, database_url=app_url))
+    assert set(worker.runners) == {"instagram", "whatsapp"}
+    assert set(worker.inbox) == {"instagram", "whatsapp"}
+    assert worker.requests is not None
+
+
+@pytest.mark.parametrize(
+    ("fields", "named"),
+    [
+        (
+            {"whatsapp_staff": SecretStr('[{"phone": "123", "name": "Ana", "role": "reception"}]')},
+            "entry 1",
+        ),
+        ({"whatsapp_staff": None}, "frontdesk-whatsapp-staff"),
+        ({"whatsapp_phone_number_id": None}, "FRONTDESK_WHATSAPP_PHONE_NUMBER_ID"),
+    ],
+)
+def test_a_bad_staff_secret_stops_the_build(
+    whatsapp_dir: Path, fields: dict[str, Any], named: str
+) -> None:
+    with pytest.raises(ValueError, match=named):
+        build_ingresses(_whatsapp(whatsapp_dir, **fields))

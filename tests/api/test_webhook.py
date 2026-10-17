@@ -16,6 +16,7 @@ from frontdesk.api.app import create_webhook_app
 from frontdesk.api.webhook import MAX_BODY_BYTES, read_limited
 from frontdesk.channels.inbox import BURST, Inbox, conversation_key
 from frontdesk.channels.instagram import InstagramWebhook
+from frontdesk.channels.whatsapp import WhatsAppWebhook
 from frontdesk.channels.wiring import Ingress
 from frontdesk.db.engine import make_engine, make_session_factory
 from frontdesk.settings import Settings
@@ -47,7 +48,7 @@ def _app(
     ingress = Ingress(
         webhook=InstagramWebhook(SECRET), inbox=inbox, dispatcher=sink, verify_token=VERIFY, off=off
     )
-    app = create_webhook_app(Settings(), ingress=ingress, engine=create_engine(app_url))
+    app = create_webhook_app(Settings(), ingresses=(ingress,), engine=create_engine(app_url))
     return TestClient(app), sink, inbox
 
 
@@ -174,3 +175,80 @@ async def test_a_body_within_the_limit_is_read_whole() -> None:
 
     request = Request({"type": "http", "method": "POST", "headers": []}, receive)
     assert await read_limited(request) == b"unodue"
+
+
+# --- WhatsApp W1: its own route, its own verify token, only the staff's numbers -------------------
+WA_SECRET = "wa-app-secret"
+WA_VERIFY = "wa-verify"
+PNID = "106540352242922"
+STAFF = "355691234567"
+
+
+def _apps(app_url: str) -> tuple[TestClient, RecordingDispatcher, Inbox]:
+    """The webhook service with both channels, as a pack that lists WhatsApp has it."""
+    factory = make_session_factory(make_engine(app_url))
+    sink = RecordingDispatcher()
+    instagram = Inbox(
+        factory,
+        business_id="demo-clinic",
+        channel="instagram",
+        account_id=ACCOUNT,
+        testers_only=True,
+        pairing_code=CODE,
+        now=lambda: NOW,
+    )
+    whatsapp = Inbox(
+        factory,
+        business_id="demo-clinic",
+        channel="whatsapp",
+        account_id=PNID,
+        testers_only=False,
+        pairing_code=None,
+        now=lambda: NOW,
+        allowed_users=frozenset({STAFF}),
+    )
+    ingresses = (
+        Ingress(InstagramWebhook(SECRET), instagram, sink, VERIFY, off=False),
+        Ingress(WhatsAppWebhook(WA_SECRET), whatsapp, sink, WA_VERIFY, off=False),
+    )
+    app = create_webhook_app(Settings(), ingresses=ingresses, engine=create_engine(app_url))
+    return TestClient(app), sink, whatsapp
+
+
+def _tap(user: str) -> bytes:
+    message = {
+        "from": user,
+        "id": "wamid.1",
+        "timestamp": "1760430000",
+        "type": "button",
+        "button": {"payload": "request:" + "ab" * 16 + ":confirm", "text": "Conferma"},
+    }
+    value = {
+        "messaging_product": "whatsapp",
+        "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+        "messages": [message],
+    }
+    entry = {"id": "102290129340398", "changes": [{"value": value, "field": "messages"}]}
+    return json.dumps({"object": "whatsapp_business_account", "entry": [entry]}).encode()
+
+
+def test_a_signed_whatsapp_tap_is_stored_and_dispatched(app_url: str) -> None:
+    client, sink, _ = _apps(app_url)
+    body = _tap(STAFF)
+    signature = "sha256=" + hmac.new(WA_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    headers = {"content-type": "application/json", "x-hub-signature-256": signature}
+    assert client.post("/webhooks/whatsapp", content=body, headers=headers).status_code == 200
+    assert sink.calls == [(conversation_key("demo-clinic", "whatsapp", STAFF), BURST)]
+    stranger = _tap("393339999999")
+    signed = "sha256=" + hmac.new(WA_SECRET.encode(), stranger, hashlib.sha256).hexdigest()
+    headers["x-hub-signature-256"] = signed
+    assert client.post("/webhooks/whatsapp", content=stranger, headers=headers).status_code == 200
+    assert len(sink.calls) == 1  # a number off the staff list: nothing stored, nothing to do
+
+
+def test_the_whatsapp_subscription_check_answers_with_its_own_verify_token(app_url: str) -> None:
+    client, _, _ = _apps(app_url)
+    params = {"hub.mode": "subscribe", "hub.verify_token": WA_VERIFY, "hub.challenge": "42"}
+    assert client.get("/webhooks/whatsapp", params=params).text == "42"
+    params["hub.verify_token"] = VERIFY  # Instagram's
+    assert client.get("/webhooks/whatsapp", params=params).status_code == 403

@@ -14,6 +14,7 @@ class InboundKind(StrEnum):
     ECHO = "echo"  # a message the business account sent: the bot's or the staff's (D6)
     DELETED = "deleted"  # the person unsent a message
     IGNORED = "ignored"  # reactions, reads, story mentions, shared posts
+    BUTTON = "button"  # a tap on a business button: the text is its payload, never a model's
 
 
 @dataclass(frozen=True)
@@ -58,4 +59,6 @@ class Sender(Protocol):
     name: str
     max_message_bytes: int
 
-    async def send(self, user_id: str, text: str) -> SendOutcome: ...
+    async def send(self, user_id: str, text: str, kind: str = "reply") -> SendOutcome:
+        """`kind` is the outbox part's: a channel with templates sends a "template" part as one."""
+        ...

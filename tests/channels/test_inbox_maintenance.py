@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.channels.inbox import Inbox, InStatus, OutStatus, conversation_key, queue_reply
 from frontdesk.channels.messages import Inbound, InboundKind
+from frontdesk.channels.whatsapp import TEMPLATE
 from frontdesk.db.engine import business_session, make_engine, make_session_factory
 from frontdesk.db.models import ChannelConversation, ChannelMessage
 from tests.channels.fakes import NOW, Clock
@@ -181,3 +182,29 @@ def test_after_an_uncertain_part_the_rest_of_the_reply_is_never_sent(
     statuses = {m.text: (m.status, m.reason) for m in _messages(factory, "out")}
     assert statuses["parte 1"] == (OutStatus.UNCERTAIN, "no_answer")
     assert statuses["parte 2"] == (OutStatus.DROPPED, "previous_uncertain")
+
+
+def test_an_uncertain_part_leaves_the_templates_queued(
+    inbox: Inbox, factory: sessionmaker[Session], clock: Clock
+) -> None:
+    # Final review of W1, I2: a template is a request of its own, not the rest of a reply.
+    with business_session(factory, BUSINESS) as session:
+        queue_reply(
+            session,
+            business_id=BUSINESS,
+            channel=CHANNEL,
+            conversation_id=KEY,
+            parts=[("reply", "parte 1"), ("reply", "parte 2"), (TEMPLATE, "richiesta")],
+            now=NOW,
+        )
+    part_one = (
+        update(ChannelMessage)
+        .where(ChannelMessage.direction == "out")
+        .where(ChannelMessage.text == "parte 1")
+    )
+    _run(factory, part_one.values(status=OutStatus.SENDING, updated_at=NOW))
+    clock.advance(minutes=3)
+    assert inbox.sweep().work == (KEY,)
+    statuses = {m.text: (m.status, m.reason) for m in _messages(factory, "out")}
+    assert statuses["parte 2"] == (OutStatus.DROPPED, "previous_uncertain")
+    assert statuses["richiesta"] == (OutStatus.QUEUED, None)

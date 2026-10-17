@@ -28,12 +28,15 @@ from frontdesk.channels.inbox import (
     FORGET_STATE,
     IN,
     OUT,
+    REPLY_WINDOW,
     InStatus,
     OutStatus,
     queue_reply,
 )
 from frontdesk.channels.messages import InboundKind, Sender, SendStatus
+from frontdesk.channels.requests import Decision
 from frontdesk.channels.split import split_message
+from frontdesk.channels.whatsapp import TEMPLATE
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import RATE_WINDOW, TurnResult
 from frontdesk.db.engine import business_session
@@ -48,7 +51,6 @@ type Turn = Callable[[str, ConversationState], Awaitable[tuple[TurnResult, Conve
 LEASE: Final = timedelta(seconds=120)  # longer than a turn (45 s) and its sends
 MAX_ATTEMPTS: Final = 3  # spec §4 step 8
 MAX_REPLIES_A_DAY: Final = 60  # D10
-REPLY_WINDOW: Final = timedelta(hours=24)  # Meta's window after the person's last message
 RATE_LIMIT_RULE: Final = "rate_limit"  # the engine's rule past 10 messages a minute
 _LIVE: Final = (OutStatus.QUEUED, OutStatus.SENDING, OutStatus.SENT, OutStatus.UNCERTAIN)
 
@@ -106,7 +108,12 @@ class Runner:
         turn: Turn,
         now: Callable[[], datetime],
         off: bool = False,
+        buttons: Callable[[str, str], Awaitable[Decision]] | None = None,
+        fixed_reply: str | None = None,
     ) -> None:
+        """`buttons` decides the taps on the buttons the business sent (WhatsApp W1), by code and
+        never by the turn. With `fixed_reply`, texts and attachments get that one reply and the
+        turn is never called (the staff's thread in W1)."""
         self._factory = session_factory
         self._pack = pack
         self._channel = channel
@@ -114,6 +121,8 @@ class Runner:
         self._turn = turn
         self._now = now
         self._off = off
+        self._buttons = buttons
+        self._fixed_reply = fixed_reply
 
     async def process(self, conversation_id: str) -> Outcome:
         """One run for a conversation: its waiting messages become a turn, then every reply
@@ -224,16 +233,23 @@ class Runner:
         state = self._state(key, conversation, now)
         texts = [m.text for m in pending if m.kind == InboundKind.TEXT and m.text]
         replies: list[tuple[str, str]] = []
+        for tap in [m.text for m in pending if m.kind == InboundKind.BUTTON and m.text]:
+            if self._buttons is not None:
+                replies.append(("fixed", (await self._buttons(conversation.user_id, tap)).reply))
         slowed = conversation.slowed_at
         following = state
-        if texts:
+        attachments = any(m.kind == InboundKind.ATTACHMENT for m in pending)
+        if self._fixed_reply is not None:
+            if texts or attachments:
+                replies.append(("fixed", self._fixed_reply))
+        elif texts:
             result, following = await self._turn("\n".join(texts), state)
             if result.trace.rule != RATE_LIMIT_RULE:
                 replies.append(("reply", result.text))
             elif slowed is None or now - slowed >= RATE_WINDOW:
                 replies.append(("reply", result.text))  # D10: one slow-down a minute, then quiet
                 slowed = now
-        if any(m.kind == InboundKind.ATTACHMENT for m in pending):
+        if attachments and self._fixed_reply is None:
             replies.append(("fixed", self._fixed(following, FixedTextKey.ATTACHMENT)))
         await asyncio.to_thread(
             self._finish, key, conversation.token, pending, following, replies, slowed, now
@@ -371,14 +387,22 @@ class Runner:
         )
 
     async def _deliver(self, key: str, user_id: str) -> None:
-        for message_id, text in await asyncio.to_thread(self._queued, key):
-            blocked = await asyncio.to_thread(self._blocked, key, text)
+        """Every queued part, in order. A part that cannot go, or fails, takes the rest of the
+        replies with it (D9); a template is a request of its own and never goes with them: it
+        waits for the switch, or goes after them (final review of W1, I2)."""
+        stopped = False
+        for message_id, kind, text in await asyncio.to_thread(self._queued, key):
+            if stopped and kind != TEMPLATE:
+                continue  # dropped with the part before it
+            blocked = await asyncio.to_thread(self._blocked, key, text, kind)
             if blocked is not None or text is None:
-                await asyncio.to_thread(self._drop_queued, key, blocked or "expired")
-                return
+                if kind != TEMPLATE:
+                    await asyncio.to_thread(self._drop_queued, key, blocked or "expired")
+                    stopped = True
+                continue
             if not await asyncio.to_thread(self._take, message_id):
                 continue  # another worker took this reply: it is sent once (D9)
-            outcome = await self._sender.send(user_id, text)
+            outcome = await self._sender.send(user_id, text, kind)
             await asyncio.to_thread(
                 self._set,
                 message_id,
@@ -394,8 +418,9 @@ class Runner:
                     conversation_id=key,
                     reason=outcome.reason,
                 )
-                await asyncio.to_thread(self._drop_queued, key, "previous_failed")
-                return
+                if kind != TEMPLATE:
+                    await asyncio.to_thread(self._drop_queued, key, "previous_failed")
+                    stopped = True
 
     def _take(self, message_id: uuid.UUID) -> bool:
         """The reply goes to this worker alone: from queued to sending, once."""
@@ -409,20 +434,21 @@ class Runner:
             ).first()
         return taken is not None
 
-    def _queued(self, key: str) -> list[tuple[uuid.UUID, str | None]]:
+    def _queued(self, key: str) -> list[tuple[uuid.UUID, str, str | None]]:
         with self._session() as session:
             rows = session.execute(
-                select(ChannelMessage.id, ChannelMessage.text)
+                select(ChannelMessage.id, ChannelMessage.kind, ChannelMessage.text)
                 .where(ChannelMessage.business_id == self._pack.id)
                 .where(ChannelMessage.conversation_id == key)
                 .where(ChannelMessage.direction == OUT)
                 .where(ChannelMessage.status == OutStatus.QUEUED)
                 .order_by(ChannelMessage.created_at)
             ).all()
-        return [(row[0], row[1]) for row in rows]
+        return [(row[0], row[1], row[2]) for row in rows]
 
-    def _blocked(self, key: str, text: str | None) -> str | None:
-        """Why a reply must not go now (D9, D13), or None."""
+    def _blocked(self, key: str, text: str | None, kind: str) -> str | None:
+        """Why a reply must not go now (D9, D13), or None. A template may go outside Meta's
+        24-hour window: that is what templates are for (WhatsApp W1)."""
         if self._off:
             return "switch"
         if text is None:
@@ -442,7 +468,7 @@ class Runner:
             )
         if paused is not None and paused > now:
             return "staff"
-        if last is None or now - last > REPLY_WINDOW:
+        if kind != TEMPLATE and (last is None or now - last > REPLY_WINDOW):
             return "window"
         return None
 
@@ -454,6 +480,7 @@ class Runner:
                 .where(ChannelMessage.conversation_id == key)
                 .where(ChannelMessage.direction == OUT)
                 .where(ChannelMessage.status == OutStatus.QUEUED)
+                .where(ChannelMessage.kind != TEMPLATE)
                 .values(status=OutStatus.DROPPED, reason=reason, updated_at=self._now())
             )
         if reason == "window":

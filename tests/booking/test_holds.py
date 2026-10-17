@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from frontdesk.booking.holds import (
     HOLD_LIFETIME,
     attach,
+    booked_events,
+    booked_starts,
     forget,
     held,
     hold,
@@ -121,6 +123,66 @@ def test_booking_keeps_the_time_and_drops_the_name_and_the_phone(
     assert (row.status, row.name, row.phone, row.event_id) == ("booked", None, None, "event-1")
     assert row.expires_at == at(10)  # kept until the slot has passed
     assert _hold(factory, conversation="c2") is None  # the booked time stays taken
+
+
+def test_a_pending_booking_keeps_the_name_for_the_staff_and_never_the_phone(
+    factory: sessionmaker[Session],
+) -> None:
+    # WhatsApp W1: the reception's request names the patient, never their phone (Albi, 2026-10-16).
+    hold_id = _hold(factory)
+    assert hold_id is not None
+    with business_session(factory, CLINIC) as session:
+        attach(session, hold_id, name="Mario Rossi", phone="+355691234567")
+        mark_booked(session, hold_id, "event-1", pending=True, language="it")
+    (row,) = _rows(factory)
+    assert (row.status, row.request_status, row.name, row.phone, row.language) == (
+        "booked",
+        "pending",
+        "Mario Rossi",
+        None,
+        "it",
+    )
+    refused = pytest.raises(IntegrityError, match="ck_booking_holds_no_personal_data_once_booked")
+    with refused, business_session(factory, CLINIC) as session:
+        session.execute(update(BookingHold).values(phone="+355691234567"))
+
+
+def test_an_accepted_booking_keeps_neither_name_nor_phone(factory: sessionmaker[Session]) -> None:
+    hold_id = _hold(factory)
+    assert hold_id is not None
+    with business_session(factory, CLINIC) as session:
+        attach(session, hold_id, name="Mario Rossi", phone="+355691234567")
+        mark_booked(session, hold_id, "event-1", language="it")
+    (row,) = _rows(factory)
+    assert (row.name, row.phone, row.request_status) == (None, None, None)
+
+
+def _request(factory: sessionmaker[Session], status: str) -> None:
+    """A request of conversation c1 at nine, decided as `status` (or still pending)."""
+    hold_id = _hold(factory)
+    assert hold_id is not None
+    with business_session(factory, CLINIC) as session:
+        attach(session, hold_id, name="Mario Rossi", phone="+355691234567")
+        mark_booked(session, hold_id, "event-1", pending=True, language="it")
+        if status != "pending":
+            session.execute(
+                update(BookingHold).values(request_status=status, name=None, decided_at=NOW)
+            )
+
+
+@pytest.mark.parametrize(
+    ("status", "free"),
+    [("declined", True), ("gone", True), ("pending", False), ("confirmed", False)],
+)
+def test_a_declined_or_gone_request_frees_its_time(
+    factory: sessionmaker[Session], status: str, free: bool
+) -> None:
+    # Final review of W1, I4: cal.com offers a declined time again; the chat must be able to take it.
+    _request(factory, status)
+    assert (_hold(factory, conversation="c2") is not None) is free
+    with business_session(factory, CLINIC) as session:
+        mine = (booked_starts(session, "c1", NOW), booked_events(session, "c1", NOW))
+    assert mine == (([], []) if free else ([NINE], ["event-1"]))
 
 
 def test_a_booked_hold_cannot_take_personal_data_back(factory: sessionmaker[Session]) -> None:

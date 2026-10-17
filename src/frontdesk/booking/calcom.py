@@ -12,13 +12,14 @@ is said. Errors carry a status, never a body; the API key never appears in one.
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Final
 from zoneinfo import ZoneInfo
 
 import httpx2
 
-from frontdesk.booking.calendar import CalendarUnavailableError
+from frontdesk.booking.calendar import CalendarUnavailableError, RequestGoneError
 from frontdesk.booking.scheduler import Appointment
 from frontdesk.booking.slots import Interval, Slot
 from frontdesk.tenancy.pack import BusinessPack, CalendarIntegration, Language
@@ -148,33 +149,62 @@ class CalcomScheduler:
                 break
         return tuple(sorted(found, key=lambda item: item.start))
 
+    def decide(
+        self,
+        pack: BusinessPack,
+        doctor_id: str,
+        start: datetime,
+        end: datetime,
+        reference: str,
+        *,
+        accept: bool,
+    ) -> None:
+        """The clinic's answer to a booking that waits for its confirmation (W1): found by our
+        reference, then confirmed or declined, only while it is still pending."""
+        event_type = int(_calendar(pack).calendars[doctor_id])
+        booking = self._find(event_type, start, end, reference)
+        uid = booking.get("uid") if booking is not None else None
+        if booking is None or booking.get("status") != "pending" or not isinstance(uid, str):
+            raise RequestGoneError("not pending")
+        action = "confirm" if accept else "decline"
+        self._call("POST", f"/v2/bookings/{uid}/{action}", BOOKINGS_VERSION)
+
     def _confirm(self, event_type: int, start: datetime, end: datetime, reference: str) -> str:
         """After a lost answer or a server error: the booking exists if cal.com lists it with our
         reference."""
         try:
-            data = self._call(
-                "GET",
-                "/v2/bookings",
-                LIST_VERSION,
-                params={
-                    "eventTypeId": event_type,
-                    "afterStart": _utc(start - timedelta(minutes=1)),
-                    "beforeEnd": _utc(end + timedelta(minutes=1)),
-                },
-            )
+            booking = self._find(event_type, start, end, reference)
         except CalendarUnavailableError:
             raise CalendarUnavailableError("the appointment may not be booked") from None
-        bookings = data.get("data")
-        found = [
-            str(item["status"])
-            for item in (bookings if isinstance(bookings, list) else [])
-            if isinstance(item, dict)
-            and (item.get("metadata") or {}).get("frontdesk") == reference
-            and item.get("status") in _BOOKED
-        ]
-        if not found:
+        if booking is None or booking.get("status") not in _BOOKED:
             raise CalendarUnavailableError("the appointment may not be booked")
-        return found[0]
+        return str(booking["status"])
+
+    def _find(
+        self, event_type: int, start: datetime, end: datetime, reference: str
+    ) -> Mapping[str, Any] | None:
+        """The booking of the slot that carries our reference (a hold's ID: one at most),
+        whatever its status."""
+        data = self._call(
+            "GET",
+            "/v2/bookings",
+            LIST_VERSION,
+            params={
+                "eventTypeId": event_type,
+                "afterStart": _utc(start - timedelta(minutes=1)),
+                "beforeEnd": _utc(end + timedelta(minutes=1)),
+            },
+        )
+        bookings = data.get("data")
+        return next(
+            (
+                item
+                for item in (bookings if isinstance(bookings, list) else [])
+                if isinstance(item, dict)
+                and (item.get("metadata") or {}).get("frontdesk") == reference
+            ),
+            None,
+        )
 
     def _call(
         self, method: str, path: str, version: str, *, unsure: bool = False, **kwargs: Any

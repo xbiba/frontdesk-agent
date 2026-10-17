@@ -135,7 +135,7 @@ class InstagramSender:
         self._client = client
         self._url = f"{GRAPH}/{api_version}/{account_id}/messages"
 
-    async def send(self, user_id: str, text: str) -> SendOutcome:
+    async def send(self, user_id: str, text: str, kind: str = "reply") -> SendOutcome:
         body = {"recipient": {"id": user_id}, "message": {"text": text}}
         for _ in range(CONNECT_RETRIES + 1):
             try:

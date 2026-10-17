@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -91,6 +92,19 @@ class Settings(BaseSettings):
     instagram_app_secret: SecretStr | None = None
     instagram_verify_token: SecretStr | None = None
     instagram_pairing_code: SecretStr | None = None
+    # WhatsApp for the reception (W1): the business account the booking request template lives in,
+    # the bot's number, the language of every text to the staff, Italian unless reception prefers
+    # Albanian (Albi, 2026-10-17), and the switch. The secrets, the staff list among them, come
+    # from Secret Manager in production.
+    whatsapp_business_account_id: str | None = None
+    whatsapp_phone_number_id: str | None = None
+    whatsapp_api_version: str = "v25.0"
+    whatsapp_staff_language: Literal["it", "sq"] = "it"
+    whatsapp_off: bool = False
+    whatsapp_token: SecretStr | None = None
+    whatsapp_app_secret: SecretStr | None = None
+    whatsapp_verify_token: SecretStr | None = None
+    whatsapp_staff: SecretStr | None = None
     # Cloud Tasks (ADR-0011): the queue, the worker it calls, the identity it calls the worker with.
     tasks_queue: str | None = None
     worker_url: str | None = None

@@ -7,7 +7,9 @@ and the conversation it belongs to, until a turn reads it.
   the send returns (D6);
 - an echo of the staff's pauses the conversation until 24 hours pass without messages (D6);
 - in testers mode, the message of someone who is not a tester is dropped before anything is
-  stored, unless it is the pairing code (D4).
+  stored, unless it is the pairing code (D4);
+- with a list of the users let in (WhatsApp's staff, W1), any other user's event is dropped
+  before anything is stored.
 
 `sweep` and `purge` run on Cloud Scheduler: the first gives back lost work, the second keeps what
 the design keeps (D8).
@@ -31,6 +33,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.channels.messages import Inbound, InboundKind
+from frontdesk.channels.whatsapp import TEMPLATE
 from frontdesk.db.engine import business_session
 from frontdesk.db.models import ChannelConversation, ChannelMessage, ChannelTester
 from frontdesk.observability.logs import log_alert, log_event
@@ -47,6 +50,7 @@ STALE: Final = timedelta(minutes=2)  # work older than this lost its task, a sen
 KEEP_IDS: Final = timedelta(days=7)  # D8: Meta retries for 36 hours
 KEEP_SENT_TEXT: Final = timedelta(days=1)  # D8: the text of a reply, for its echo
 FORGET_CONVERSATION: Final = timedelta(days=30)  # D8
+REPLY_WINDOW: Final = timedelta(hours=24)  # Meta's window after the person's last message
 TESTER_WELCOME: Final = (
     "Modalità di prova attiva: l'assistente risponde a questo account. "
     "Test mode on: the assistant answers this account."
@@ -144,6 +148,7 @@ class Inbox:
         testers_only: bool,
         pairing_code: str | None,
         now: Callable[[], datetime],
+        allowed_users: frozenset[str] | None = None,
     ) -> None:
         self._factory = session_factory
         self._business = business_id
@@ -152,18 +157,23 @@ class Inbox:
         self._testers_only = testers_only
         self._pairing = pairing_code
         self._now = now
+        self._allowed = allowed_users
 
     def accept(self, events: Sequence[Inbound]) -> Accepted:
         now = self._now()
         work: dict[str, None] = {}
         others: set[str] = set()
         strangers = 0
+        unlisted = 0
         with business_session(self._factory, self._business) as session:
             for event in events:
                 if event.account_id != self._account:
                     others.add(event.account_id)
                     continue
                 if not event.user_id or event.kind is InboundKind.IGNORED:
+                    continue
+                if self._allowed is not None and event.user_id not in self._allowed:
+                    unlisted += 1
                     continue
                 if event.kind is InboundKind.ECHO:
                     self._echo(session, event, now)
@@ -187,7 +197,16 @@ class Inbox:
             log_alert(logger, "channel.other_account", channel=self._channel, account_id=account)
         if strangers:
             log_event(logger, "channel.not_a_tester", channel=self._channel, count=strangers)
+        if unlisted:
+            log_event(logger, "channel.not_allowed", channel=self._channel, count=unlisted)
         return Accepted(tuple(work))
+
+    def open(self, user_id: str) -> str:
+        """The person's conversation key, its row created when missing: the staff's thread gets
+        the bot's requests before they ever write (WhatsApp W1)."""
+        with business_session(self._factory, self._business) as session:
+            key, _ = self._open(session, user_id, self._now())
+        return key
 
     def waiting(self, key: str) -> bool:
         """Whether a message of the conversation still waits for its turn."""
@@ -247,6 +266,7 @@ class Inbox:
                     update(ChannelMessage)
                     .where(*mine, ChannelMessage.direction == OUT)
                     .where(ChannelMessage.status == OutStatus.QUEUED)
+                    .where(ChannelMessage.kind != TEMPLATE)  # a request of its own (W1, I2)
                     .where(ChannelMessage.conversation_id.in_(stuck))
                     .values(status=OutStatus.DROPPED, reason="previous_uncertain", updated_at=now)
                 )
@@ -377,7 +397,8 @@ class Inbox:
         if paused is not None and paused > now:
             self._touch(session, key, now, pause=True)  # D6: 24 hours without messages
             return None  # the staff has the thread: nothing stored, nothing for the model
-        text = event.text if event.kind is InboundKind.TEXT else None
+        # A tap's text is its payload (W1): the run reads it, then it goes like any text.
+        text = event.text if event.kind in (InboundKind.TEXT, InboundKind.BUTTON) else None
         if self._insert(session, key, event, now, status=InStatus.PENDING, text=text):
             self._touch(session, key, now)
             return key

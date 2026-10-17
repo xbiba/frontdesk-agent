@@ -31,10 +31,12 @@ class FakeSender:
 
     def __init__(self, *outcomes: SendOutcome) -> None:
         self.sent: list[tuple[str, str]] = []
+        self.kinds: list[str] = []
         self._outcomes = list(outcomes)
 
-    async def send(self, user_id: str, text: str) -> SendOutcome:
+    async def send(self, user_id: str, text: str, kind: str = "reply") -> SendOutcome:
         self.sent.append((user_id, text))
+        self.kinds.append(kind)
         if self._outcomes:
             return self._outcomes.pop(0)
         return SendOutcome(SendStatus.SENT, message_id=f"out-{len(self.sent)}")

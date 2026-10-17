@@ -214,6 +214,40 @@ def test_live_mode_stores_everyone(factory: sessionmaker[Session], clock: Clock)
     assert work == (conversation_key(BUSINESS, CHANNEL, BOB),)
 
 
+def _staff_inbox(factory: sessionmaker[Session], clock: Clock) -> Inbox:
+    """WhatsApp's inbox (W1): only the numbers of the staff list are let in."""
+    return Inbox(
+        factory,
+        business_id=BUSINESS,
+        channel="whatsapp",
+        account_id=ACCOUNT,
+        testers_only=False,
+        pairing_code=None,
+        now=clock,
+        allowed_users=frozenset({ALICE}),
+    )
+
+
+@pytest.mark.db
+def test_a_number_off_the_list_is_dropped_before_storage(
+    factory: sessionmaker[Session], clock: Clock, caplog: pytest.LogCaptureFixture
+) -> None:
+    tap = Inbound(ACCOUNT, BOB, InboundKind.BUTTON, "m2", "request:x:confirm", NOW)
+    with caplog.at_level(logging.INFO, logger=INBOX_LOGGER):
+        assert _staff_inbox(factory, clock).accept([_text("Ciao", "m1", user=BOB), tap]).work == ()
+    assert _messages(factory) == []
+    with business_session(factory, BUSINESS) as session:
+        assert list(session.scalars(select(ChannelConversation))) == []
+    assert _fields(caplog, "channel.not_allowed") == [{"channel": "whatsapp", "count": 2}]
+
+
+@pytest.mark.db
+def test_a_staff_member_s_message_is_stored(factory: sessionmaker[Session], clock: Clock) -> None:
+    work = _staff_inbox(factory, clock).accept([_text("Ciao", "m1")]).work
+    assert work == (conversation_key(BUSINESS, "whatsapp", ALICE),)
+    assert [message.text for message in _messages(factory)] == ["Ciao"]
+
+
 @pytest.mark.db
 def test_an_echo_of_the_bots_reply_does_not_pause(
     inbox: Inbox, factory: sessionmaker[Session]

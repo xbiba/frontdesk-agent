@@ -33,6 +33,11 @@ class CalendarUnavailableError(RuntimeError):
     """The calendar could not be read. The message is a status, never an event's content."""
 
 
+class RequestGoneError(Exception):
+    """A booking request is no longer pending on the calendar: decided or cancelled there, or never
+    found (WhatsApp W1)."""
+
+
 class CalendarReader(Protocol):
     def read(
         self,
