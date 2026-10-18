@@ -346,6 +346,10 @@ async def _reception(
         if desk.booked and desk.booked_text:
             # The appointment is in the calendar: the patient reads it, whatever failed after.
             return TurnResult(desk.booked_text, TurnOutcome.REPLIED, language, failed)
+        if desk.summary and not desk.booked:
+            # The booking waits for a yes to this summary: the patient reads it, so that their next
+            # yes answers a summary they saw (run agent-24: a handoff, then "sì" booked).
+            return TurnResult(desk.summary, TurnOutcome.REPLIED, language, failed)
         return _handoff(pack, language, FixedTextKey.HANDOFF, failed)
     reply = run.output
     # The model reads the language of a short message better than the word lists: "Fate
