@@ -562,6 +562,34 @@ async def test_a_booking_made_before_the_model_fails_is_still_told(
     assert len(calendar.booked["cal-arben"]) == 1
 
 
+async def test_a_summary_written_before_the_model_fails_is_still_shown(
+    base: TurnRuntime, calendar: FixtureCalendar
+) -> None:
+    # Run agent-24, mcu-book-words-it: the summary was written, the run hit its request limit, the
+    # patient read the handoff, and their next "sì" booked a summary they had never seen.
+    script = Script(
+        [
+            [("free_times", {})],
+            _final(f"{LIST}\nQuale preferisce?"),
+            [("hold_time", {"day": "2026-10-23", "time": "09:30"})],
+            _final("Nome, cognome e telefono?"),
+            [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
+            *[[("clinic_hours", {})]] * 5,  # then the run's requests run out
+            [("confirm_booking", {})],
+            _final("Fatto, la prenotazione è confermata."),
+        ]
+    )
+    chat = Chat(base, script)
+    await chat.say("Vorrei prenotare")
+    await chat.say("il secondo")
+    reply = await chat.say("Mario Rossi, +355 69 123 4567")
+    assert (reply.text, reply.outcome) == (SUMMARY, TurnOutcome.REPLIED)
+    assert reply.trace.rejection == "reception_error"
+    booked = await chat.say("sì")
+    assert booked.text.startswith("Prenotazione confermata: venerdì 23 ottobre, 09:30")
+    assert len(calendar.booked["cal-arben"]) == 1
+
+
 async def test_a_confirmation_in_other_words_is_shown_as_code_wrote_it(
     base: TurnRuntime, calendar: FixtureCalendar
 ) -> None:
