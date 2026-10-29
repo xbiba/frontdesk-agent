@@ -10,9 +10,9 @@ import pytest
 
 from frontdesk.channels.dispatch import TASKS_API, CloudTasksDispatcher, DispatchError
 
-QUEUE = "projects/clinica-mcu/locations/europe-west1/queues/frontdesk-mcu"
-WORKER = "https://frontdesk-mcu-worker-123456789.europe-west1.run.app"
-INVOKER = "frontdesk-mcu-invoker@clinica-mcu.iam.gserviceaccount.com"
+QUEUE = "projects/demo-clinic/locations/europe-west1/queues/frontdesk-demo"
+WORKER = "https://frontdesk-demo-worker-123456789.europe-west1.run.app"
+INVOKER = "frontdesk-demo-invoker@demo-clinic.iam.gserviceaccount.com"
 KEY = "instagram-" + "a" * 40
 NOW = datetime(2026, 10, 14, 9, tzinfo=UTC)
 

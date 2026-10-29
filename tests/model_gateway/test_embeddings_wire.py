@@ -24,7 +24,7 @@ from tests.model_gateway.budget_helpers import write_budget
 from tests.model_gateway.embedding_helpers import Waits
 
 ROUTE = require_route("vertex-ew1-gemini-embedding-001", DataClass.EVALUATION)
-PROJECT = "clinica-mcu"
+PROJECT = "demo-clinic"
 HOST = "europe-west1-aiplatform.googleapis.com"
 PATH = (
     f"/v1/projects/{PROJECT}/locations/europe-west1/publishers/google/models/"
@@ -160,7 +160,7 @@ def test_a_refusal_the_client_raises_as_a_client_error_is_not_retried(
     wire: Callable[[Sequence[Outcome]], Wire],
 ) -> None:
     embedder, sent, waits, budget = wire([error(403)])
-    with pytest.raises(RouteAccessError, match="Vertex AI refused project 'clinica-mcu'") as caught:
+    with pytest.raises(RouteAccessError, match="Vertex AI refused project 'demo-clinic'") as caught:
         embedder.embed(["ciao mondo"])
     assert isinstance(caught.value.__cause__, genai_errors.ClientError)
     assert caught.value.__cause__.code == 403

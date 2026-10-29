@@ -35,7 +35,7 @@ def test_a_long_sentence_breaks_between_words() -> None:
 
 
 def test_a_word_longer_than_a_part_breaks_between_characters() -> None:
-    url = "https://www.clinicamcu.com/" + "a" * 300
+    url = "https://www.clinic.example/" + "a" * 300
     parts = split_message(url, 100)
     assert "".join(parts) == url
     assert all(_bytes(part) <= 100 for part in parts)

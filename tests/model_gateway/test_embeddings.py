@@ -138,7 +138,7 @@ def test_the_embedding_client_is_pinned_to_europe_west1(monkeypatch: pytest.Monk
     from frontdesk.model_gateway.factory import google_client
 
     monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
-    api = google_client(ROUTE, gcp_project="clinica-mcu")._api_client
+    api = google_client(ROUTE, gcp_project="demo-clinic")._api_client
     assert api._http_options.base_url == "https://europe-west1-aiplatform.googleapis.com/"
     assert api.location == "europe-west1"
     assert api._httpx_client.trust_env is False

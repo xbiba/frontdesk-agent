@@ -2,7 +2,7 @@
 and so is the rest of the turn.
 
 Gemini 3.5 Flash-Lite leads the reception agent: about five times cheaper than 3.8 Flash and more
-than twice as fast on the MCU cases (run agent-11-lite35). When the agent's reply is refused (by its
+than twice as fast on the first-clinic cases (run agent-11-lite35). When the agent's reply is refused (by its
 output validator, frontdesk.conversation.reception, or by the reply's own schema), the agent sends
 the model a retry of its output; from that request on, the turn's requests go to the second model.
 A tool's own retry (arguments it refused) stays with the first.

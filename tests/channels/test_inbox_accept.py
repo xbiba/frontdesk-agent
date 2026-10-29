@@ -27,7 +27,7 @@ CHANNEL = "instagram"
 ACCOUNT = "17841400000000001"
 ALICE = "1111111111111111"
 BOB = "2222222222222222"
-CODE = "mcu-prova-1234"
+CODE = "demo-prova-1234"
 NOW = datetime(2026, 10, 14, 9, tzinfo=UTC)
 KEY = conversation_key(BUSINESS, CHANNEL, ALICE)
 INBOX_LOGGER = "frontdesk.channels.inbox"

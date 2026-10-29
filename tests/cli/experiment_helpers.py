@@ -13,7 +13,7 @@ from frontdesk.knowledge.embedders import HashEmbedder
 from tests.knowledge.test_embedder_experiment import SmallHashEmbedder
 
 CANDIDATE = "vertex-ew1-gemini-embedding-001"
-ELSEWHERE = "postgresql+psycopg://u:p@h/frontdesk_mcu_experiment"  # a scratch name, never opened
+ELSEWHERE = "postgresql+psycopg://u:p@h/frontdesk_demo_experiment"  # a scratch name, never opened
 
 
 def env_file(tmp_path: Path, pack_dir: Path, owner_url: str, backend: str = "fastembed") -> str:

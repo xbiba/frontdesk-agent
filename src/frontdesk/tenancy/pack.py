@@ -141,7 +141,7 @@ class Location(Frozen):
     email: NonBlankStr
     # Reception's WhatsApp, when it has one: the agent gives it with the phone (Albi, 2026-10-12).
     whatsapp: NonBlankStr | None = None
-    # A clinic may have no fixed hours: Clinica MCU is open when a doctor has availability in its
+    # A clinic may have no fixed hours: the first clinic is open when a doctor has availability in its
     # calendar (Albi, 2026-10-13). An all-day calendar block needs them, to know its hours.
     opening_hours: list[OpeningHours] = Field(default_factory=list)
 

@@ -204,7 +204,7 @@ def test_the_budget_file_the_readme_shows_is_a_valid_budget_for_the_live_route(
 
 def test_the_readme_says_what_the_chat_needs_and_where_the_budget_file_lives() -> None:
     section = _readme_section()
-    assert "frontdesk-mcu" in section
+    assert "private pack repository" in section
     assert "`runs/budget.yaml`" in section
     for part in ("cap_eur", "ledger", "exchange_rate", "prices"):
         assert f"`{part}`" in section, f"the section does not name `{part}`"

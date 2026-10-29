@@ -81,7 +81,7 @@ def compose_facts(
 ) -> str | None:
     """The records' lines, then the closing paragraph: orientation's question, or else the pack's
     next step when the turn has one. No generic closing question: it read as a bot (Albi's review
-    of the first MCU run, 2026-10-11)."""
+    of the first clinic run, 2026-10-11)."""
     lines = _fact_lines(fields, facts)
     if not lines:
         return None
