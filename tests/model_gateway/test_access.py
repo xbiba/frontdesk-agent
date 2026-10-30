@@ -55,7 +55,7 @@ def test_proxy_and_certificate_variables_are_named_in_either_case() -> None:
 
 
 async def test_a_free_count_tokens_request_proves_the_route() -> None:
-    await check_route_access(ROUTE, gcp_project="clinica-mcu", client=_client(None))
+    await check_route_access(ROUTE, gcp_project="demo-clinic", client=_client(None))
 
 
 @pytest.mark.parametrize(
@@ -65,7 +65,7 @@ async def test_a_free_count_tokens_request_proves_the_route() -> None:
         (auth_errors.RefreshError("expired"), "gcloud auth application-default login"),
         (
             _api_error(genai_errors.ClientError, 403, "PERMISSION_DENIED"),
-            "gcloud services enable aiplatform.googleapis.com --project clinica-mcu",
+            "gcloud services enable aiplatform.googleapis.com --project demo-clinic",
         ),
         (
             _api_error(genai_errors.ClientError, 404, "NOT_FOUND"),
@@ -76,7 +76,7 @@ async def test_a_free_count_tokens_request_proves_the_route() -> None:
 )
 async def test_each_failure_says_what_to_do(error: Exception, advice: str) -> None:
     with pytest.raises(RouteAccessError, match=re.escape(advice)):
-        await check_route_access(ROUTE, gcp_project="clinica-mcu", client=_client(error))
+        await check_route_access(ROUTE, gcp_project="demo-clinic", client=_client(error))
 
 
 # --- Beyond the brief (Task 8 rulings) ---------------------------------------------------------------
@@ -130,12 +130,12 @@ def test_the_overrides_are_found_among_the_variables_of_a_real_environment() -> 
     [
         pytest.param(
             _api_error(genai_errors.ClientError, 401, "UNAUTHENTICATED"),
-            "gcloud services enable aiplatform.googleapis.com --project clinica-mcu",
+            "gcloud services enable aiplatform.googleapis.com --project demo-clinic",
             id="401",
         ),
         pytest.param(
             _api_error(genai_errors.ClientError, 429, "RESOURCE_EXHAUSTED"),
-            "rate limiting project 'clinica-mcu' (429 RESOURCE_EXHAUSTED): try again later",
+            "rate limiting project 'demo-clinic' (429 RESOURCE_EXHAUSTED): try again later",
             id="429",
         ),
         pytest.param(
@@ -167,7 +167,7 @@ def test_the_overrides_are_found_among_the_variables_of_a_real_environment() -> 
 )
 async def test_the_other_failures_are_one_message_too(error: Exception, advice: str) -> None:
     with pytest.raises(RouteAccessError) as caught:
-        await check_route_access(ROUTE, gcp_project="clinica-mcu", client=_client(error))
+        await check_route_access(ROUTE, gcp_project="demo-clinic", client=_client(error))
     assert advice in str(caught.value)
     assert caught.value.__cause__ is error  # the cause stays attached, for whoever debugs it
 
@@ -176,13 +176,13 @@ async def test_a_message_never_carries_what_google_said_about_the_network() -> N
     # httpx messages can hold URLs and hosts: only the type of a network error is shown.
     error = httpx2.ConnectError("could not reach https://aiplatform.eu.rep.googleapis.com/secret")
     with pytest.raises(RouteAccessError) as caught:
-        await check_route_access(ROUTE, gcp_project="clinica-mcu", client=_client(error))
+        await check_route_access(ROUTE, gcp_project="demo-clinic", client=_client(error))
     assert "secret" not in str(caught.value)
 
 
 async def test_a_bug_in_the_check_is_not_dressed_up_as_a_network_problem() -> None:
     with pytest.raises(TypeError):
-        await check_route_access(ROUTE, gcp_project="clinica-mcu", client=_client(TypeError("bug")))
+        await check_route_access(ROUTE, gcp_project="demo-clinic", client=_client(TypeError("bug")))
 
 
 class _Closing:
@@ -213,8 +213,8 @@ async def test_without_a_client_the_request_goes_through_the_pinned_one_and_it_i
 ) -> None:
     pinned = _Closing()
     monkeypatch.setattr(access, "google_client", pinned.client)
-    await check_route_access(ROUTE, gcp_project="clinica-mcu")
-    assert pinned.built == [("vertex-eu-gemini-flash-lite", "clinica-mcu")]
+    await check_route_access(ROUTE, gcp_project="demo-clinic")
+    assert pinned.built == [("vertex-eu-gemini-flash-lite", "demo-clinic")]
     assert pinned.closed == 1
 
 
@@ -225,7 +225,7 @@ async def test_the_client_it_built_is_closed_when_the_request_fails_too(
     pinned.fail = _api_error(genai_errors.ServerError, 503, "UNAVAILABLE")
     monkeypatch.setattr(access, "google_client", pinned.client)
     with pytest.raises(RouteAccessError, match="try again later"):
-        await check_route_access(ROUTE, gcp_project="clinica-mcu")
+        await check_route_access(ROUTE, gcp_project="demo-clinic")
     assert pinned.closed == 1
 
 
@@ -240,7 +240,7 @@ async def test_a_client_it_was_given_is_left_open_for_its_owner() -> None:
 
     models = SimpleNamespace(count_tokens=count_tokens)
     client = cast(Client, SimpleNamespace(aio=SimpleNamespace(models=models, aclose=aclose)))
-    await check_route_access(ROUTE, gcp_project="clinica-mcu", client=client)
+    await check_route_access(ROUTE, gcp_project="demo-clinic", client=client)
     assert closed == []
 
 
@@ -257,7 +257,7 @@ async def test_a_client_that_cannot_be_closed_does_not_hide_the_answer(
     broken = cast(Client, SimpleNamespace(aio=SimpleNamespace(models=models, aclose=aclose)))
     monkeypatch.setattr(access, "google_client", lambda route, *, gcp_project: broken)
     await check_route_access(
-        ROUTE, gcp_project="clinica-mcu"
+        ROUTE, gcp_project="demo-clinic"
     )  # the route works; that is the answer
 
 
@@ -271,7 +271,7 @@ async def test_a_route_that_is_not_a_gemini_route_cannot_be_proved_so_it_is_refu
     # and a run must not start on a route that nothing has proved.
     route = ROUTES[route_id]
     with pytest.raises(RouteAccessError, match=f"route '{route_id}' .* has no free access check"):
-        await check_route_access(route, gcp_project="clinica-mcu", client=_client(None))
+        await check_route_access(route, gcp_project="demo-clinic", client=_client(None))
 
 
 # --- One explanation for every request to Vertex AI (fix round 1 of Task 9) -----------------------
@@ -297,9 +297,9 @@ FAILURES = [
     ),
     pytest.param(
         _api_error(genai_errors.ClientError, 403, "PERMISSION_DENIED"),
-        "Vertex AI refused project 'clinica-mcu' (PERMISSION_DENIED: Vertex AI says no). "
+        "Vertex AI refused project 'demo-clinic' (PERMISSION_DENIED: Vertex AI says no). "
         "Check that the API is enabled (`gcloud services enable aiplatform.googleapis.com "
-        "--project clinica-mcu`) and that your account may use it",
+        "--project demo-clinic`) and that your account may use it",
         id="403",
     ),
     pytest.param(
@@ -309,7 +309,7 @@ FAILURES = [
     ),
     pytest.param(
         _api_error(genai_errors.ClientError, 429, "RESOURCE_EXHAUSTED"),
-        "Vertex AI is rate limiting project 'clinica-mcu' (429 RESOURCE_EXHAUSTED): try again later",
+        "Vertex AI is rate limiting project 'demo-clinic' (429 RESOURCE_EXHAUSTED): try again later",
         id="429",
     ),
     pytest.param(
@@ -344,7 +344,7 @@ FAILURES = [
 def test_a_failed_request_is_one_sentence_that_says_what_to_do(
     error: Exception, sentence: str
 ) -> None:
-    explained = explain_failure(error, ROUTE, "clinica-mcu")
+    explained = explain_failure(error, ROUTE, "demo-clinic")
     assert isinstance(explained, RouteAccessError)
     assert str(explained) == sentence
 
@@ -354,7 +354,7 @@ async def test_the_access_check_raises_the_sentence_the_explanation_gives(
     error: Exception, sentence: str
 ) -> None:
     with pytest.raises(RouteAccessError) as caught:
-        await check_route_access(ROUTE, gcp_project="clinica-mcu", client=_client(error))
+        await check_route_access(ROUTE, gcp_project="demo-clinic", client=_client(error))
     assert str(caught.value) == sentence
     assert caught.value.__cause__ is error
 
@@ -372,11 +372,11 @@ async def test_the_access_check_raises_the_sentence_the_explanation_gives(
 def test_anything_that_is_not_a_failure_to_reach_vertex_ai_is_left_alone(
     error: BaseException,
 ) -> None:
-    assert explain_failure(error, ROUTE, "clinica-mcu") is None
+    assert explain_failure(error, ROUTE, "demo-clinic") is None
 
 
 def test_the_text_of_what_google_said_about_the_network_is_never_in_the_sentence() -> None:
     error = httpx2.ConnectError("could not reach https://aiplatform.eu.rep.googleapis.com/secret")
-    explained = explain_failure(error, ROUTE, "clinica-mcu")
+    explained = explain_failure(error, ROUTE, "demo-clinic")
     assert explained is not None
     assert "secret" not in str(explained)

@@ -31,7 +31,7 @@ _NUMBER_IN_TEXT: Final = re.compile(r"(?<![\w-])([0-9]{4,6})(?![\w-])")
 # Dates with dots or slashes (10.10.2026, 2026/10/10) are blanked before the number search: their
 # year is not a postal code. Hyphenated dates are kept out by `_NUMBER_IN_TEXT` itself.
 # Words that ask *when* (sq, it, en), read in the normalized message. A doctor question that asks when
-# is about dates, which the documents hold, not about the doctor's record (live MCU run, 2026-10-11).
+# is about dates, which the documents hold, not about the doctor's record (live first-clinic run, 2026-10-11).
 # When a doctor is in: the prompt says general_question, the model sometimes says doctor_info.
 _DOCTOR_DATES: Final = frozenset({Intent.DOCTOR_INFO, Intent.GENERAL_QUESTION})
 _ASKS_WHEN: Final = re.compile(

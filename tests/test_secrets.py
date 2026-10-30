@@ -34,12 +34,12 @@ def test_in_production_a_secret_comes_from_secret_manager() -> None:
     seen: list[httpx2.Request] = []
     data = base64.b64encode(b"cal_prod\n").decode()
     client = _client(httpx2.Response(200, json={"payload": {"data": data}}), seen)
-    settings = _settings(secrets_backend=SecretsBackend.GCP, gcp_project="clinica-mcu")
+    settings = _settings(secrets_backend=SecretsBackend.GCP, gcp_project="demo-clinic")
     value = read_secret(settings, "calcom_api_key", token=lambda: "t0ken", client=client)
     assert value == "cal_prod"
     (request,) = seen
     assert request.url.path == (
-        "/v1/projects/clinica-mcu/secrets/frontdesk-calcom-api-key/versions/latest:access"
+        "/v1/projects/demo-clinic/secrets/frontdesk-calcom-api-key/versions/latest:access"
     )
     assert request.headers["authorization"] == "Bearer t0ken"
 
@@ -48,7 +48,7 @@ def test_with_secret_manager_a_key_in_the_environment_is_refused() -> None:
     # Never in a file: an env file holding the key is a mistake, not a fallback.
     settings = _settings(
         secrets_backend=SecretsBackend.GCP,
-        gcp_project="clinica-mcu",
+        gcp_project="demo-clinic",
         calcom_api_key=SecretStr("cal_in_a_file"),
     )
     with pytest.raises(ValueError, match="never in the environment"):
@@ -58,7 +58,7 @@ def test_with_secret_manager_a_key_in_the_environment_is_refused() -> None:
 
 
 def test_a_secret_that_cannot_be_read_names_itself_and_never_a_value() -> None:
-    settings = _settings(secrets_backend=SecretsBackend.GCP, gcp_project="clinica-mcu")
+    settings = _settings(secrets_backend=SecretsBackend.GCP, gcp_project="demo-clinic")
     client = _client(httpx2.Response(403, json={"error": "denied"}), [])
     with pytest.raises(SecretUnavailableError, match="frontdesk-calcom-api-key: status 403"):
         read_secret(settings, "calcom_api_key", token=lambda: "t0ken", client=client)
@@ -67,13 +67,13 @@ def test_a_secret_that_cannot_be_read_names_itself_and_never_a_value() -> None:
 def test_a_new_version_of_a_secret_is_added_in_production() -> None:
     seen: list[httpx2.Request] = []
     client = _client(httpx2.Response(200, json={"name": "versions/2"}), seen)
-    settings = _settings(secrets_backend=SecretsBackend.GCP, gcp_project="clinica-mcu")
+    settings = _settings(secrets_backend=SecretsBackend.GCP, gcp_project="demo-clinic")
     add_secret_version(
         settings, "instagram_token", "new-token", token=lambda: "t0ken", client=client
     )
     (request,) = seen
     assert request.url.path == (
-        "/v1/projects/clinica-mcu/secrets/frontdesk-instagram-token:addVersion"
+        "/v1/projects/demo-clinic/secrets/frontdesk-instagram-token:addVersion"
     )
     assert request.headers["authorization"] == "Bearer t0ken"
     expected = base64.b64encode(b"new-token").decode()
@@ -81,7 +81,7 @@ def test_a_new_version_of_a_secret_is_added_in_production() -> None:
 
 
 def test_a_version_that_cannot_be_added_names_the_secret_never_the_value() -> None:
-    settings = _settings(secrets_backend=SecretsBackend.GCP, gcp_project="clinica-mcu")
+    settings = _settings(secrets_backend=SecretsBackend.GCP, gcp_project="demo-clinic")
     client = _client(httpx2.Response(403), [])
     with pytest.raises(SecretUnavailableError, match=r"^frontdesk-instagram-token: status 403$"):
         add_secret_version(

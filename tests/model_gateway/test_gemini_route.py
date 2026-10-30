@@ -74,11 +74,11 @@ def test_the_environment_moves_neither_host_nor_project_nor_location(
     for name, value in STRAY_ENVIRONMENT.items():
         monkeypatch.setenv(name, value)
     route = require_route(GEMINI, DataClass.EVALUATION)
-    client = google_client(route, gcp_project="clinica-mcu")
+    client = google_client(route, gcp_project="demo-clinic")
     api = client._api_client
     assert api._http_options.base_url == EU_HOST
     assert (api.project, api.location, api.vertexai, api.api_key) == (
-        "clinica-mcu",
+        "demo-clinic",
         "eu",
         True,
         None,

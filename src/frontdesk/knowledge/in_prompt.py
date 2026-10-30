@@ -2,7 +2,7 @@
 them whole to the reception agent, with no search tool and no embedder; a larger one is searched,
 as before (frontdesk.conversation.reception).
 
-Clinica MCU's documents are 12 texts in three languages, about 3,000 characters: the agent searched
+The first clinic's documents are 12 texts in three languages, about 3,000 characters: the agent searched
 them in one turn of seven, one request more each time. Up to IN_PROMPT_CHARS, the documents valid
 today ride with every request, in the conversation's language, as a search returns them.
 """

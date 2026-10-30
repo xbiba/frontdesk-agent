@@ -27,7 +27,7 @@ SECRET = "app-secret"
 VERIFY = "verify-me"
 ACCOUNT = "17841400000000001"
 ALICE = "1111111111111111"
-CODE = "mcu-prova-1234"
+CODE = "demo-prova-1234"
 KEY = conversation_key("demo-clinic", "instagram", ALICE)
 PATH = "/webhooks/instagram"
 

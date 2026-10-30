@@ -488,7 +488,7 @@ def test_a_business_without_services_ignores_the_service_the_model_names() -> No
     ],
 )
 def test_a_doctor_question_that_asks_when_is_looked_up_in_the_documents(message: str) -> None:
-    # The live MCU run (2026-10-11): the model answered these as doctor_info, so the person got the
+    # The live first-clinic run (2026-10-11): the model answered these as doctor_info, so the person got the
     # doctor's services instead of his dates; the dates live in a document.
     result = _validate(
         category="administrative",

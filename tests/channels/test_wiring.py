@@ -13,9 +13,9 @@ from frontdesk.model_gateway.routes import UnapprovedRouteError
 from frontdesk.settings import InstagramMode, Settings
 from frontdesk.tenancy.loader import load_pack
 
-QUEUE = "projects/clinica-mcu/locations/europe-west1/queues/frontdesk-mcu"
-WORKER = "https://frontdesk-mcu-worker-123456789.europe-west1.run.app"
-INVOKER = "frontdesk-mcu-invoker@clinica-mcu.iam.gserviceaccount.com"
+QUEUE = "projects/demo-clinic/locations/europe-west1/queues/frontdesk-demo"
+WORKER = "https://frontdesk-demo-worker-123456789.europe-west1.run.app"
+INVOKER = "frontdesk-demo-invoker@demo-clinic.iam.gserviceaccount.com"
 ACCOUNT = "17841400000000001"
 
 
@@ -34,7 +34,7 @@ def _settings(pack: Path, **fields: Any) -> Settings:
         "instagram_account_id": ACCOUNT,
         "instagram_app_secret": SecretStr("app-secret"),
         "instagram_verify_token": SecretStr("verify-me"),
-        "instagram_pairing_code": SecretStr("mcu-prova-1234"),
+        "instagram_pairing_code": SecretStr("demo-prova-1234"),
         "instagram_token": SecretStr("t0ken"),
         "tasks_queue": QUEUE,
         "worker_url": WORKER,
@@ -80,7 +80,7 @@ def test_live_mode_is_refused_on_a_route_not_approved_for_patient_data(pack_dir:
         pack_dir,
         instagram_mode=InstagramMode.LIVE,
         model_route="vertex-eu-gemini-flash",
-        gcp_project="clinica-mcu",
+        gcp_project="demo-clinic",
     )
     with pytest.raises(UnapprovedRouteError, match="patient_derived"):
         build_worker(settings)

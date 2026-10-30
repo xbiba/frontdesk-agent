@@ -60,16 +60,16 @@ def test_the_experiment_never_writes_into_a_database_that_is_not_a_scratch_one(
 ) -> None:
     budget = write_budget(tmp_path).path
     env = env_file(
-        tmp_path, businesses_dir / "demo-clinic", "postgresql+psycopg://u:p@h/frontdesk_mcu"
+        tmp_path, businesses_dir / "demo-clinic", "postgresql+psycopg://u:p@h/frontdesk_demo"
     )
     result = runner.invoke(app, experiment_args(env, tmp_path, businesses_dir, budget))
     assert result.exit_code == 1
-    assert "ends in '_experiment', not 'frontdesk_mcu'" in result.stderr
+    assert "ends in '_experiment', not 'frontdesk_demo'" in result.stderr
 
 
 def test_the_reference_is_the_demo_s_local_model(tmp_path: Path, businesses_dir: Path) -> None:
     budget = write_budget(tmp_path).path
-    url = "postgresql+psycopg://u:p@h/frontdesk_mcu_experiment"
+    url = "postgresql+psycopg://u:p@h/frontdesk_demo_experiment"
     env = env_file(tmp_path, businesses_dir / "demo-clinic", url, backend="hash")
     result = runner.invoke(app, experiment_args(env, tmp_path, businesses_dir, budget))
     assert result.exit_code == 1

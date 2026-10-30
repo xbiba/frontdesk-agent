@@ -54,8 +54,8 @@ def test_a_route_is_not_proved_without_a_project(
 
 
 def test_the_route_is_proved_for_the_project_it_is_given(access_checks: AccessChecks) -> None:
-    check_access(GEMINI, "clinica-mcu")
-    assert access_checks.calls == [(ROUTE, "clinica-mcu")]
+    check_access(GEMINI, "demo-clinic")
+    assert access_checks.calls == [(ROUTE, "demo-clinic")]
 
 
 def test_a_route_that_fails_the_proof_is_the_error_line_the_check_wrote(
@@ -65,7 +65,7 @@ def test_a_route_that_fails_the_proof_is_the_error_line_the_check_wrote(
         "Vertex AI is not answering (503 UNAVAILABLE): try again"
     )
     with pytest.raises(typer.Exit) as raised:
-        check_access(GEMINI, "clinica-mcu")
+        check_access(GEMINI, "demo-clinic")
     assert raised.value.exit_code == 1
     assert capsys.readouterr().err == (
         "error: Vertex AI is not answering (503 UNAVAILABLE): try again\n"

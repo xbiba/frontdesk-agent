@@ -101,7 +101,7 @@ ROUTES: Final[dict[str, ModelRoute]] = {
         fallback="vertex-eu-gemini-flash-lite",
     ),
     # Gemini 3.5 Flash-Lite leads the reception agent (Albi, 2026-10-16), after run agent-11-lite35
-    # on the MCU cases: 155 of 163 against 157 for 3.8 Flash, five times cheaper and 2.4 times
+    # on the first-clinic cases: 155 of 163 against 157 for 3.8 Flash, five times cheaper and 2.4 times
     # faster. GA since 2026-07-21, retiring "July 21, 2027 or later"; served on the eu multi-region
     # (probe of 2026-10-16). Low thinking, as 3.8 Flash: 3.1 Flash-Lite with minimal thinking
     # failed bookings and dates (run agent-10-lite). 3.8 Flash writes again a reply a check sent

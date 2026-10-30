@@ -1,5 +1,5 @@
 """An answer ends with the pack's next step, once per conversation, instead of a generic closing
-question that read as a bot (Albi's review of the first MCU run, 2026-10-11)."""
+question that read as a bot (Albi's review of the first clinic run, 2026-10-11)."""
 
 from collections.abc import Callable
 

@@ -76,7 +76,7 @@ def test_the_google_client_builds_whatever_the_certificate_variables_say(
 ) -> None:
     for name, value in _bad_bundles(tmp_path)[bundle].items():
         monkeypatch.setenv(name, value)
-    client = google_client(route, gcp_project="clinica-mcu")  # type: ignore[arg-type]
+    client = google_client(route, gcp_project="demo-clinic")  # type: ignore[arg-type]
     assert client._api_client.vertexai is True
 
 
@@ -87,7 +87,7 @@ def test_every_google_client_verifies_with_the_one_context_of_certifi(
 ) -> None:
     for name, value in _bad_bundles(tmp_path)[bundle].items():
         monkeypatch.setenv(name, value)
-    api = google_client(route, gcp_project="clinica-mcu")._api_client  # type: ignore[arg-type]
+    api = google_client(route, gcp_project="demo-clinic")._api_client  # type: ignore[arg-type]
     context = factory.tls_context()
     options = api._http_options
     assert (options.client_args or {}).get("verify") is context

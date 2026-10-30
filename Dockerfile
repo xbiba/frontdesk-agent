@@ -5,7 +5,7 @@ WORKDIR /app
 # UV_NO_CACHE: uv's download cache would stay in a layer (about 200 MB) and is not read at run time.
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_NO_CACHE=1 PYTHONUNBUFFERED=1
 # The extras a deployment needs: `demo` brings the local fastembed embedder some packs were
-# evaluated with (Clinica MCU's). CI builds the image without any.
+# evaluated with. CI builds the image without any.
 ARG EXTRAS=""
 COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-dev --no-install-project ${EXTRAS:+--extra ${EXTRAS}}

@@ -19,7 +19,7 @@ BUSINESS = "demo-clinic"
 CHANNEL = "instagram"
 ACCOUNT = "17841400000000001"
 ALICE = "1111111111111111"
-CODE = "mcu-prova-1234"
+CODE = "demo-prova-1234"
 KEY = conversation_key(BUSINESS, CHANNEL, ALICE)
 
 

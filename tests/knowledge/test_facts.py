@@ -598,7 +598,7 @@ def test_other_businesses_are_invisible(
 def test_a_clinic_without_fixed_hours_shows_none(
     activate_pack: Activate, clinic_pack: BusinessPack
 ) -> None:
-    # Clinica MCU receives when a doctor has availability in the calendar (Albi, 2026-10-13).
+    # the first clinic receives when a doctor has availability in the calendar (Albi, 2026-10-13).
     location = {**clinic_pack.location.model_dump(), "opening_hours": []}
     pack = _edited(clinic_pack, location=location)
     factory = activate_pack(pack)

@@ -2,12 +2,12 @@
 
 - Date: 2026-10-11.
 - Route: `vertex-eu-gemini-flash-lite`, Gemini 3.1 Flash-Lite on the Vertex AI `eu` multi-region, minimal thinking.
-- Engine: after the tuning of M3 Task 14. The clinic and document runs used 6de6a59; the shop and MCU-case runs used 72b0f98, which adds the business contact to document answers.
-- The rate of right answers refused rests on few document questions on the demo packs, 1 to 3 per language. It shows the checks did not refuse those answers. It is not yet a measure: the MCU run measures it on at least 10 questions per language.
+- Engine: after the tuning of M3 Task 14. The clinic and document runs used 6de6a59; the shop and first-clinic-case runs used 72b0f98, which adds the business contact to document answers.
+- The rate of right answers refused rests on few document questions on the demo packs, 1 to 3 per language. It shows the checks did not refuse those answers. It is not yet a measure: the first-clinic run measures it on at least 10 questions per language.
 - Review: an independent reviewer agent (Opus) labelled every answer the model wrote, each label with its reason. The labels, the runs and the spend ledger are kept in the private configuration repository (`runs/`).
 - Live spend of M3 when these runs were made: 0.09 EUR of the 10 EUR cap.
 
-These runs carry synthetic data only. The MCU run, on the clinic's approved information, is recorded in the private repository and summarised here when it is done.
+These runs carry synthetic data only. The first-clinic run, on the clinic's approved information, is recorded in the private repository and summarised here when it is done.
 
 ## Demo clinic (56 demo cases, `runs/2026-10-11-demo-clinic-3`)
 
@@ -69,7 +69,7 @@ These runs carry synthetic data only. The MCU run, on the clinic's approved info
 | classifier | 25 | 40 | 38 | 0 | 0 |
 | responder | 6 | 176 | 176 | 0 | 0 |
 
-## MCU cases that need no clinic data, on the demo clinic (45 cases, `runs/2026-10-11-mcu-cases-on-demo-clinic-2`)
+## First-clinic cases that need no clinic data, on the demo clinic (45 cases, `runs/2026-10-11-clinic-cases-on-demo-clinic-2`)
 
 ### Exit criteria (M3 design §1)
 

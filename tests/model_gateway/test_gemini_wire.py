@@ -30,7 +30,7 @@ from frontdesk.model_gateway.routes import DataClass, require_route
 from frontdesk.tenancy.pack import Profile
 
 GEMINI = "vertex-eu-gemini-flash-lite"
-PROJECT = "clinica-mcu"
+PROJECT = "demo-clinic"
 EU_HOST = "aiplatform.eu.rep.googleapis.com"
 PATH = (
     f"/v1/projects/{PROJECT}/locations/eu/publishers/google/models/"

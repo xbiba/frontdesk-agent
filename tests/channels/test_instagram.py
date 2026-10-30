@@ -251,10 +251,10 @@ async def test_a_refused_refresh_names_only_the_status() -> None:
 async def test_the_account_id_comes_from_me() -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.path == "/v25.0/me"
-        return httpx2.Response(200, json={"user_id": ACCOUNT, "username": "mcu_test", "id": "9"})
+        return httpx2.Response(200, json={"user_id": ACCOUNT, "username": "demo_test", "id": "9"})
 
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
-        assert await account_user_id(client, "t", "v25.0") == (ACCOUNT, "mcu_test")
+        assert await account_user_id(client, "t", "v25.0") == (ACCOUNT, "demo_test")
 
 
 async def test_the_account_is_subscribed_to_messages() -> None:

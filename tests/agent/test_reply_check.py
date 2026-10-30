@@ -6,12 +6,12 @@ import pytest
 
 from frontdesk.agent.reply_check import reply_problems, wrong_weekdays
 
-KNOWN = "Trattamento osteopatico: 40 EUR. Telefono: +355 69 443 9339. Sito: www.clinicamcu.com"
+KNOWN = "Trattamento osteopatico: 40 EUR. Telefono: +355 00 000 0000. Sito: www.clinic.example"
 
 
 def test_a_reply_from_the_facts_passes() -> None:
     reply = (
-        "Il trattamento costa 40 EUR. Per altro chiami il +355 69 443 9339 o veda clinicamcu.com"
+        "Il trattamento costa 40 EUR. Per altro chiami il +355 00 000 0000 o veda clinic.example"
     )
     assert reply_problems(reply, KNOWN, booked=False) == ()
 

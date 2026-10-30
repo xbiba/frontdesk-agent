@@ -30,14 +30,14 @@ async def test_the_account_command_prints_the_webhook_id(
     businesses_dir: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(200, json={"user_id": ACCOUNT, "username": "mcu_test"})
+        return httpx2.Response(200, json={"user_id": ACCOUNT, "username": "demo_test"})
 
     settings = Settings(
         business_pack=businesses_dir / "demo-clinic", instagram_token=SecretStr("t")
     )
     client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
     assert await show_account(settings, client=client) == 0
-    assert capsys.readouterr().out == f"account id: {ACCOUNT}\nusername: mcu_test\n"
+    assert capsys.readouterr().out == f"account id: {ACCOUNT}\nusername: demo_test\n"
 
 
 async def test_the_subscribe_command_subscribes_the_account(
@@ -64,10 +64,10 @@ def test_testers_are_counted_and_cleared(
         channel="instagram",
         account_id=ACCOUNT,
         testers_only=True,
-        pairing_code="mcu-prova-1234",
+        pairing_code="demo-prova-1234",
         now=lambda: NOW,
     )
-    inbox.accept([Inbound(ACCOUNT, "1111", InboundKind.TEXT, "pair", "mcu-prova-1234", NOW)])
+    inbox.accept([Inbound(ACCOUNT, "1111", InboundKind.TEXT, "pair", "demo-prova-1234", NOW)])
     settings = Settings(business_pack=businesses_dir / "demo-clinic", database_url=app_url)
     assert show_testers(settings, clear=False) == 0
     assert capsys.readouterr().out == "testers: 1\n"

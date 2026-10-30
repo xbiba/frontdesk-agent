@@ -565,7 +565,7 @@ async def test_a_booking_made_before_the_model_fails_is_still_told(
 async def test_a_summary_written_before_the_model_fails_is_still_shown(
     base: TurnRuntime, calendar: FixtureCalendar
 ) -> None:
-    # Run agent-24, mcu-book-words-it: the summary was written, the run hit its request limit, the
+    # Run agent-24, clinic-book-words-it: the summary was written, the run hit its request limit, the
     # patient read the handoff, and their next "sì" booked a summary they had never seen.
     script = Script(
         [

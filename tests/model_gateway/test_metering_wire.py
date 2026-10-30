@@ -30,7 +30,7 @@ from frontdesk.model_gateway.routes import DataClass, require_route
 from tests.model_gateway.attempt_helpers import Sleeps, ledger
 from tests.model_gateway.budget_helpers import ROUTE, write_budget
 
-PROJECT = "clinica-mcu"
+PROJECT = "demo-clinic"
 BACKOFF = [2.0, 4.0, 8.0]
 Step = Callable[[], Exception | httpx2.Response]
 Handler = Callable[[httpx2.Request], httpx2.Response]
