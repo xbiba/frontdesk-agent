@@ -1,17 +1,13 @@
-"""The worker's routes (ADR-0011): a conversation for each task, the sweep, the purge, the token."""
+"""The worker's routes (ADR-0011): a conversation for each task, the sweep, the purge."""
 
-import logging
-from collections.abc import Awaitable, Callable
 from datetime import timedelta
 
-import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, update
 
 from frontdesk.api.app import create_worker_app
 from frontdesk.channels.inbox import BURST, TESTER_WELCOME, Inbox, conversation_key, queue_reply
-from frontdesk.channels.instagram import TokenRefreshError
 from frontdesk.channels.messages import Inbound, InboundKind
 from frontdesk.channels.runner import Runner
 from frontdesk.channels.wiring import Worker
@@ -31,10 +27,6 @@ KEY = conversation_key(BUSINESS, CHANNEL, ALICE)
 STAFF = "355691234567"
 
 
-async def _renewed() -> None:
-    return None
-
-
 class Notified:
     """The requests' stand-in: counts the times the worker asks it to notify."""
 
@@ -47,12 +39,7 @@ class Notified:
 
 
 class Service:
-    def __init__(
-        self,
-        app_url: str,
-        pack: BusinessPack,
-        refresh: Callable[[], Awaitable[None]] = _renewed,
-    ) -> None:
+    def __init__(self, app_url: str, pack: BusinessPack) -> None:
         self.factory = make_session_factory(make_engine(app_url))
         self.clock = Clock()
         self.sender = FakeSender()
@@ -101,7 +88,6 @@ class Service:
             inbox={CHANNEL: inbox, "whatsapp": self.whatsapp},
             requests=self.requests,  # type: ignore[arg-type]
             dispatcher=self.dispatcher,
-            refresh=refresh,
             purge_bookings=lambda: 0,
         )
         app = create_worker_app(Settings(), worker=worker, engine=create_engine(app_url))
@@ -146,32 +132,6 @@ def test_the_purge_says_what_it_removed(app_url: str, clinic_pack: BusinessPack)
     }
 
 
-def test_the_token_is_renewed(app_url: str, clinic_pack: BusinessPack) -> None:
-    calls: list[int] = []
-
-    async def renew() -> None:
-        calls.append(1)
-
-    service = Service(app_url, clinic_pack, refresh=renew)
-    assert service.client.post("/tasks/refresh-token").status_code == 200
-    assert calls == [1]
-
-
-def test_a_failed_renewal_is_an_alert(
-    app_url: str, clinic_pack: BusinessPack, caplog: pytest.LogCaptureFixture
-) -> None:
-    async def refused() -> None:
-        raise TokenRefreshError("status 400")
-
-    service = Service(app_url, clinic_pack, refresh=refused)
-    with caplog.at_level(logging.INFO, logger="frontdesk.api.worker"):
-        assert service.client.post("/tasks/refresh-token").status_code == 502
-    assert any(
-        r.levelno == logging.ERROR and r.msg == "channel.token_refresh_failed"
-        for r in caplog.records
-    )
-
-
 def test_a_message_left_waiting_by_a_run_gets_a_task_again(
     app_url: str, clinic_pack: BusinessPack
 ) -> None:
@@ -182,25 +142,6 @@ def test_a_message_left_waiting_by_a_run_gets_a_task_again(
     service.inbox.accept([Inbound(ACCOUNT, ALICE, InboundKind.TEXT, "m1", "Ciao", NOW)])
     assert service.client.post(f"/tasks/conversations/{KEY}").status_code == 200
     assert service.dispatcher.calls == [(KEY, BURST)]
-
-
-def test_a_renewal_that_meets_a_network_error_is_an_alert(
-    app_url: str, clinic_pack: BusinessPack, caplog: pytest.LogCaptureFixture
-) -> None:
-    # Final review of M4, M9: a network error escaped as a 500, with no alert.
-    async def unreachable() -> None:
-        raise httpx2.ConnectError("no route")
-
-    service = Service(app_url, clinic_pack, refresh=unreachable)
-    with caplog.at_level(logging.INFO, logger="frontdesk.api.worker"):
-        assert service.client.post("/tasks/refresh-token").status_code == 502
-    assert any(
-        r.levelno == logging.ERROR and r.msg == "channel.token_refresh_failed"
-        for r in caplog.records
-    )
-
-
-# --- WhatsApp W1: one worker, a runner per channel ---------------------------------------------------
 
 
 def test_each_conversation_runs_on_its_channel_s_runner(
@@ -240,3 +181,9 @@ def test_a_task_for_an_unknown_channel_is_not_found(
     service = Service(app_url, clinic_pack)
     unknown = conversation_key(BUSINESS, "telegram", ALICE)
     assert service.client.post(f"/tasks/conversations/{unknown}").status_code == 404
+
+
+def test_the_token_needs_no_renewal(app_url: str, clinic_pack: BusinessPack) -> None:
+    # A system user's token does not expire: the weekly renewal of Instagram Login is gone.
+    service = Service(app_url, clinic_pack)
+    assert service.client.post("/tasks/refresh-token").status_code == 404

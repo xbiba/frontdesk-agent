@@ -1,5 +1,5 @@
-"""`frontdesk instagram ...` (M4): the ID the account's webhooks carry, its subscription to the
-message webhooks, and the testers."""
+"""`frontdesk instagram ...` (M4): the Page and the ID its account's webhooks carry, the Page's
+subscription to the message webhooks, and the testers."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ import httpx2
 import typer
 
 from frontdesk.channels.inbox import Inbox
-from frontdesk.channels.instagram import INSTAGRAM, account_user_id, subscribe
-from frontdesk.channels.wiring import channel_secret
+from frontdesk.channels.instagram import INSTAGRAM, PageToken, linked_accounts, subscribe
+from frontdesk.channels.wiring import channel_secret, instagram_page
 from frontdesk.db.engine import make_engine, make_session_factory
 from frontdesk.settings import Settings
 from frontdesk.tenancy.loader import load_pack
@@ -19,16 +19,22 @@ from frontdesk.tenancy.loader import load_pack
 async def show_account(settings: Settings, *, client: httpx2.AsyncClient | None = None) -> int:
     token = channel_secret(settings, "instagram_token")
     async with client or httpx2.AsyncClient(timeout=10.0) as http:
-        user_id, username = await account_user_id(http, token, settings.instagram_api_version)
-    typer.echo(f"account id: {user_id}\nusername: {username}")
+        found = await linked_accounts(http, token, settings.instagram_api_version)
+    if not found:
+        typer.echo("no Page the token reaches has an Instagram account")
+        return 1
+    for page_id, account_id, username in found:
+        typer.echo(f"page id: {page_id}\naccount id: {account_id}\nusername: {username}")
     return 0
 
 
 async def subscribe_account(settings: Settings, *, client: httpx2.AsyncClient | None = None) -> int:
+    page_id, version = instagram_page(settings), settings.instagram_api_version
     token = channel_secret(settings, "instagram_token")
     async with client or httpx2.AsyncClient(timeout=10.0) as http:
-        await subscribe(http, token, settings.instagram_api_version)
-    typer.echo("the account is subscribed to messages")
+        page_token = await PageToken(http, token, page_id=page_id, api_version=version).get()
+        await subscribe(http, page_token, page_id, version)
+    typer.echo("the page is subscribed to messages")
     return 0
 
 

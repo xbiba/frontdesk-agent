@@ -17,6 +17,7 @@ QUEUE = "projects/demo-clinic/locations/europe-west1/queues/frontdesk-demo"
 WORKER = "https://frontdesk-demo-worker-123456789.europe-west1.run.app"
 INVOKER = "frontdesk-demo-invoker@demo-clinic.iam.gserviceaccount.com"
 ACCOUNT = "17841400000000001"
+PAGE = "1482870000000001"
 
 
 @pytest.fixture
@@ -32,6 +33,7 @@ def _settings(pack: Path, **fields: Any) -> Settings:
     values: dict[str, Any] = {
         "business_pack": pack,
         "instagram_account_id": ACCOUNT,
+        "instagram_page_id": PAGE,
         "instagram_app_secret": SecretStr("app-secret"),
         "instagram_verify_token": SecretStr("verify-me"),
         "instagram_pairing_code": SecretStr("demo-prova-1234"),
@@ -98,6 +100,14 @@ def test_the_worker_side_is_built_for_testers(
     worker = build_worker(_settings(pack_dir, database_url=app_url))
     assert set(worker.runners) == {"instagram"}
     assert worker.requests is None
+
+
+def test_the_worker_side_needs_the_page_it_sends_through(
+    pack_dir: Path, app_url: str, activate_pack: Any
+) -> None:
+    activate_pack(load_pack(pack_dir))
+    with pytest.raises(ValueError, match="FRONTDESK_INSTAGRAM_PAGE_ID"):
+        build_worker(_settings(pack_dir, database_url=app_url, instagram_page_id=None))
 
 
 # --- WhatsApp W1 ----------------------------------------------------------------------------------

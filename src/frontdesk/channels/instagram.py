@@ -1,8 +1,9 @@
-"""Instagram (M4): the adapter of the Instagram API with Instagram Login (ADR-0010).
+"""Instagram (M4): the adapter of the Instagram API with Facebook Login (ADR-0010).
 
-It checks the signature Meta puts on every webhook delivery (`X-Hub-Signature-256`, an HMAC-SHA256
-of the raw body with the app secret), reads the deliveries' events and sends texts with the Send
-API. Nothing here logs a message, a person's ID or the token.
+The account is linked to a Facebook Page, and the token is the business's system-user token. It
+checks the signature Meta puts on every webhook delivery (`X-Hub-Signature-256`, an HMAC-SHA256 of
+the raw body with the app secret), reads the deliveries' events and sends texts with the Send API,
+through the Page and with the Page's token. Nothing here logs a message, a person's ID or a token.
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from typing import Any, Final
 
@@ -19,16 +20,12 @@ import httpx2
 from frontdesk.channels.messages import Inbound, InboundKind, SendOutcome, SendStatus
 
 INSTAGRAM: Final = "instagram"
-GRAPH: Final = "https://graph.instagram.com"
+GRAPH: Final = "https://graph.facebook.com"
 MAX_MESSAGE_BYTES: Final = 1000  # Meta: the text is "UTF-8 and 1000 bytes or less"
 MEDIA: Final = frozenset({"image", "video", "audio", "file"})
 CONNECT_RETRIES: Final = 2  # D9: a request that never reached Meta is tried twice more
 TOKEN_ERROR: Final = 190  # Meta's code for an expired or revoked token
 _PREFIX: Final = "sha256="
-
-
-class TokenRefreshError(RuntimeError):
-    """Meta gave no new token. The message is a status, never a token."""
 
 
 def signature_ok(app_secret: str, body: bytes, header: str | None) -> bool:
@@ -117,31 +114,57 @@ def _time(value: object) -> datetime | None:
         return None
 
 
+class PageToken:
+    """The Page's token, asked of Meta once with the system user's: the Send API and the Page's
+    subscription take only a Page token. A system user's Page token does not expire."""
+
+    def __init__(
+        self, client: httpx2.AsyncClient, system_token: str, *, page_id: str, api_version: str
+    ) -> None:
+        self._client = client
+        self._system_token = system_token
+        self._url = f"{GRAPH}/{api_version}/{page_id}"
+        self._value: str | None = None
+
+    async def get(self) -> str:
+        if self._value is None:
+            response = await self._client.get(
+                self._url, params={"fields": "access_token"}, headers=_bearer(self._system_token)
+            )
+            value = _json(response).get("access_token") if response.status_code == 200 else None
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"Meta gave no Page token (status {response.status_code})")
+            self._value = value
+        return self._value
+
+
 class InstagramSender:
-    """The sending side (a `Sender`): the Send API, with the account's token."""
+    """The sending side (a `Sender`): the Send API, through the Page, with the Page's token."""
 
     name = INSTAGRAM
     max_message_bytes = MAX_MESSAGE_BYTES
 
     def __init__(
         self,
-        token: Callable[[], str],
+        token: Callable[[], Awaitable[str]],
         client: httpx2.AsyncClient,
         *,
-        account_id: str,
+        page_id: str,
         api_version: str,
     ) -> None:
         self._token = token
         self._client = client
-        self._url = f"{GRAPH}/{api_version}/{account_id}/messages"
+        self._url = f"{GRAPH}/{api_version}/{page_id}/messages"
 
     async def send(self, user_id: str, text: str, kind: str = "reply") -> SendOutcome:
+        try:
+            headers = _bearer(await self._token())
+        except (ValueError, httpx2.HTTPError):
+            return SendOutcome(SendStatus.FAILED, reason="page_token")  # nothing was sent
         body = {"recipient": {"id": user_id}, "message": {"text": text}}
         for _ in range(CONNECT_RETRIES + 1):
             try:
-                response = await self._client.post(
-                    self._url, json=body, headers=_bearer(self._token())
-                )
+                response = await self._client.post(self._url, json=body, headers=headers)
             except (httpx2.ConnectError, httpx2.ConnectTimeout, httpx2.PoolTimeout):
                 continue  # the request never left: it is safe to try again
             except httpx2.HTTPError:
@@ -179,38 +202,34 @@ def _bearer(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def refresh_token(client: httpx2.AsyncClient, token: str) -> str:
-    """A new 60-day token for the current one (Meta takes tokens at least 24 hours old)."""
-    response = await client.get(
-        f"{GRAPH}/refresh_access_token",
-        params={"grant_type": "ig_refresh_token", "access_token": token},
-    )
-    fresh = _json(response).get("access_token") if response.status_code == 200 else None
-    if not isinstance(fresh, str) or not fresh:
-        raise TokenRefreshError(f"status {response.status_code}")
-    return fresh
-
-
-async def account_user_id(
+async def linked_accounts(
     client: httpx2.AsyncClient, token: str, api_version: str
-) -> tuple[str, str]:
-    """The ID the account's webhooks carry (`user_id` of /me), and its username."""
+) -> list[tuple[str, str, str]]:
+    """The Pages the token reaches that have an Instagram account: the Page's ID, the ID the
+    account's webhooks carry, and the account's username."""
     response = await client.get(
-        f"{GRAPH}/{api_version}/me", params={"fields": "user_id,username"}, headers=_bearer(token)
-    )
-    answer = _json(response)
-    user_id, username = answer.get("user_id"), answer.get("username")
-    if response.status_code != 200 or not isinstance(user_id, str | int):
-        raise ValueError(f"Instagram did not name the account (status {response.status_code})")
-    return str(user_id), str(username or "")
-
-
-async def subscribe(client: httpx2.AsyncClient, token: str, api_version: str) -> None:
-    """Subscribe the account to this app's `messages` webhooks."""
-    response = await client.post(
-        f"{GRAPH}/{api_version}/me/subscribed_apps",
-        params={"subscribed_fields": "messages"},
+        f"{GRAPH}/{api_version}/me/accounts",
+        params={"fields": "id,instagram_business_account{id,username}"},
         headers=_bearer(token),
     )
+    if response.status_code != 200:
+        raise ValueError(f"Meta listed no Pages (status {response.status_code})")
+    found = []
+    for page in _mappings(_json(response).get("data")):
+        account = page.get("instagram_business_account")
+        if isinstance(account, Mapping) and _id(page) and _id(account):
+            found.append((_id(page), _id(account), str(account.get("username") or "")))
+    return found
+
+
+async def subscribe(
+    client: httpx2.AsyncClient, page_token: str, page_id: str, api_version: str
+) -> None:
+    """Subscribe the Page, and so its Instagram account, to this app's `messages` webhooks."""
+    response = await client.post(
+        f"{GRAPH}/{api_version}/{page_id}/subscribed_apps",
+        params={"subscribed_fields": "messages"},
+        headers=_bearer(page_token),
+    )
     if response.status_code != 200 or _json(response).get("success") is not True:
-        raise ValueError(f"Instagram did not subscribe the account (status {response.status_code})")
+        raise ValueError(f"Meta did not subscribe the Page (status {response.status_code})")

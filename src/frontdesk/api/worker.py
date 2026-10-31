@@ -7,18 +7,16 @@ import logging
 from datetime import timedelta
 from typing import Final
 
-import httpx2
 from fastapi import APIRouter, Response
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from frontdesk.channels.dispatch import DispatchError
 from frontdesk.channels.inbox import BURST, valid_key
-from frontdesk.channels.instagram import INSTAGRAM, TokenRefreshError
+from frontdesk.channels.instagram import INSTAGRAM
 from frontdesk.channels.runner import Outcome
 from frontdesk.channels.wiring import Worker
-from frontdesk.observability.logs import log_alert, log_event
-from frontdesk.secrets import SecretUnavailableError
+from frontdesk.observability.logs import log_event
 
 logger = logging.getLogger(__name__)
 # The outcomes after which a message may still wait: younger than the burst, or come during a turn.
@@ -76,15 +74,5 @@ def worker_router(worker: Worker) -> APIRouter:
             )
         holds = await run_in_threadpool(worker.purge_bookings)
         return JSONResponse({"messages": messages, "conversations": conversations, "holds": holds})
-
-    @router.post("/refresh-token")
-    async def refresh_token() -> Response:
-        try:
-            await worker.refresh()
-        except (TokenRefreshError, SecretUnavailableError, httpx2.HTTPError) as error:
-            log_alert(logger, "channel.token_refresh_failed", reason=type(error).__name__)
-            return Response(status_code=502)
-        log_event(logger, "channel.token_refreshed")
-        return Response(status_code=200)
 
     return router

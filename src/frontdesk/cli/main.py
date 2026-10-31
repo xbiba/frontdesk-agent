@@ -513,13 +513,14 @@ def knowledge_publish(
 
 @instagram_app.command("account")
 def instagram_account(env_file: EnvFile) -> None:
-    """Print the ID the account's webhooks carry (FRONTDESK_INSTAGRAM_ACCOUNT_ID) and its name."""
+    """Print the Page (FRONTDESK_INSTAGRAM_PAGE_ID), the ID its account's webhooks carry
+    (FRONTDESK_INSTAGRAM_ACCOUNT_ID) and the account's name."""
     raise typer.Exit(asyncio.run(show_account(load_settings(env_file))))
 
 
 @instagram_app.command("subscribe")
 def instagram_subscribe(env_file: EnvFile) -> None:
-    """Subscribe the account to this app's message webhooks."""
+    """Subscribe the Page, and so its account, to this app's message webhooks."""
     raise typer.Exit(asyncio.run(subscribe_account(load_settings(env_file))))
 
 

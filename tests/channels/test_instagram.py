@@ -1,5 +1,5 @@
-"""Instagram (M4): the signature, the events of a delivery and the Send API, on payloads shaped like
-Meta's documentation, with synthetic IDs and texts."""
+"""Instagram (M4): the signature, the events of a delivery and the Send API through the account's
+Facebook Page, on payloads shaped like Meta's documentation, with synthetic IDs and texts."""
 
 import hashlib
 import hmac
@@ -11,13 +11,11 @@ import httpx2
 import pytest
 
 from frontdesk.channels.instagram import (
-    GRAPH,
     InstagramSender,
     InstagramWebhook,
-    TokenRefreshError,
-    account_user_id,
+    PageToken,
+    linked_accounts,
     parse_events,
-    refresh_token,
     signature_ok,
     subscribe,
 )
@@ -28,7 +26,8 @@ ACCOUNT = "17841400000000001"
 PERSON = "1234567890123456"
 WHEN = 1760430000000
 SENT_AT = datetime.fromtimestamp(WHEN / 1000, UTC)
-URL = f"{GRAPH}/v25.0/{ACCOUNT}/messages"
+PAGE = "1482870000000001"
+URL = f"https://graph.facebook.com/v25.0/{PAGE}/messages"
 
 
 def _sign(body: bytes, secret: str = SECRET) -> str:
@@ -148,12 +147,16 @@ def test_a_delivery_that_is_not_instagrams_raises(body: bytes) -> None:
         parse_events(body)
 
 
+async def _page_token() -> str:
+    return "t0ken"
+
+
 def _sender(handler: Any) -> InstagramSender:
     client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
-    return InstagramSender(lambda: "t0ken", client, account_id=ACCOUNT, api_version="v25.0")
+    return InstagramSender(_page_token, client, page_id=PAGE, api_version="v25.0")
 
 
-async def test_a_text_is_sent_to_the_person_with_the_token() -> None:
+async def test_a_text_is_sent_to_the_person_through_the_page_with_its_token() -> None:
     seen: list[httpx2.Request] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -225,39 +228,74 @@ async def test_meta_s_answers_become_outcomes(
     assert await sender.send(PERSON, "ciao") == expected
 
 
-async def test_the_token_is_refreshed() -> None:
+async def test_a_send_without_the_page_s_token_fails_before_any_request() -> None:
+    seen: list[httpx2.Request] = []
+
+    async def refused() -> str:
+        raise ValueError("Meta gave no Page token (status 400)")
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        return httpx2.Response(200, json={"message_id": "out_1"})
+
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    sender = InstagramSender(refused, client, page_id=PAGE, api_version="v25.0")
+    assert await sender.send(PERSON, "ciao") == SendOutcome(SendStatus.FAILED, reason="page_token")
+    assert seen == []
+
+
+async def test_the_page_s_token_is_asked_once_with_the_system_user_s_token() -> None:
     seen: list[httpx2.Request] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request)
-        return httpx2.Response(200, json={"access_token": "new", "expires_in": 5183944})
+        return httpx2.Response(200, json={"access_token": "page-t0ken", "id": PAGE})
 
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
-        assert await refresh_token(client, "old") == "new"
+        token = PageToken(client, "system-t0ken", page_id=PAGE, api_version="v25.0")
+        assert (await token.get(), await token.get()) == ("page-t0ken", "page-t0ken")
     (request,) = seen
-    assert request.url.path == "/refresh_access_token"
-    assert request.url.params["grant_type"] == "ig_refresh_token"
+    assert str(request.url) == f"https://graph.facebook.com/v25.0/{PAGE}?fields=access_token"
+    assert request.headers["authorization"] == "Bearer system-t0ken"
 
 
-async def test_a_refused_refresh_names_only_the_status() -> None:
+async def test_a_refused_page_token_names_only_the_status() -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(400, json={"error": {"message": "the token old is expired"}})
+        return httpx2.Response(400, json={"error": {"message": "the token system-t0ken is bad"}})
 
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
-        with pytest.raises(TokenRefreshError, match=r"^status 400$"):
-            await refresh_token(client, "old")
+        token = PageToken(client, "system-t0ken", page_id=PAGE, api_version="v25.0")
+        with pytest.raises(ValueError, match=r"^Meta gave no Page token \(status 400\)$"):
+            await token.get()
 
 
-async def test_the_account_id_comes_from_me() -> None:
+async def test_the_accounts_come_from_the_pages_they_are_linked_to() -> None:
+    other = {"id": "1482870000000002", "name": "No Instagram"}
+    linked = {
+        "id": PAGE,
+        "name": "Demo",
+        "instagram_business_account": {"id": ACCOUNT, "username": "demo_test"},
+    }
+
     def handler(request: httpx2.Request) -> httpx2.Response:
-        assert request.url.path == "/v25.0/me"
-        return httpx2.Response(200, json={"user_id": ACCOUNT, "username": "demo_test", "id": "9"})
+        assert request.url.path == "/v25.0/me/accounts"
+        assert "instagram_business_account" in request.url.params["fields"]
+        return httpx2.Response(200, json={"data": [other, linked]})
 
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
-        assert await account_user_id(client, "t", "v25.0") == (ACCOUNT, "demo_test")
+        assert await linked_accounts(client, "t", "v25.0") == [(PAGE, ACCOUNT, "demo_test")]
 
 
-async def test_the_account_is_subscribed_to_messages() -> None:
+async def test_a_refused_account_list_names_only_the_status() -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(400, json={"error": {"code": 190}})
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
+        with pytest.raises(ValueError, match=r"^Meta listed no Pages \(status 400\)$"):
+            await linked_accounts(client, "t", "v25.0")
+
+
+async def test_the_page_is_subscribed_to_messages_with_its_token() -> None:
     seen: list[httpx2.Request] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -265,6 +303,17 @@ async def test_the_account_is_subscribed_to_messages() -> None:
         return httpx2.Response(200, json={"success": True})
 
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
-        await subscribe(client, "t", "v25.0")
-    assert seen[0].url.path == "/v25.0/me/subscribed_apps"
-    assert seen[0].url.params["subscribed_fields"] == "messages"
+        await subscribe(client, "page-t0ken", PAGE, "v25.0")
+    (request,) = seen
+    assert (request.method, request.url.path) == ("POST", f"/v25.0/{PAGE}/subscribed_apps")
+    assert request.url.params["subscribed_fields"] == "messages"
+    assert request.headers["authorization"] == "Bearer page-t0ken"
+
+
+async def test_a_refused_subscription_names_only_the_status() -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(403, json={"error": {"message": "the token page-t0ken is bad"}})
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
+        with pytest.raises(ValueError, match=r"^Meta did not subscribe the Page \(status 403\)$"):
+            await subscribe(client, "page-t0ken", PAGE, "v25.0")
