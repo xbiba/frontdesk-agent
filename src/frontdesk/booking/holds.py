@@ -18,13 +18,14 @@ from typing import Any, Final, cast
 
 from sqlalchemy import ColumnElement, CursorResult, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import Range
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from frontdesk.db.models import BookingHold
 
 HOLD_LIFETIME: Final = timedelta(minutes=15)
 _EXCLUSION_VIOLATION: Final = "23P01"
+_DEADLOCK_DETECTED: Final = "40P01"
 
 
 class RequestStatus(StrEnum):
@@ -57,8 +58,8 @@ def hold(
     end: datetime,
     now: datetime,
 ) -> uuid.UUID | None:
-    """A new hold on the slot, or None when it overlaps another of the doctor's. The conversation's
-    earlier hold and every expired hold are dropped first."""
+    """A new hold on the slot, or None when it overlaps another of the doctor's or loses a race for
+    that time. The conversation's earlier hold and every expired hold are dropped first."""
     session.execute(
         delete(BookingHold).where(
             BookingHold.status == "held",
@@ -82,6 +83,12 @@ def hold(
             session.add(row)
     except IntegrityError as error:
         if getattr(error.orig, "sqlstate", None) != _EXCLUSION_VIOLATION:
+            raise
+        return None
+    except OperationalError as error:
+        # Two holds inserted on one time at the same instant can wait on each other in the exclusion
+        # check, and Postgres then cancels one of them: that one lost the race, as with an overlap.
+        if getattr(error.orig, "sqlstate", None) != _DEADLOCK_DETECTED:
             raise
         return None
     return hold_id
