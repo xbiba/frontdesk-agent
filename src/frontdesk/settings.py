@@ -85,6 +85,7 @@ class Settings(BaseSettings):
     # D13). Token, app secret, verify token and pairing code come from the environment in
     # development only, like cal.com's key; from Secret Manager in production.
     instagram_account_id: str | None = None
+    instagram_page_id: str | None = None
     instagram_mode: InstagramMode = InstagramMode.TESTERS
     instagram_off: bool = False
     instagram_api_version: str = "v25.0"

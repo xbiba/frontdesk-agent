@@ -37,3 +37,8 @@ If a channel needs behaviour the engine cannot express through features, add a f
 - The policy is `ChannelPolicy` in the business pack (`channels.instagram`), with switches for chat bookings, order status and orientation. The deployment builds the turn from a copy of the pack with those features off (`frontdesk.channels.policy.narrow`); a policy cannot turn anything on.
 - The adapter is two parts: a webhook reader (signature, events) and a sender (`frontdesk.channels.messages`).
 - Fixed texts per channel are postponed: Instagram uses the business's texts. They become per channel with the website.
+
+## Amendment (2026-10-31, Instagram with Facebook Login)
+- Meta no longer offers the Instagram API with Instagram Login to new apps, and its "Unified login" setup did not load for a new app. Instagram's adapter now uses the Instagram API with Facebook Login: the account is linked to a Facebook Page, webhooks keep the same shape, and texts go out through the Page (`graph.facebook.com/<version>/<page>/messages`).
+- The token is the business portfolio's system-user token, which does not expire, so the weekly renewal and its `/tasks/refresh-token` route are gone. The worker asks Meta once for the Page's token with it (`PageToken`), because the Send API and the Page's subscription take only a Page token.
+- A deployment names its Page (`FRONTDESK_INSTAGRAM_PAGE_ID`) next to the account. `frontdesk instagram account` prints both, and `frontdesk instagram subscribe` subscribes the Page to the `messages` webhooks.

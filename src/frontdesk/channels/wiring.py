@@ -4,8 +4,7 @@ turn. WhatsApp is the reception's: its numbers come from the staff list, and it 
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -21,7 +20,7 @@ from frontdesk.channels.whatsapp import WHATSAPP, WhatsAppWebhook
 from frontdesk.db.engine import make_engine, make_session_factory
 from frontdesk.model_gateway.google_tokens import google_token_source
 from frontdesk.model_gateway.routes import DataClass, require_route
-from frontdesk.secrets import CLOUD_SCOPE, SECRET_IDS, add_secret_version, read_secret
+from frontdesk.secrets import CLOUD_SCOPE, SECRET_IDS, read_secret
 from frontdesk.settings import InstagramMode, Settings
 from frontdesk.tenancy.loader import load_pack
 from frontdesk.tenancy.pack import BusinessPack, ChannelPolicy
@@ -57,21 +56,7 @@ class Worker:
     inbox: Mapping[str, Inbox]
     requests: Requests | None
     dispatcher: Dispatcher
-    refresh: Callable[[], Awaitable[None]]
     purge_bookings: Callable[[], int]
-
-
-class CurrentToken:
-    """The token the worker sends with. The weekly renewal replaces it (M4 design D3)."""
-
-    def __init__(self, value: str) -> None:
-        self._value = value
-
-    def get(self) -> str:
-        return self._value
-
-    def replace(self, value: str) -> None:
-        self._value = value
 
 
 def channel_secret(settings: Settings, name: str) -> str:
@@ -151,7 +136,7 @@ def build_ingresses(settings: Settings) -> tuple[Ingress, ...]:
 def build_worker(settings: Settings) -> Worker:
     # Only the worker loads the model, the embedder and the engine's turn.
     from frontdesk.booking.holds import purge
-    from frontdesk.channels.instagram import InstagramSender, refresh_token
+    from frontdesk.channels.instagram import InstagramSender, PageToken
     from frontdesk.channels.policy import narrow
     from frontdesk.channels.requests import Requests, only_buttons
     from frontdesk.channels.runner import Runner
@@ -166,20 +151,20 @@ def build_worker(settings: Settings) -> Worker:
     # Testers write test messages; everyone else's are patient data, refused by an unapproved route.
     data_class = DataClass.EVALUATION if testers else DataClass.PATIENT_DERIVED
     runtime = build_turn_runtime(replace(deployment, pack=pack), data_class=data_class)
-    account = _account(settings)
-    token = CurrentToken(channel_secret(settings, "instagram_token"))
+    account, page = _account(settings), instagram_page(settings)
     client = httpx2.AsyncClient(timeout=httpx2.Timeout(15.0, connect=5.0))
+    token = PageToken(
+        client,
+        channel_secret(settings, "instagram_token"),
+        page_id=page,
+        api_version=settings.instagram_api_version,
+    )
     sender = InstagramSender(
-        token.get, client, account_id=account, api_version=settings.instagram_api_version
+        token.get, client, page_id=page, api_version=settings.instagram_api_version
     )
 
     async def turn(text: str, state: ConversationState) -> tuple[TurnResult, ConversationState]:
         return await handle_message(text, state, runtime)
-
-    async def refresh() -> None:
-        fresh = await refresh_token(client, token.get())
-        await asyncio.to_thread(_store_token, settings, fresh)
-        token.replace(fresh)
 
     def purge_bookings() -> int:
         with business_session(deployment.session_factory, pack.id) as session:
@@ -255,7 +240,6 @@ def build_worker(settings: Settings) -> Worker:
         inbox=inboxes,
         requests=requests,
         dispatcher=dispatcher,
-        refresh=refresh,
         purge_bookings=purge_bookings,
     )
 
@@ -271,6 +255,14 @@ def _phone_number(settings: Settings) -> str:
             "FRONTDESK_WHATSAPP_PHONE_NUMBER_ID is not set: Meta's WhatsApp > API Setup shows it"
         )
     return settings.whatsapp_phone_number_id
+
+
+def instagram_page(settings: Settings) -> str:
+    if not settings.instagram_page_id:
+        raise ValueError(
+            "FRONTDESK_INSTAGRAM_PAGE_ID is not set: `frontdesk instagram account` prints it"
+        )
+    return settings.instagram_page_id
 
 
 def _account(settings: Settings) -> str:
@@ -295,14 +287,3 @@ def _dispatcher(settings: Settings) -> CloudTasksDispatcher:
         client=httpx2.AsyncClient(timeout=10.0),
         now=_utc_now,
     )
-
-
-def _store_token(settings: Settings, value: str) -> None:
-    with httpx2.Client(timeout=10.0) as client:
-        add_secret_version(
-            settings,
-            "instagram_token",
-            value,
-            token=google_token_source([CLOUD_SCOPE], impersonate=None),
-            client=client,
-        )
