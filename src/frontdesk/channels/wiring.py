@@ -1,6 +1,7 @@
 """The channels of one deployment (M4, ADR-0011; WhatsApp W1): the webhook's part and the worker's
 part, built from the settings. The webhook's part loads nothing of the model, the embedder or the
-turn. WhatsApp is the reception's: its numbers come from the staff list, and it runs no model."""
+turn. WhatsApp is the reception's: its numbers come from the staff list, and it runs no model. The
+site's chat (2026-11-07) answers anyone on the sites the pack lists, with its own limits."""
 
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ from frontdesk.channels.inbox import Inbox
 from frontdesk.channels.instagram import INSTAGRAM, InstagramWebhook
 from frontdesk.channels.messages import WebhookReader
 from frontdesk.channels.staff import Staff, read_staff
+from frontdesk.channels.web import WEB, WebReplies
 from frontdesk.channels.whatsapp import WHATSAPP, WhatsAppWebhook
 from frontdesk.db.engine import make_engine, make_session_factory
 from frontdesk.model_gateway.google_tokens import google_token_source
@@ -23,11 +25,12 @@ from frontdesk.model_gateway.routes import DataClass, require_route
 from frontdesk.secrets import CLOUD_SCOPE, SECRET_IDS, read_secret
 from frontdesk.settings import InstagramMode, Settings
 from frontdesk.tenancy.loader import load_pack
-from frontdesk.tenancy.pack import BusinessPack, ChannelPolicy
+from frontdesk.tenancy.pack import BusinessPack, ChannelPolicy, WebChannel
 
 if TYPE_CHECKING:
     from frontdesk.channels.requests import Requests
     from frontdesk.channels.runner import Runner
+    from frontdesk.composition import Deployment
     from frontdesk.conversation.state import ConversationState
     from frontdesk.conversation.turn import TurnResult
 
@@ -44,6 +47,18 @@ class Ingress:
     inbox: Inbox
     dispatcher: Dispatcher
     verify_token: str
+    off: bool
+
+
+@dataclass(frozen=True)
+class WebIngress:
+    """What the site's routes need: the pack's web section and contacts, the inbox, the replies."""
+
+    channel: WebChannel
+    pack: BusinessPack
+    inbox: Inbox
+    replies: WebReplies
+    dispatcher: Dispatcher
     off: bool
 
 
@@ -135,6 +150,87 @@ def build_ingresses(settings: Settings) -> tuple[Ingress, ...]:
         off=settings.whatsapp_off,
     )
     return (*found, whatsapp)
+
+
+def build_web_ingress(
+    settings: Settings, *, dispatcher: Dispatcher | None = None
+) -> WebIngress | None:
+    """The site's ingress when the pack lists the channel (`channels.web`). In tester mode it
+    answers only the sessions that wrote Instagram's pairing code (design §4)."""
+    pack = load_pack(settings.require_business_pack())
+    if pack.channels.web is None:
+        return None
+    testers = settings.web_mode is InstagramMode.TESTERS
+    if not testers:
+        require_route(settings.model_route, DataClass.PATIENT_DERIVED)
+    factory = make_session_factory(make_engine(settings.database_url))
+    inbox = Inbox(
+        factory,
+        business_id=pack.id,
+        channel=WEB,
+        account_id=pack.id,
+        testers_only=testers,
+        pairing_code=channel_secret(settings, "instagram_pairing_code") if testers else None,
+        now=_utc_now,
+    )
+    return WebIngress(
+        channel=pack.channels.web,
+        pack=pack,
+        inbox=inbox,
+        replies=WebReplies(factory, business_id=pack.id),
+        dispatcher=dispatcher or _dispatcher(settings),
+        off=settings.web_off,
+    )
+
+
+def build_web_worker(
+    settings: Settings, deployment: Deployment, *, data_class: DataClass | None = None
+) -> tuple[Runner, Inbox]:
+    """The site's runner and inbox: the pack narrowed by the web policy (no booking, no order),
+    the web Sender, the limits of design §3. Testers write test messages; everyone else's are
+    patient data, unless the caller says otherwise (a try on this computer)."""
+    from frontdesk.channels.policy import narrow
+    from frontdesk.channels.runner import ChannelLimits, Runner
+    from frontdesk.channels.web import MESSAGES_PER_SESSION, REPEATS, TURNS_A_DAY, WebSender
+    from frontdesk.composition import build_turn_runtime
+    from frontdesk.conversation.turn import handle_message
+
+    web = deployment.pack.channels.web
+    if web is None:
+        raise ValueError(
+            f"the pack of {deployment.pack.id} does not enable the site (channels.web)"
+        )
+    testers = settings.web_mode is InstagramMode.TESTERS
+    if data_class is None:
+        data_class = DataClass.EVALUATION if testers else DataClass.PATIENT_DERIVED
+    pack = narrow(deployment.pack, web.policy())
+    runtime = build_turn_runtime(replace(deployment, pack=pack), data_class=data_class)
+
+    async def turn(text: str, state: ConversationState) -> tuple[TurnResult, ConversationState]:
+        return await handle_message(text, state, runtime)
+
+    runner = Runner(
+        deployment.session_factory,
+        pack=pack,
+        channel=WEB,
+        sender=WebSender(),
+        turn=turn,
+        now=deployment.now,
+        off=settings.web_off,
+        limits=ChannelLimits(
+            per_conversation=MESSAGES_PER_SESSION, repeats=REPEATS, turns_a_day=TURNS_A_DAY
+        ),
+    )
+    inbox = Inbox(
+        deployment.session_factory,
+        business_id=pack.id,
+        channel=WEB,
+        account_id=pack.id,
+        testers_only=testers,
+        pairing_code=None,
+        now=deployment.now,
+    )
+    return runner, inbox
 
 
 def build_worker(settings: Settings) -> Worker:
@@ -241,6 +337,8 @@ def build_worker(settings: Settings) -> Worker:
             fixed_reply=only_buttons(settings.whatsapp_staff_language),
         )
         inboxes[WHATSAPP] = staff_inbox
+    if deployment.pack.channels.web is not None:
+        runners[WEB], inboxes[WEB] = build_web_worker(settings, deployment)
     return Worker(
         runners=runners,
         inbox=inboxes,

@@ -124,6 +124,10 @@ class Settings(BaseSettings):
     whatsapp_app_secret: SecretStr | None = None
     whatsapp_verify_token: SecretStr | None = None
     whatsapp_staff: SecretStr | None = None
+    # The chat on the business's site (2026-11-07): whom it answers, testers with Instagram's
+    # pairing code until the privacy notice names the model's provider, and its switch.
+    web_mode: InstagramMode = InstagramMode.TESTERS
+    web_off: bool = False
     # Cloud Tasks (ADR-0011): the queue, the worker it calls, the identity it calls the worker with.
     tasks_queue: str | None = None
     worker_url: str | None = None
