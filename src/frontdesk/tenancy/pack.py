@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Iterable
 from datetime import date
@@ -129,6 +130,46 @@ class Channels(Frozen):
     whatsapp: ChannelPolicy | None = None
 
 
+_ADDRESS: Final = re.compile(r"[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+")
+
+
+def _address(value: str) -> str:
+    """An email address, lower case; refused unless it looks like one."""
+    found = _ADDRESS.fullmatch(value.strip())
+    if found is None:
+        raise ValueError(f"not an email address: {value!r}")
+    return found.group(0).lower()
+
+
+def address_of(sender: str) -> str:
+    """The address in a From header ("Name <a@b.c>" or "a@b.c"), lower case; "" when none."""
+    found = _ADDRESS.search(sender)
+    return found.group(0).lower() if found else ""
+
+
+Address = Annotated[str, AfterValidator(_address)]
+
+
+class EmailChannel(Frozen):
+    """Reply drafts for the business's mailbox (email drafts, 2026-11-07). The engine never sends:
+    it writes a draft in the conversation, for a person to check and send.
+
+    Tester mode, the default, drafts only for the senders in `testers`: a real mailbox starts there
+    and opens to everyone (`testers_only: false`) when the business's privacy notice names the
+    model's provider (design §9, decision 3)."""
+
+    mailbox: Address
+    signature: NonBlankStr = "[FIRMA]"
+    # The words of the placeholder for what the information does not say: "[DA COMPLETARE: ...]".
+    todo: NonBlankStr = "DA COMPLETARE"
+    testers_only: bool = True
+    testers: list[Address] = Field(default_factory=list)
+
+    def drafts_for(self, sender: str) -> bool:
+        """Whether a message from `sender` (a From header) may get a draft."""
+        return not self.testers_only or address_of(sender) in self.testers
+
+
 class OpeningHours(Frozen):
     days: str = Field(pattern=_DAYS)
     opens: str = Field(pattern=_TIME)
@@ -239,6 +280,7 @@ class BusinessPack(Frozen):
     features: Features = Features()
     integrations: Integrations = Integrations()
     channels: Channels = Channels()
+    email: EmailChannel | None = None
     fixed_texts: dict[Language, dict[FixedTextKey, str]]
     location: Location
     services: list[Service] = Field(default_factory=list)
