@@ -493,6 +493,12 @@ def emergency_rule(text: str) -> str | None:
     return "emergency" if _in_any_form(EMERGENCY, _normal_forms(text)) else None
 
 
+def clinical_rule(text: str) -> str | None:
+    """The rule that finds a request for medical advice in `text`, or None: only that pattern runs,
+    as for `emergency_rule`, so that a long email is read without the personal-data patterns."""
+    return "clinical_advice" if _in_any_form(CLINICAL_ADVICE, _normal_forms(text)) else None
+
+
 def rule_text_length(text: str) -> int:
     """The length of the longest form of `text` a rule reads: as written, folded (the phone and
     email patterns) or normalized (the others), each of the last two with invisible characters

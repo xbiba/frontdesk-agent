@@ -8,6 +8,7 @@ from frontdesk.safety.normalize import fold, normalize, space_invisible
 from frontdesk.safety.rules import (
     PersonalField,
     Verdict,
+    clinical_rule,
     contains_clinical_terms,
     contains_diagnostic_language,
     emergency_rule,
@@ -786,3 +787,16 @@ def test_the_promise_rule_takes_time_linear_in_the_length(text: str) -> None:
     started = time.perf_counter()
     assert promise_phrase(text) is None
     assert time.perf_counter() - started < LINEAR_TIME_LIMIT_SECONDS
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Che farmaco mi consigliate per il mal di schiena?", "clinical_advice"),
+        ("Quanto costa una visita ortopedica?", None),
+    ],
+)
+def test_clinical_rule_alone(text: str, expected: str | None) -> None:
+    assert clinical_rule(text) == expected
+    if expected:
+        assert evaluate(text).rule == expected

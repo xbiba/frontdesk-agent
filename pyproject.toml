@@ -106,6 +106,7 @@ source_modules = [
   "frontdesk.booking",
   "frontdesk.conversation",
   "frontdesk.db",
+  "frontdesk.email",
   "frontdesk.knowledge",
   "frontdesk.live_eval",
   "frontdesk.model_gateway",

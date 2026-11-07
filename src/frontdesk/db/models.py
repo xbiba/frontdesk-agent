@@ -197,3 +197,20 @@ class ChannelTester(Base):
     channel: Mapped[str] = mapped_column(String(16), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class EmailHandled(Base):
+    """A message of the mailbox the email pass has handled (migration 0009): its IDs, what was
+    done, the day, the cost. No text, no address: the sender is a keyed hash, for the limit of
+    drafts per sender and day. Rows go after 30 days."""
+
+    __tablename__ = "email_handled"
+
+    business_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    message_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    outcome: Mapped[str] = mapped_column(String(24))
+    sender_key: Mapped[str] = mapped_column(String(64))
+    day: Mapped[date] = mapped_column(Date)
+    handled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), default=Decimal(0))
