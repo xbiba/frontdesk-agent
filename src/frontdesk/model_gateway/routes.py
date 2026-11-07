@@ -19,8 +19,10 @@ class DataClass(StrEnum):
     EVALUATION = "evaluation"
 
 
-Provider = Literal["offline", "anthropic-vertex", "google-vertex", "google-vertex-embedding"]
-CHAT_PROVIDERS: Final = frozenset({"anthropic-vertex", "google-vertex"})
+Provider = Literal[
+    "offline", "anthropic", "anthropic-vertex", "google-vertex", "google-vertex-embedding"
+]
+CHAT_PROVIDERS: Final = frozenset({"anthropic", "anthropic-vertex", "google-vertex"})
 
 
 @dataclass(frozen=True)
@@ -117,6 +119,22 @@ ROUTES: Final[dict[str, ModelRoute]] = {
         request_timeout_seconds=15.0,
         fallback="vertex-eu-gemini-flash",
         second_try="vertex-eu-gemini-flash",
+    ),
+    # Claude Haiku 5.5 on Anthropic's own API (provider "anthropic", the key
+    # frontdesk-anthropic-api-key), for the email drafts and the site widget. Approved for both data
+    # classes by Albi on 2026-11-07 (ADR-0004, amendment of that day), on Anthropic's "API and data
+    # retention" page read that day: conversation content is not retained by default, Covered Models
+    # (Fable, Mythos) excepted, and Haiku is not one; zero retention only by agreement with
+    # Anthropic; inference_geo is only us or global, so the text may be processed outside the EU and
+    # the business's privacy notice must say so. No fallback and no second try (Albi: everything on
+    # Haiku): a failed request ends the turn with the handoff. Effort stays at Haiku's default,
+    # medium; it takes no sampling settings and no thinking budget.
+    "anthropic-haiku-5-5": ModelRoute(
+        route_id="anthropic-haiku-5-5",
+        provider="anthropic",
+        model_name="claude-haiku-5-5",
+        region=None,
+        approved_for=frozenset({DataClass.PATIENT_DERIVED, DataClass.EVALUATION}),
     ),
     # The embedding candidates of the M3 experiment (design §4.5). Neither is served on the eu
     # multi-region; both are on europe-west1 (Belgium).

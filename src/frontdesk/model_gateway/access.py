@@ -16,12 +16,20 @@ from collections.abc import Mapping
 from contextlib import suppress
 from typing import Final
 
+import anthropic
 import httpx2
+from anthropic import AsyncAnthropic
 from google.auth import exceptions as auth_errors
 from google.genai import Client
 from google.genai import errors as genai_errors
 
-from frontdesk.model_gateway.factory import VERTEX_HOSTS, google_client, pinned_location
+from frontdesk.model_gateway.factory import (
+    ANTHROPIC_KEY_NAME,
+    VERTEX_HOSTS,
+    anthropic_client,
+    google_client,
+    pinned_location,
+)
 from frontdesk.model_gateway.routes import ModelRoute
 
 ENVIRONMENT_OVERRIDES: Final = (
@@ -79,6 +87,44 @@ async def check_route_access(
         if client is None:  # the one this call built is this call's to close
             with suppress(Exception):
                 await used.aio.aclose()
+
+
+async def check_anthropic_access(
+    route: ModelRoute, *, api_key: str | None, client: AsyncAnthropic | None = None
+) -> None:
+    """Anthropic's free CountTokens request, through the pinned client: it proves the key and the
+    model before the first paid call. A failure says what to do, never the key."""
+    used = client if client is not None else anthropic_client(api_key)
+    try:
+        await used.messages.count_tokens(
+            model=route.model_name, messages=[{"role": "user", "content": "ping"}]
+        )
+    except anthropic.APIStatusError as error:
+        raise _anthropic_refused(error.status_code, route) from None
+    except anthropic.APIConnectionError as error:
+        raise RouteAccessError(
+            f"the Anthropic API cannot be reached ({type(error).__name__}): check the network "
+            "connection, then try again"
+        ) from None
+    finally:
+        if client is None:
+            with suppress(Exception):
+                await used.close()
+
+
+def _anthropic_refused(status: int, route: ModelRoute) -> RouteAccessError:
+    if status in {401, 403}:
+        return RouteAccessError(
+            f"the Anthropic API refused the API key ({status}): check {ANTHROPIC_KEY_NAME} "
+            "(ANTHROPIC_API_KEY in development)"
+        )
+    if status == 404:
+        return RouteAccessError(
+            f"the Anthropic API does not serve {route.model_name} to this key (404)"
+        )
+    if status == 429 or status >= 500:
+        return RouteAccessError(f"the Anthropic API is not answering ({status}): try again later")
+    return RouteAccessError(f"the Anthropic API refused the access check ({status})")
 
 
 def explain_failure(

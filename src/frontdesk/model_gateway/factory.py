@@ -10,6 +10,7 @@ from typing import Final
 
 import certifi
 import httpx2
+from anthropic import AsyncAnthropic
 from google.genai import Client
 from google.genai.client import DebugConfig
 from google.genai.types import HttpOptions, HttpRetryOptions, ThinkingLevel
@@ -33,6 +34,9 @@ VERTEX_HOSTS: Final[Mapping[str, str]] = MappingProxyType(
     }
 )
 VERTEX_API_VERSION: Final = "v1"
+# Anthropic's own API, pinned: left to choose, the SDK reads ANTHROPIC_BASE_URL from the environment.
+ANTHROPIC_API_HOST: Final = "https://api.anthropic.com"
+ANTHROPIC_KEY_NAME: Final = "frontdesk-anthropic-api-key"
 # One turn may take 45 seconds in all (conversation.turn.TURN_TIMEOUT_SECONDS), which bounds the
 # requests of a turn and their retries. For Gemini, google-genai sends this value as the timeout of
 # each request, and that replaces the 5 second connect timeout of model_http_client (Claude's
@@ -59,6 +63,34 @@ def pinned_location(route: ModelRoute) -> str:
             f"model route '{route.route_id}' has no pinned endpoint for region {route.region!r}"
         )
     return route.region
+
+
+def require_pinned(route: ModelRoute) -> None:
+    """Refuse a chat route whose endpoint is not pinned: Anthropic's API is; a Vertex AI route needs
+    a location with a pinned host."""
+    if route.provider != "anthropic":
+        pinned_location(route)
+
+
+def endpoint_name(route: ModelRoute) -> str:
+    """Where a route's requests go, as a person reads it."""
+    if route.provider == "anthropic":
+        return "the Anthropic API"
+    return f"Vertex AI {pinned_location(route)}"
+
+
+def anthropic_client(api_key: str | None, timeout: float = MODEL_TIMEOUT_SECONDS) -> AsyncAnthropic:
+    """A client for Anthropic's own API, pinned to its host and given the key explicitly, so that
+    neither ANTHROPIC_BASE_URL nor ANTHROPIC_API_KEY in the environment moves it. One attempt: the
+    engine retries and meters each one. The key is never part of an error."""
+    if api_key is None or not api_key.strip():
+        raise ValueError(f"the Anthropic API key ({ANTHROPIC_KEY_NAME}) is not set")
+    return AsyncAnthropic(
+        api_key=api_key.strip(),
+        base_url=ANTHROPIC_API_HOST,
+        http_client=model_http_client(timeout),
+        max_retries=0,
+    )
 
 
 def _require_project(route: ModelRoute, gcp_project: str | None) -> str:
@@ -150,9 +182,15 @@ def google_client(route: ModelRoute, *, gcp_project: str) -> Client:
     )
 
 
-def build_live_model(route: ModelRoute, *, gcp_project: str | None) -> Model:
+def build_live_model(
+    route: ModelRoute, *, gcp_project: str | None, api_key: str | None = None
+) -> Model:
+    """The route's live model. `api_key` is Anthropic's, for the `anthropic` provider only."""
     if route.provider not in CHAT_PROVIDERS:
         raise ValueError(f"route '{route.route_id}' has no live model")
+    if route.provider == "anthropic":
+        claude = anthropic_client(api_key, route.request_timeout_seconds)
+        return AnthropicModel(route.model_name, provider=AnthropicProvider(anthropic_client=claude))
     location = pinned_location(route)
     project = _require_project(route, gcp_project)
     if route.provider == "google-vertex":
@@ -175,7 +213,9 @@ def build_live_model(route: ModelRoute, *, gcp_project: str | None) -> Model:
 def live_model_settings(route: ModelRoute, *, max_tokens: int) -> ModelSettings:
     """What a live model is asked with: a cap on output tokens and its provider's thinking lever.
 
-    Opus 5.5 always thinks adaptively and rejects sampling parameters; effort is its lever. Gemini
+    Opus 5.5 always thinks adaptively and rejects sampling parameters; effort is its lever. Haiku 5.5
+    thinks adaptively by default and refuses a thinking budget and sampling settings: its effort is
+    named, at its default, medium. Gemini
     counts its thinking in the output tokens and takes a thinking level: each route names the
     lowest its model accepts (Flash-Lite "minimal", 3.8 Flash "low"), so it thinks as little as
     it can.
@@ -185,6 +225,6 @@ def live_model_settings(route: ModelRoute, *, max_tokens: int) -> ModelSettings:
             max_tokens=max_tokens,
             google_thinking_config={"thinking_level": ThinkingLevel(route.thinking.upper())},
         )
-    if route.provider == "anthropic-vertex":
+    if route.provider in {"anthropic", "anthropic-vertex"}:
         return AnthropicModelSettings(max_tokens=max_tokens, anthropic_effort="medium")
     raise ValueError(f"route '{route.route_id}' has no live model")
