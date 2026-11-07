@@ -10,11 +10,11 @@ status, never a response body.
 from __future__ import annotations
 
 import base64
-import html
 import re
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from email.message import EmailMessage
+from html.parser import HTMLParser
 from typing import Any, Final
 from urllib.parse import quote
 
@@ -29,6 +29,7 @@ SCOPES: Final = ("https://www.googleapis.com/auth/gmail.modify",)
 TIMEOUT_SECONDS: Final = 15.0
 _SCREENED_HEADERS: Final = frozenset({"list-unsubscribe", "auto-submitted", "precedence"})
 MAX_BODY_CHARS: Final = 50_000  # what is read of a body at most; the pass reads 6,000 of it
+MAX_DECODED_CHARS: Final = 4 * MAX_BODY_CHARS  # what all the parts of a message decode at most
 
 
 class MailboxError(RuntimeError):
@@ -132,20 +133,29 @@ def _message(item: Mapping[str, Any]) -> MailMessage:
     headers = {
         str(h.get("name", "")).lower(): str(h.get("value", "")) for h in payload.get("headers", [])
     }
-    plain, rich, attachments = [], [], 0
+    plain: list[str] = []
+    rich: list[str] = []
+    attachments = 0
+    left = MAX_DECODED_CHARS  # what all the parts of a message may decode, together
     for part in _parts(payload):
         if part.get("filename"):
             attachments += 1
-        elif part.get("mimeType") == "text/plain":
-            plain.append(_decode(part))
-        elif part.get("mimeType") == "text/html":
-            rich.append(_strip_html(_decode(part)))
+            continue
+        kind = part.get("mimeType")
+        if kind not in {"text/plain", "text/html"} or left <= 0:
+            continue
+        text = _decode(part, left)  # capped before anything parses it (security review)
+        left -= len(text)
+        if kind == "text/plain":
+            plain.append(text)
+        else:
+            rich.append(_strip_html(text))
     internal = item.get("internalDate")
     return MailMessage(
         id=str(item["id"]),
         sender=headers.get("from", ""),
         subject=headers.get("subject", ""),
-        body=("\n".join(plain) if plain else "\n".join(rich))[:MAX_BODY_CHARS],
+        body=("\n".join(plain) if plain else "\n".join(rich)).strip()[:MAX_BODY_CHARS],
         message_id=headers.get("message-id", ""),
         references=headers.get("references", ""),
         reply_to=headers.get("reply-to", ""),
@@ -162,15 +172,50 @@ def _parts(part: Mapping[str, Any]) -> Iterator[Mapping[str, Any]]:
         yield from _parts(child)
 
 
-def _decode(part: Mapping[str, Any]) -> str:
-    data = part.get("body", {}).get("data", "")
+def _decode(part: Mapping[str, Any], limit: int) -> str:
+    """At most `limit` characters of the part's text: only as much base64 as that needs is
+    decoded."""
+    data = str(part.get("body", {}).get("data", ""))[: (limit // 3 + 1) * 4]
     if not data:
         return ""
     padded = data + "=" * (-len(data) % 4)
-    return base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace")
+    try:
+        raw = base64.urlsafe_b64decode(padded)
+    except ValueError:
+        return ""
+    return raw.decode("utf-8", errors="replace")[:limit]
+
+
+class _Text(HTMLParser):
+    """The text of an HTML part, without its scripts and styles: one linear pass."""
+
+    _SKIPPED: Final = frozenset({"script", "style", "head", "title"})
+    _BREAKS: Final = frozenset({"br", "p", "div", "li", "tr"})
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._skipping = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in self._SKIPPED:
+            self._skipping += 1
+        elif tag in self._BREAKS:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self._SKIPPED and self._skipping:
+            self._skipping -= 1
+        elif tag in self._BREAKS:
+            self.parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self._skipping:
+            self.parts.append(data)
 
 
 def _strip_html(text: str) -> str:
-    text = re.sub(r"(?is)<(script|style).*?</\1>", " ", text)
-    text = re.sub(r"(?i)<br\s*/?>|</p>|</div>", "\n", text)
-    return html.unescape(re.sub(r"<[^>]+>", " ", text))
+    parser = _Text()
+    parser.feed(text)
+    parser.close()
+    return re.sub(r"[ \t]+", " ", "".join(parser.parts))

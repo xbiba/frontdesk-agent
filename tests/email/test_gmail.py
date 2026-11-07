@@ -136,3 +136,34 @@ def test_an_error_carries_a_status_not_a_body() -> None:
     with pytest.raises(MailboxError, match="status 404") as raised:
         Gmail().box().thread("t9")
     assert "secret" not in str(raised.value)
+
+
+def test_a_huge_or_crafted_html_part_is_capped_before_it_is_parsed() -> None:
+    import time
+
+    from frontdesk.email import gmail
+
+    crafted = "<p>Ciao</p>" + "<script>" * 200_000 + "<style>" + "a" * 3_000_000
+    item = {
+        "id": "m1",
+        "payload": {
+            "mimeType": "multipart/alternative",
+            "headers": [{"name": "From", "value": "a@example.com"}],
+            "parts": [{"mimeType": "text/html", "body": {"data": _b64(crafted)}}] * 20,
+        },
+    }
+    started = time.perf_counter()
+    found = gmail._message(item)
+    assert time.perf_counter() - started < 2.0
+    assert found.body.startswith("Ciao")
+    assert len(found.body) <= gmail.MAX_BODY_CHARS
+
+
+def test_script_and_style_are_dropped_from_html() -> None:
+    from frontdesk.email.gmail import _strip_html
+
+    text = _strip_html("<p>Uno</p><script>alert(1)</script><style>p{}</style><p>Due &amp; tre</p>")
+    assert "alert" not in text
+    assert "p{}" not in text
+    assert "Uno" in text
+    assert "Due & tre" in text
