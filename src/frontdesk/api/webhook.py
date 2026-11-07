@@ -20,16 +20,16 @@ logger = logging.getLogger(__name__)
 MAX_BODY_BYTES: Final = 1_000_000
 
 
-async def read_limited(request: Request) -> bytes | None:
-    """The body, or None once it passes MAX_BODY_BYTES: read in chunks, so a body without a length,
+async def read_limited(request: Request, limit: int = MAX_BODY_BYTES) -> bytes | None:
+    """The body, or None once it passes `limit` bytes: read in chunks, so a body without a length,
     or with a false one, is never held whole before the check."""
     declared = request.headers.get("content-length")
-    if declared is not None and (not declared.isdigit() or int(declared) > MAX_BODY_BYTES):
+    if declared is not None and (not declared.isdigit() or int(declared) > limit):
         return None
     body = bytearray()
     async for chunk in request.stream():
         body.extend(chunk)
-        if len(body) > MAX_BODY_BYTES:
+        if len(body) > limit:
             return None
     return bytes(body)
 

@@ -17,7 +17,7 @@ from frontdesk.observability.logs import configure_logging, log_event
 from frontdesk.settings import Settings
 
 if TYPE_CHECKING:
-    from frontdesk.channels.wiring import Ingress, Worker
+    from frontdesk.channels.wiring import Ingress, WebIngress, Worker
 
 logger = logging.getLogger(__name__)
 
@@ -56,19 +56,27 @@ def create_webhook_app(
     settings: Settings | None = None,
     *,
     ingresses: Sequence[Ingress] | None = None,
+    web: WebIngress | None = None,
     engine: Engine | None = None,
 ) -> FastAPI:
-    """The public service that receives the channels' webhooks (M4, W1), one route each. Built
-    from the environment when uvicorn calls it with no argument."""
+    """The public service that receives the channels' webhooks (M4, W1), one route each, and the
+    site's chat (2026-11-07) when the pack lists it. Built from the environment when uvicorn calls
+    it with no argument; a caller that passes the ingresses passes the site's too, or none."""
+    from frontdesk.api.web import web_router
     from frontdesk.api.webhook import webhook_router
-    from frontdesk.channels.wiring import build_ingresses
+    from frontdesk.channels.wiring import build_ingresses, build_web_ingress
 
     if settings is None:
         configure_logging(Settings().log_level)
     resolved = settings or Settings()
     app = create_app(resolved, engine=engine, public=True)
-    for ingress in ingresses or build_ingresses(resolved):
+    if ingresses is None and web is None:
+        ingresses = build_ingresses(resolved)
+        web = build_web_ingress(resolved, dispatcher=ingresses[0].dispatcher if ingresses else None)
+    for ingress in ingresses or ():
         app.include_router(webhook_router(ingress))
+    if web is not None:
+        app.include_router(web_router(web))
     return app
 
 
