@@ -24,6 +24,7 @@ CLOUD_SCOPE: Final = "https://www.googleapis.com/auth/cloud-platform"
 SECRET_IDS: Final = {
     "calcom_api_key": "frontdesk-calcom-api-key",
     "anthropic_api_key": "frontdesk-anthropic-api-key",
+    "email_sender_key": "frontdesk-email-sender-key",
     "instagram_token": "frontdesk-instagram-token",
     "instagram_app_secret": "frontdesk-instagram-app-secret",
     "instagram_verify_token": "frontdesk-instagram-verify-token",

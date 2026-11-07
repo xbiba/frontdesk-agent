@@ -49,6 +49,15 @@ class InstagramMode(StrEnum):
     LIVE = "live"
 
 
+class EmailBackend(StrEnum):
+    """Where the email drafts read the mailbox (2026-11-07): nowhere, Gmail, or a file of
+    conversations for a try on the Mac (frontdesk.email.mailbox.FileMailbox)."""
+
+    NONE = "none"
+    GMAIL = "gmail"
+    FILE = "file"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="FRONTDESK_", extra="ignore")
 
@@ -119,6 +128,15 @@ class Settings(BaseSettings):
     tasks_queue: str | None = None
     worker_url: str | None = None
     tasks_invoker: str | None = None
+    # The email drafts (2026-11-07): the mailbox backend; for Gmail, the service account the
+    # business's Workspace delegated gmail.modify to (production), or a person's OAuth token file
+    # (development); the secret that keys the senders' hashes; and the switch.
+    email_backend: EmailBackend = EmailBackend.NONE
+    email_file: Path | None = None
+    email_delegation_account: str | None = None
+    email_token_file: Path | None = None
+    email_sender_key: SecretStr | None = None
+    email_off: bool = False
     log_level: str = "INFO"
 
     def require_business_pack(self) -> Path:

@@ -112,6 +112,11 @@ def _capped(deployment: Deployment, route: ModelRoute) -> ModelWrapper | None:
     return capped
 
 
+def daily_capped(deployment: Deployment, route: ModelRoute) -> ModelWrapper | None:
+    """Production's daily cap for a model built outside the turn (the email drafts)."""
+    return _capped(deployment, route)
+
+
 def _agent_model(
     route: ModelRoute,
     model: Model,

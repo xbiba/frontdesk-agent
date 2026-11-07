@@ -18,6 +18,8 @@ from sqlalchemy.orm import Session
 from frontdesk.cli.bookings import purge_bookings
 from frontdesk.cli.calendar import check_calendar
 from frontdesk.cli.chat import run_chat
+from frontdesk.cli.email import login as email_login
+from frontdesk.cli.email import run_pass
 from frontdesk.cli.experiment import eval_embedders
 from frontdesk.cli.instagram import show_account, show_testers, subscribe_account
 from frontdesk.cli.live import eval_report, live_turns, read_cases
@@ -77,6 +79,7 @@ calendar_app = typer.Typer(no_args_is_help=True, help="The doctors' calendars.")
 bookings_app = typer.Typer(no_args_is_help=True, help="Bookings from the chat.")
 instagram_app = typer.Typer(no_args_is_help=True, help="The Instagram channel (M4).")
 whatsapp_app = typer.Typer(no_args_is_help=True, help="WhatsApp for the reception (W1).")
+email_app = typer.Typer(no_args_is_help=True, help="Reply drafts for the mailbox (never sent).")
 app.add_typer(db_app, name="db")
 app.add_typer(knowledge_app, name="knowledge")
 app.add_typer(eval_app, name="eval")
@@ -84,6 +87,7 @@ app.add_typer(calendar_app, name="calendar")
 app.add_typer(bookings_app, name="bookings")
 app.add_typer(instagram_app, name="instagram")
 app.add_typer(whatsapp_app, name="whatsapp")
+app.add_typer(email_app, name="email")
 
 EnvFile = Annotated[
     Path, typer.Option("--env-file", exists=True, dir_okay=False, help="The deployment's env file.")
@@ -543,3 +547,28 @@ def whatsapp_template(env_file: EnvFile) -> None:
 def whatsapp_check(env_file: EnvFile) -> None:
     """Print the bot's number and its name as Meta knows them."""
     raise typer.Exit(asyncio.run(check_number(load_settings(env_file))))
+
+
+@email_app.command("run")
+def email_run(
+    env_file: EnvFile,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Say what it would do: no model, no draft, no label.")
+    ] = False,
+) -> None:
+    """One pass: draft replies to the mailbox's new questions and label the conversations. Exit 1
+    when the pass stopped early (the daily limit, the spend cap)."""
+    raise typer.Exit(run_pass(env_file, dry_run=dry_run))
+
+
+@email_app.command("login")
+def email_login_command(
+    client_file: Annotated[
+        Path, typer.Option("--client-file", exists=True, dir_okay=False, help="OAuth client JSON.")
+    ],
+    token_file: Annotated[
+        Path, typer.Option("--token-file", dir_okay=False, help="Where the token is written.")
+    ],
+) -> None:
+    """Development only: allow gmail.modify on your own Gmail and write the token file."""
+    raise typer.Exit(email_login(client_file, token_file))
