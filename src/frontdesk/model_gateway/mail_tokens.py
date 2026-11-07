@@ -70,13 +70,20 @@ def delegated_token_source(
     *,
     service_account: str,
     subject: str,
+    allowed_subjects: frozenset[str],
     signer_token: TokenSource,
     client: httpx2.Client,
     clock: Callable[[], float] = time.time,
 ) -> TokenSource:
     """A token for `subject`'s mailbox, through domain-wide delegation to `service_account`.
     `signer_token` is a cloud-platform token of an identity that may sign as the account (the
-    account itself on Cloud Run, with the Service Account Token Creator role on itself)."""
+    account itself on Cloud Run, with the Service Account Token Creator role on itself).
+
+    Delegation would let the account act as any mailbox of the domain: only a subject in
+    `allowed_subjects` (the pack's mailbox) is ever asked for, and any other is refused before a
+    request leaves (security review of 2026-11-07)."""
+    if subject.strip().lower() not in {item.strip().lower() for item in allowed_subjects}:
+        raise MailTokenError("delegation: only the configured mailbox may be reached")
 
     def fetch() -> tuple[str, float]:
         now = int(clock())

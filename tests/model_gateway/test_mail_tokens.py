@@ -40,6 +40,7 @@ def test_delegation_signs_with_iam_and_names_the_mailbox() -> None:
         [SCOPE],
         service_account=ACCOUNT,
         subject="info@example.com",
+        allowed_subjects=frozenset({"info@example.com"}),
         signer_token=lambda: "cloud-token",
         client=_client(handler),
         clock=lambda: clock[0],
@@ -70,6 +71,7 @@ def test_a_refused_step_is_named_without_its_answer(status: int, step: str) -> N
         [SCOPE],
         service_account=ACCOUNT,
         subject="info@example.com",
+        allowed_subjects=frozenset({"info@example.com"}),
         signer_token=lambda: "t",
         client=_client(handler),
     )
@@ -125,3 +127,18 @@ def test_no_scope_that_sends_is_ever_asked() -> None:
     assert gmail.SCOPES == ("https://www.googleapis.com/auth/gmail.modify",)
     assert "send" not in " ".join(gmail.SCOPES)
     assert mail_tokens.TOKEN_URI.startswith("https://oauth2.googleapis.com/")
+
+
+def test_delegation_refuses_any_mailbox_but_the_configured_one() -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        raise AssertionError("no request may leave")
+
+    with pytest.raises(MailTokenError, match="only the configured mailbox"):
+        delegated_token_source(
+            [SCOPE],
+            service_account=ACCOUNT,
+            subject="ceo@example.com",
+            allowed_subjects=frozenset({"info@example.com"}),
+            signer_token=lambda: "t",
+            client=_client(handler),
+        )

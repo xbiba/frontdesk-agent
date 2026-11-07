@@ -103,3 +103,22 @@ def test_the_email_commands_are_listed() -> None:
     result: Any = CliRunner().invoke(app, ["email", "--help"])
     assert "run" in result.output
     assert "login" in result.output
+
+
+def test_gmail_is_reached_only_as_the_packs_mailbox(monkeypatch: pytest.MonkeyPatch) -> None:
+    from frontdesk.settings import Settings
+    from frontdesk.tenancy.pack import EmailChannel
+
+    seen: dict[str, Any] = {}
+
+    def delegated(scopes: Any, **options: Any) -> Any:
+        seen.update(options)
+        return lambda: "tok"
+
+    monkeypatch.setattr(email_cli, "delegated_token_source", delegated)
+    settings = Settings(
+        email_backend="gmail", email_delegation_account="sa@demo.iam.gserviceaccount.com"
+    )
+    email_cli.build_mailbox(settings, EmailChannel(mailbox="info@example.com"))
+    assert seen["subject"] == "info@example.com"
+    assert seen["allowed_subjects"] == frozenset({"info@example.com"})

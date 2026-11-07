@@ -75,6 +75,7 @@ def build_mailbox(settings: Settings, email: EmailChannel) -> Mailbox:
                 SCOPES,
                 service_account=settings.email_delegation_account,
                 subject=email.mailbox,
+                allowed_subjects=frozenset({email.mailbox}),
                 signer_token=google_token_source([CLOUD_SCOPE], impersonate=None),
                 client=client,
             )
