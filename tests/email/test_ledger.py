@@ -13,10 +13,13 @@ DAY = date(2026, 11, 7)
 AT = datetime(2026, 11, 7, 9, tzinfo=UTC)
 
 
+SECRET = b"s" * 32
+
+
 def test_the_sender_key_hides_the_address() -> None:
-    key = sender_key("demo-clinic", "Anna <ANNA@example.com>")
-    assert key == sender_key("demo-clinic", "anna@example.com")
-    assert key != sender_key("demo-shop", "anna@example.com")
+    key = sender_key(SECRET, "Anna <ANNA@example.com>")
+    assert key == sender_key(SECRET, "anna@example.com")
+    assert key != sender_key(b"t" * 32, "anna@example.com")
     assert "anna" not in key
     assert len(key) == 32
 
@@ -32,7 +35,7 @@ def _rows(key: str) -> list[Handled]:
 
 
 def _check(ledger: PostgresLedger | MemoryLedger) -> None:
-    key = sender_key("demo-clinic", "anna@example.com")
+    key = sender_key(SECRET, "anna@example.com")
     for row in _rows(key):
         ledger.record(row)
     ledger.record(Handled("t1", "m2", "review", key, DAY, AT.replace(hour=10), 0.001))  # again

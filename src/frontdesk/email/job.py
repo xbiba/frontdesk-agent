@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 from frontdesk.email.checks import Flag
 from frontdesk.email.drafter import Drafter, DraftRequest, EmailReply, reply_language
-from frontdesk.email.ledger import Handled, Ledger, sender_key
+from frontdesk.email.ledger import MIN_SECRET_BYTES, Handled, Ledger, sender_key
 from frontdesk.email.mailbox import Draft, Mailbox, MailThread, reply_draft
 from frontdesk.email.screening import Screen, screen
 from frontdesk.email.text import shorten, split_quotes
@@ -110,6 +110,8 @@ class EmailPass:
     price: Price | None = None
     stops: tuple[type[BaseException], ...] = ()  # model errors that end the pass
     dry_run: bool = False
+    # The secret the sender's hash is keyed with (frontdesk-email-sender-key).
+    sender_secret: bytes = b""
     _email: EmailChannel = field(init=False)
 
     def __post_init__(self) -> None:
@@ -117,6 +119,11 @@ class EmailPass:
             raise ValueError(f"the pack of {self.pack.id} has no email section (email:)")
         if self.drafter is None and not self.dry_run:
             raise ValueError("only a dry run goes without a model")
+        if len(self.sender_secret) < MIN_SECRET_BYTES:
+            raise ValueError(
+                f"the sender key needs a secret of at least {MIN_SECRET_BYTES} bytes "
+                "(frontdesk-email-sender-key)"
+            )
         self._email = self.pack.email
 
     def today(self) -> date:
@@ -176,7 +183,7 @@ class EmailPass:
             return self._settle(thread, Outcome.IGNORED, label=LABEL_IGNORED, reason=str(screened))
         if not self._email.drafts_for(last.sender):
             return self._settle(thread, Outcome.NOT_TESTER)
-        key = sender_key(self.pack.id, last.sender)
+        key = sender_key(self.sender_secret, last.sender)
         today = self.today()
         if self.ledger.drafts_for(key, today) >= DRAFTS_PER_SENDER_PER_DAY:
             return self._settle(
@@ -195,6 +202,7 @@ class EmailPass:
             sender=last.sender,
             subject=last.subject,
             text=text,
+            reply_to=last.reply_to,
             earlier=self._earlier(thread),
             attachments=last.attachments,
         )
@@ -218,7 +226,10 @@ class EmailPass:
                 thread, Outcome.IGNORED_BY_MODEL, label=LABEL_IGNORED, reply=reply, usd=usd
             )
         flags: list[str] = list(drafted.flags)
-        alert = emergency_rule(text.new) or clinical_rule(text.new)
+        # The rules read the subject and the whole body, quotes and what is past the cut included:
+        # an emergency told in the subject or below a quote is still one (security review).
+        whole = f"{last.subject}\n{last.body}"
+        alert = emergency_rule(whole) or clinical_rule(whole)
         if alert:
             flags.append(alert)
         if text.truncated:
@@ -284,7 +295,7 @@ class EmailPass:
                 thread_id=thread.id,
                 message_id=last.id,
                 outcome=outcome.value,
-                sender_key=sender_key(self.pack.id, last.sender),
+                sender_key=sender_key(self.sender_secret, last.sender),
                 day=self.today(),
                 at=self.now(),
                 usd=usd,

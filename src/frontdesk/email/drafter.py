@@ -29,7 +29,7 @@ from frontdesk.email.checks import (
 )
 from frontdesk.email.knowledge import index_text, knowledge_text
 from frontdesk.email.text import EmailText
-from frontdesk.tenancy.pack import BusinessPack, EmailChannel, Language
+from frontdesk.tenancy.pack import BusinessPack, EmailChannel, Language, address_of
 
 # A draft, its questions and their evidence, with Haiku's thinking: the spike's measure (8,000).
 MAX_OUTPUT_TOKENS: Final = 8000
@@ -62,6 +62,7 @@ class DraftRequest:
     sender: str
     subject: str
     text: EmailText
+    reply_to: str = ""
     earlier: tuple[str, ...] = ()  # the earlier messages of the conversation, in short
     attachments: int = 0
 
@@ -143,8 +144,10 @@ class Drafter:
             flags.append(Flag.NO_EVIDENCE_NO_TODO)
         if self._email.signature not in draft:
             flags.append(Flag.NO_SIGNATURE)
-        written = [request.sender, request.subject, request.text.new, *request.earlier]
-        flags += contact_and_price_flags(draft, self._knowledge, allowed=written)
+        # Only the sender's own addresses may be named beyond the information: a price, a phone or
+        # an address the email wrote is not approved by being written (security review, 2026-11-07).
+        own = [address_of(item) for item in (request.sender, request.reply_to)]
+        flags += contact_and_price_flags(draft, self._knowledge, allowed=[a for a in own if a])
         return flags
 
 

@@ -45,6 +45,7 @@ from frontdesk.tenancy.pack import BusinessPack, EmailChannel  # noqa: E402
 
 NOW = datetime(2026, 10, 7, 9, 0, tzinfo=UTC)
 PHONE = "+355 00 000 0000"  # the demo clinic's
+SENDER_SECRET = b"k" * 32
 
 
 def reply(
@@ -114,4 +115,5 @@ def make_pass(
         pack=pack,
         now=now,
         dry_run=script is None,
+        sender_secret=SENDER_SECRET,
     )

@@ -68,11 +68,12 @@ def contact_and_price_flags(
     draft: str, knowledge: str, *, allowed: Sequence[str] = ()
 ) -> list[Flag]:
     """Addresses, phone numbers and prices in the draft that the information does not hold.
-    `allowed`: what the sender wrote themselves (their own address, a number they gave)."""
-    known = knowledge.lower() + " " + " ".join(allowed).lower()
+    `allowed`: email addresses that may be named besides (the sender's own); never a number."""
+    known = knowledge.lower()
     known_digits = {_digits(found) for found in _PHONE.findall(known)}
+    addresses = {item.lower() for item in allowed}
     flags: list[Flag] = []
-    emails = [found.lower() for found in _EMAIL.findall(draft)]
+    emails = [found.lower() for found in _EMAIL.findall(draft) if found.lower() not in addresses]
     phones = [_digits(found) for found in _PHONE.findall(draft) if not _DATE.match(found.strip())]
     if any(item not in known for item in emails) or any(
         len(item) >= 8

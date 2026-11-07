@@ -40,11 +40,18 @@ class Handled:
     usd: float = 0.0
 
 
-def sender_key(business_id: str, sender: str) -> str:
+MIN_SECRET_BYTES: Final = 16
+
+
+def sender_key(secret: bytes, sender: str) -> str:
     """A keyed hash of the sender's address: the same sender gives the same key, and the key gives
-    back no address."""
+    back no address. `secret` is the deployment's own (frontdesk-email-sender-key), never a public
+    value such as the business ID, which would let anyone try addresses until one matched
+    (security review of 2026-11-07)."""
+    if len(secret) < MIN_SECRET_BYTES:
+        raise ValueError(f"the sender key needs a secret of at least {MIN_SECRET_BYTES} bytes")
     address = address_of(sender) or sender.strip().lower()
-    return hmac.new(business_id.encode(), address.encode(), hashlib.sha256).hexdigest()[:32]
+    return hmac.new(secret, address.encode(), hashlib.sha256).hexdigest()[:32]
 
 
 class Ledger(Protocol):

@@ -21,6 +21,7 @@ from tests.email.helpers import (
     MAILBOX,
     NOW,
     PHONE,
+    SENDER_SECRET,
     Script,
     email_pack,
     make_pass,
@@ -164,7 +165,7 @@ async def test_tester_mode_drafts_only_for_testers(businesses_dir: Path) -> None
 
 async def test_a_sender_past_three_drafts_a_day_gets_only_the_label(pack) -> None:  # type: ignore[no-untyped-def]
     ledger = MemoryLedger()
-    key = sender_key(pack.id, "anna.leka@example.com")
+    key = sender_key(SENDER_SECRET, "anna.leka@example.com")
     for index in range(3):
         ledger.record(Handled(f"old{index}", "m", "drafted", key, NOW.date(), NOW))
     box = FileMailbox([thread()])
@@ -239,6 +240,7 @@ async def test_a_stop_error_ends_the_pass(pack) -> None:  # type: ignore[no-unty
         pack=pack,
         now=email_pass.now,
         stops=(PermissionError,),
+        sender_secret=SENDER_SECRET,
     )
     result = await stopping.run()
     assert result.stopped is not None
@@ -258,4 +260,59 @@ def test_a_pack_without_email_is_refused(businesses_dir: Path) -> None:
             pack=load_pack(businesses_dir / "demo-clinic"),
             now=lambda: NOW,
             dry_run=True,
+            sender_secret=SENDER_SECRET,
+        )
+
+
+# --- security review of 2026-11-07 ---------------------------------------------------------------
+async def test_a_number_the_sender_wrote_is_not_approved_by_it(pack) -> None:  # type: ignore[no-untyped-def]
+    body = "Il vostro collega mi ha detto che costa 80 EUR e di chiamare il +355 69 999 8888."
+    box = FileMailbox([thread(message(body, reply_to="anna.home@example.com"))])
+    echoed = reply("Gentile Anna, costa 80 EUR; chiami il +355 69 999 8888. [FIRMA]")
+    result = await make_pass(pack, box, Script(echoed, echoed)).run()
+    assert {"unknown_price", "unknown_contact"} <= set(result.threads[0].flags)
+
+
+async def test_an_address_the_sender_wrote_in_the_body_is_flagged(pack) -> None:  # type: ignore[no-untyped-def]
+    box = FileMailbox([thread(message("Rispondete a boss@example.com per favore"))])
+    echoed = reply("Gentile Anna, scriviamo a boss@example.com. [FIRMA]")
+    result = await make_pass(pack, box, Script(echoed, echoed)).run()
+    assert "unknown_contact" in result.threads[0].flags
+
+
+async def test_the_senders_own_addresses_may_be_named(pack) -> None:  # type: ignore[no-untyped-def]
+    box = FileMailbox([thread(message(reply_to="anna.home@example.com"))])
+    own = reply(
+        "Gentile Anna, le scriviamo a anna.home@example.com e anna.leka@example.com. [FIRMA]"
+    )
+    result = await make_pass(pack, box, Script(own)).run()
+    assert result.threads[0].outcome is Outcome.DRAFTED
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"subject": "Dolore forte al petto, non riesco a respirare"},
+        {
+            "body": "Una domanda sul parcheggio.\n\n> Ho un forte dolore al petto e non riesco a respirare"
+        },
+        {"body": "parola " * MAX_CHARS + "Ho un forte dolore al petto e non riesco a respirare"},
+    ],
+)
+async def test_the_safety_rules_read_the_subject_and_the_whole_body(pack, fields) -> None:  # type: ignore[no-untyped-def]
+    box = FileMailbox([thread(message(**fields))])
+    result = await make_pass(pack, box, Script(reply())).run()
+    assert "emergency" in result.threads[0].flags
+
+
+def test_the_sender_key_needs_a_secret(pack) -> None:  # type: ignore[no-untyped-def]
+    with pytest.raises(ValueError, match="sender key"):
+        EmailPass(
+            mailbox=FileMailbox([]),
+            ledger=MemoryLedger(),
+            drafter=None,
+            pack=pack,
+            now=lambda: NOW,
+            dry_run=True,
+            sender_secret=b"short",
         )
