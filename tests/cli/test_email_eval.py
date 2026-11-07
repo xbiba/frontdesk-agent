@@ -155,3 +155,20 @@ def test_bad_cases_are_refused(tmp_path: Path) -> None:
     path.write_text("- {id: a, from: x@example.com, body: b, expect_category: ignore}\n" * 2)
     with pytest.raises(CasesError, match="duplicate"):
         load_email_cases(path)
+
+
+def test_the_drafting_model_waits_longer_than_a_chat_turn(
+    setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from frontdesk.email.drafter import REQUEST_TIMEOUT_SECONDS
+
+    timeouts: list[float] = []
+    built = email_eval._model
+
+    def model(route: Any, key: Any, project: Any) -> Any:
+        timeouts.append(route.request_timeout_seconds)
+        return built(route, key, project)
+
+    monkeypatch.setattr(email_eval, "_model", model)
+    assert _invoke(setup).exit_code == 0
+    assert REQUEST_TIMEOUT_SECONDS in timeouts

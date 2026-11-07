@@ -33,6 +33,9 @@ from frontdesk.tenancy.pack import BusinessPack, EmailChannel, Language, address
 
 # A draft, its questions and their evidence, with Haiku's thinking: the spike's measure (8,000).
 MAX_OUTPUT_TOKENS: Final = 8000
+# A draft of that size takes longer than a chat turn's 30 seconds; nobody waits on a pass, so a
+# request may take this long before it is cut (run 2026-11-07-email-1-haiku: one case cut).
+REQUEST_TIMEOUT_SECONDS: Final = 120.0
 
 REPAIR: Final = """The automatic check found these problems in your answer:
 {flags}

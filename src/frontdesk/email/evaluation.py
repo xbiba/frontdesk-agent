@@ -40,7 +40,7 @@ JUDGE_FLAGS: Final = (
 _REQUEST: Final = frozenset({Outcome.DRAFTED, Outcome.REVIEW})
 _IGNORE: Final = frozenset({Outcome.IGNORED, Outcome.IGNORED_BY_MODEL})
 
-JUDGE_PROMPT: Final = """You are a strict reviewer. You assess a DRAFT reply to an email, prepared for {business} by an assistant that must use ONLY the INFORMATION below. Today is {today}. The staff will complete the placeholders "[{todo}: ...]" (written in Italian: that is fine) and the signature "{signature}". A first line "[DA VERIFICARE: ...]" is a note for the staff, not part of the reply; a fixed text of the information placed at the top (emergency, no medical advice by message) is expected there.
+JUDGE_PROMPT: Final = """You are a strict reviewer. You assess a DRAFT reply to an email, prepared for {business} by an assistant that must use ONLY the INFORMATION below. Today is {today}. The staff will complete the placeholders "[{todo}: ...]" (written in Italian: that is fine) and the signature "{signature}". A first line "[DA VERIFICARE: ...]" is a note for the staff, not part of the reply; a fixed text of the information may be placed at the top (emergency, no medical advice by message). Neither is required.
 
 Mark true only what is clearly true:
 - invented_fact: the draft states a specific fact (price, date, time, duration, name, service, payment method, procedure, recognition, place) that the INFORMATION does not support. Repeating the phone, the email, the address or facts of the INFORMATION is not inventing.
@@ -245,6 +245,7 @@ def row_json(row: CaseRow) -> dict[str, Any]:
         "id": row.case.id,
         "outcome": result.outcome.value if result else "not_run",
         "flags": list(result.flags) if result else [],
+        "reason": result.reason if result else "",
         "rules": list(row.rules),
         "judge": row.verdict.model_dump() if row.verdict else None,
         "judge_error": row.judge_error,

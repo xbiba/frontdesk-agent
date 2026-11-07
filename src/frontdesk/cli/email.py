@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import http.server
 import threading
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -26,7 +27,7 @@ from frontdesk.composition import (
     model_api_key,
     open_deployment,
 )
-from frontdesk.email.drafter import MAX_OUTPUT_TOKENS, Drafter
+from frontdesk.email.drafter import MAX_OUTPUT_TOKENS, REQUEST_TIMEOUT_SECONDS, Drafter
 from frontdesk.email.gmail import SCOPES, GmailMailbox, gmail_http_client
 from frontdesk.email.job import EmailPass, Outcome, PassResult
 from frontdesk.email.ledger import MIN_SECRET_BYTES, PostgresLedger
@@ -121,7 +122,8 @@ def build_pass(deployment: Deployment, *, dry_run: bool) -> EmailPass:
         if route.provider not in CHAT_PROVIDERS:
             raise fail(f"route '{route.route_id}' calls no live model: the drafts need one")
         key = model_api_key(settings, route) if route.provider == "anthropic" else None
-        model = build_live_model(route, gcp_project=settings.gcp_project, api_key=key)
+        slow = replace(route, request_timeout_seconds=REQUEST_TIMEOUT_SECONDS)
+        model = build_live_model(slow, gcp_project=settings.gcp_project, api_key=key)
         wrap = daily_capped(deployment, route)
         if wrap is not None:
             model = wrap(model, "agent")

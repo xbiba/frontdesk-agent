@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import secrets
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
@@ -24,7 +25,7 @@ from frontdesk.agent.prompts import read_prompt
 from frontdesk.cli.live import evaluation_route
 from frontdesk.cli.live_common import check_access, refuse_environment_overrides, route_api_key
 from frontdesk.cli.runtime import fail
-from frontdesk.email.drafter import MAX_OUTPUT_TOKENS, Drafter
+from frontdesk.email.drafter import MAX_OUTPUT_TOKENS, REQUEST_TIMEOUT_SECONDS, Drafter
 from frontdesk.email.evaluation import (
     CasesError,
     EmailEval,
@@ -136,7 +137,8 @@ async def _run(
         calls.extend(meter.drain())
         return sum(call.usd for call in calls)
 
-    drafting = meter.wrap(_model(route, keys[route.route_id], gcp_project), "agent")
+    slow = replace(route, request_timeout_seconds=REQUEST_TIMEOUT_SECONDS)
+    drafting = meter.wrap(_model(slow, keys[route.route_id], gcp_project), "agent")
     judging = meter.wrap(
         _model(judge_route, keys[judge_route.route_id], gcp_project),
         "judge",
