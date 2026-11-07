@@ -107,11 +107,15 @@ def build_ingress(settings: Settings) -> Ingress:
 
 
 def build_ingresses(settings: Settings) -> tuple[Ingress, ...]:
-    """Instagram's ingress, and WhatsApp's when the pack lists the channel (W1)."""
-    instagram = build_ingress(settings)
+    """Instagram's ingress when the pack lists the channel, and WhatsApp's when it lists that one
+    (W1). A pack with neither starts with no webhook route: a deployment of email drafts or the site
+    widget only (2026-11-07)."""
     pack = load_pack(settings.require_business_pack())
+    found: tuple[Ingress, ...] = ()
+    if pack.channels.instagram is not None:
+        found = (build_ingress(settings),)
     if pack.channels.whatsapp is None:
-        return (instagram,)
+        return found
     staff = _staff(settings)
     inbox = Inbox(
         make_session_factory(make_engine(settings.database_url)),
@@ -126,11 +130,11 @@ def build_ingresses(settings: Settings) -> tuple[Ingress, ...]:
     whatsapp = Ingress(
         webhook=WhatsAppWebhook(channel_secret(settings, "whatsapp_app_secret")),
         inbox=inbox,
-        dispatcher=instagram.dispatcher,
+        dispatcher=found[0].dispatcher if found else _dispatcher(settings),
         verify_token=channel_secret(settings, "whatsapp_verify_token"),
         off=settings.whatsapp_off,
     )
-    return (instagram, whatsapp)
+    return (*found, whatsapp)
 
 
 def build_worker(settings: Settings) -> Worker:
@@ -146,22 +150,13 @@ def build_worker(settings: Settings) -> Worker:
     from frontdesk.db.engine import business_session
 
     deployment = open_deployment(settings)
-    pack = narrow(deployment.pack, instagram_policy(deployment.pack))
+    policy = deployment.pack.channels.instagram
+    pack = deployment.pack if policy is None else narrow(deployment.pack, policy)
     testers = settings.instagram_mode is InstagramMode.TESTERS
     # Testers write test messages; everyone else's are patient data, refused by an unapproved route.
     data_class = DataClass.EVALUATION if testers else DataClass.PATIENT_DERIVED
     runtime = build_turn_runtime(replace(deployment, pack=pack), data_class=data_class)
-    account, page = _account(settings), instagram_page(settings)
     client = httpx2.AsyncClient(timeout=httpx2.Timeout(15.0, connect=5.0))
-    token = PageToken(
-        client,
-        channel_secret(settings, "instagram_token"),
-        page_id=page,
-        api_version=settings.instagram_api_version,
-    )
-    sender = InstagramSender(
-        token.get, client, page_id=page, api_version=settings.instagram_api_version
-    )
 
     async def turn(text: str, state: ConversationState) -> tuple[TurnResult, ConversationState]:
         return await handle_message(text, state, runtime)
@@ -170,27 +165,38 @@ def build_worker(settings: Settings) -> Worker:
         with business_session(deployment.session_factory, pack.id) as session:
             return purge(session, deployment.now())
 
-    runner = Runner(
-        deployment.session_factory,
-        pack=pack,
-        channel=INSTAGRAM,
-        sender=sender,
-        turn=turn,
-        now=deployment.now,
-        off=settings.instagram_off,
-    )
-    inbox = Inbox(
-        deployment.session_factory,
-        business_id=pack.id,
-        channel=INSTAGRAM,
-        account_id=account,
-        testers_only=testers,
-        pairing_code=None,
-        now=deployment.now,
-    )
     dispatcher = _dispatcher(settings)
-    runners: dict[str, Runner] = {INSTAGRAM: runner}
-    inboxes: dict[str, Inbox] = {INSTAGRAM: inbox}
+    runners: dict[str, Runner] = {}
+    inboxes: dict[str, Inbox] = {}
+    if policy is not None:  # Instagram is optional (2026-11-07)
+        account, page = _account(settings), instagram_page(settings)
+        token = PageToken(
+            client,
+            channel_secret(settings, "instagram_token"),
+            page_id=page,
+            api_version=settings.instagram_api_version,
+        )
+        sender = InstagramSender(
+            token.get, client, page_id=page, api_version=settings.instagram_api_version
+        )
+        runners[INSTAGRAM] = Runner(
+            deployment.session_factory,
+            pack=pack,
+            channel=INSTAGRAM,
+            sender=sender,
+            turn=turn,
+            now=deployment.now,
+            off=settings.instagram_off,
+        )
+        inboxes[INSTAGRAM] = Inbox(
+            deployment.session_factory,
+            business_id=pack.id,
+            channel=INSTAGRAM,
+            account_id=account,
+            testers_only=testers,
+            pairing_code=None,
+            now=deployment.now,
+        )
     requests = None
     if deployment.pack.channels.whatsapp is not None:
         if runtime.scheduler is None:

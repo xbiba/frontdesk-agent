@@ -182,3 +182,50 @@ def test_a_bad_staff_secret_stops_the_build(
 ) -> None:
     with pytest.raises(ValueError, match=named):
         build_ingresses(_whatsapp(whatsapp_dir, **fields))
+
+
+# --- Instagram is optional (2026-11-07: email and the site widget without Instagram) --------------
+@pytest.fixture
+def whatsapp_only_dir(tmp_path: Path, businesses_dir: Path) -> Path:
+    target = tmp_path / "demo-clinic-whatsapp-only"
+    shutil.copytree(businesses_dir / "demo-clinic", target)
+    with (target / "business.yaml").open("a", encoding="utf-8") as file:
+        file.write(
+            "\nchannels:\n  whatsapp: {}\n"
+            "integrations:\n  calendar:\n    credentials_ref: fixture\n"
+            "    calendars: {dr-arben-demo: cal-arben}\n"
+            "    requires_confirmation: true\n"
+        )
+    (tmp_path / "calendar.yaml").write_text(FIXTURE, encoding="utf-8")
+    return target
+
+
+def test_a_pack_without_instagram_starts_with_no_instagram_webhook(businesses_dir: Path) -> None:
+    assert build_ingresses(_settings(businesses_dir / "demo-clinic")) == ()
+
+
+def test_whatsapp_runs_without_instagram(whatsapp_only_dir: Path) -> None:
+    names = [item.webhook.name for item in build_ingresses(_whatsapp(whatsapp_only_dir))]
+    assert names == ["whatsapp"]
+
+
+@pytest.mark.db
+def test_the_worker_starts_without_instagram(
+    businesses_dir: Path, app_url: str, activate_pack: Any
+) -> None:
+    pack = businesses_dir / "demo-clinic"
+    activate_pack(load_pack(pack))
+    worker = build_worker(_settings(pack, database_url=app_url, instagram_page_id=None))
+    assert worker.runners == {}
+    assert worker.inbox == {}
+    assert worker.requests is None
+
+
+@pytest.mark.db
+def test_the_worker_serves_whatsapp_without_instagram(
+    whatsapp_only_dir: Path, app_url: str, activate_pack: Any
+) -> None:
+    activate_pack(load_pack(whatsapp_only_dir))
+    worker = build_worker(_whatsapp(whatsapp_only_dir, database_url=app_url))
+    assert set(worker.runners) == {"whatsapp"}
+    assert worker.requests is not None
