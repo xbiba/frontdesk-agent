@@ -136,6 +136,16 @@ ROUTES: Final[dict[str, ModelRoute]] = {
         region=None,
         approved_for=frozenset({DataClass.PATIENT_DERIVED, DataClass.EVALUATION}),
     ),
+    # Claude Opus 5.5 on Anthropic's own API: the judge of the email drafts' evaluation (2026-11-07),
+    # as in the spike that chose Haiku. Evaluation data only: invented emails and the business's
+    # public information, never a patient's message.
+    "anthropic-opus-5-5": ModelRoute(
+        route_id="anthropic-opus-5-5",
+        provider="anthropic",
+        model_name="claude-opus-5-5",
+        region=None,
+        approved_for=frozenset({DataClass.EVALUATION}),
+    ),
     # The embedding candidates of the M3 experiment (design §4.5). Neither is served on the eu
     # multi-region; both are on europe-west1 (Belgium).
     "vertex-ew1-text-multilingual-embedding-002": ModelRoute(

@@ -204,6 +204,10 @@ class Meter:
             return self._price
         return _token_price(self._budget, route_id)
 
+    def price_of(self, route_id: str | None = None) -> Price:
+        """The price a route's requests are counted at: the run's own route when None."""
+        return self._price_of(route_id)
+
     def drain(self) -> tuple[CallRecord, ...]:
         """The requests since the last drain, oldest first."""
         calls, self._calls = tuple(self._calls), []

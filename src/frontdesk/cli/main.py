@@ -20,6 +20,7 @@ from frontdesk.cli.calendar import check_calendar
 from frontdesk.cli.chat import run_chat
 from frontdesk.cli.email import login as email_login
 from frontdesk.cli.email import run_pass
+from frontdesk.cli.email_eval import JUDGE_ROUTE, eval_email
 from frontdesk.cli.experiment import eval_embedders
 from frontdesk.cli.instagram import show_account, show_testers, subscribe_account
 from frontdesk.cli.live import eval_report, live_turns, read_cases
@@ -399,6 +400,43 @@ def _offline_turns(
         output.write_text(turn_report_json(report), encoding="utf-8")
     if not report.ok:
         raise typer.Exit(1)
+
+
+@eval_app.command("email")
+def eval_email_command(
+    env_file: EnvFile,
+    cases: Annotated[
+        Path, typer.Option("--cases", exists=True, dir_okay=False, help="The email cases.")
+    ],
+    run_dir: Annotated[
+        Path, typer.Option("--run-dir", file_okay=False, help="An empty directory.")
+    ],
+    budget: Annotated[
+        Path, typer.Option("--budget", exists=True, dir_okay=False, help="The budget file.")
+    ],
+    route: Annotated[
+        str, typer.Option("--route", help="The drafting route.")
+    ] = "anthropic-haiku-5-5",
+    judge: Annotated[str, typer.Option("--judge-route", help="The judge's route.")] = JUDGE_ROUTE,
+    max_usd: Annotated[
+        float, typer.Option("--max-usd", min=0.0001, help="This run's limit.")
+    ] = 3.0,
+    yes: YesOption = False,
+) -> None:
+    """The email drafts on invented emails, live, with a judge: each call costs money and is
+    metered against --budget. Exit 1 on an error or a stop."""
+    raise typer.Exit(
+        eval_email(
+            env_file,
+            cases_path=cases,
+            run_dir=run_dir,
+            budget_path=budget,
+            route_id=route,
+            judge_route_id=judge,
+            max_usd=max_usd,
+            yes=yes,
+        )
+    )
 
 
 @eval_app.command("report")

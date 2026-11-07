@@ -133,3 +133,12 @@ async def test_a_failed_proof_says_what_to_do_and_never_the_key(error: Any, says
     with pytest.raises(RouteAccessError, match=says) as raised:
         await check_anthropic_access(route, api_key=KEY, client=_client(error(), []))
     assert KEY not in str(raised.value)
+
+
+def test_the_opus_judge_route_takes_evaluation_data_only() -> None:
+    from frontdesk.model_gateway.routes import UnapprovedRouteError
+
+    route = require_route("anthropic-opus-5-5", DataClass.EVALUATION)
+    assert (route.provider, route.model_name) == ("anthropic", "claude-opus-5-5")
+    with pytest.raises(UnapprovedRouteError, match="patient_derived"):
+        require_route("anthropic-opus-5-5", DataClass.PATIENT_DERIVED)
