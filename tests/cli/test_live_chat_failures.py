@@ -75,7 +75,7 @@ def test_a_turn_that_ends_in_error_says_why_before_its_hand_off(
     assert result.stderr.splitlines() == ["model error: ConnectError"]
     lines = result.output.splitlines()
     reply = next(number for number, line in enumerate(lines) if line.startswith("bot> "))
-    assert lines.index("model error: ConnectError") < reply  # before the hand-off it explains
+    assert lines.index("model error: ConnectError") < reply  # before the reply it explains
     assert "rule=error" in _trace(result.output)
     assert f"cost: 0.0000 EUR {MIDDLE_DOT} session 0.0000 EUR" in result.stdout
     assert "Fisioterapia" not in result.stdout  # the hand-off, not an answer

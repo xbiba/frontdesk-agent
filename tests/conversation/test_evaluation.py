@@ -182,6 +182,15 @@ def test_a_booking_handoff_may_end_with_the_next_step_which_gives_the_contact() 
     assert "handoff without contact" in check_case(case, booking, texts=TEXTS)
 
 
+def test_a_handoff_may_end_with_the_offer_of_the_contact() -> None:
+    """What the bot does not know ends with the offer, not the number (Albi, 2026-11-07)."""
+    offer = "Se vuoi, ti do il contatto della reception."
+    texts = {**TEXTS, FixedTextKey.CONTACT_OFFER: offer}
+    case = _case(outcome="handoff")
+    unknown = _result(f"Su questo non ho dettagli. {offer}", TurnOutcome.HANDOFF)
+    assert check_case(case, unknown, texts=texts) == ()
+
+
 def test_a_failure_reason_stays_on_one_line_so_a_report_row_is_never_split() -> None:
     case = _case(contains=["Se è un'emergenza.\n\nCiao!"], not_contains=["Fisioterapia:\r\n"])
     failures = check_case(case, _result("Fisioterapia:\r\n30 EUR"), texts=TEXTS)

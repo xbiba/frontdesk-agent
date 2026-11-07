@@ -464,7 +464,8 @@ class Runner:
     def _give_up(
         self, key: str, pending: Sequence[_Pending], conversation: _Conversation, now: datetime
     ) -> None:
-        text = self._fixed(self._state(key, conversation, now), FixedTextKey.HANDOFF)
+        # A turn that kept failing: try again in a moment, not reception's number (2026-11-07).
+        text = self._fixed(self._state(key, conversation, now), FixedTextKey.UNAVAILABLE)
         parts = [("fixed", part) for part in split_message(text, self._sender.max_message_bytes)]
         with self._session() as session:
             if not self._held(session, key, conversation.token):

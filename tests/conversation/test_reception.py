@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic_ai import ModelResponse, ToolCallPart
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from sqlalchemy import select
@@ -1119,7 +1120,7 @@ async def test_the_switch_turns_the_model_off_and_the_rules_still_answer(base: T
     assert script.calls == []
 
 
-async def test_past_the_daily_cap_the_patient_gets_reception(base: TurnRuntime) -> None:
+async def test_past_the_daily_cap_the_patient_is_asked_to_try_again(base: TurnRuntime) -> None:
     def capped(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         raise SpendCapReachedError("today's model spend reached the cap")
 
@@ -1127,7 +1128,8 @@ async def test_past_the_daily_cap_the_patient_gets_reception(base: TurnRuntime) 
     reply, _ = await handle_message(
         "Vorrei sapere una cosa", ConversationState(conversation_id="c1", turns=1), runtime
     )
-    assert (reply.trace.rule, reply.outcome) == ("spend_cap", TurnOutcome.HANDOFF)
+    assert (reply.trace.rule, reply.outcome) == ("spend_cap", TurnOutcome.FIXED)
+    assert reply.text == base.pack.fixed_texts["it"][FixedTextKey.UNAVAILABLE]  # type: ignore[index]
 
 
 @pytest.mark.parametrize(
@@ -1159,3 +1161,59 @@ async def test_a_phone_without_its_prefix_is_recognized(
     for message in ("Venerdì che orari ci sono?", "alle 9", f"Mario Rossi, {phone['phone']}"):
         await chat.say(message)
     assert said in script.tool_results()[-1]
+
+
+# --- Albi, 2026-11-07: a natural conversation; reception's contact only when it is needed ---------
+
+
+def _texts(base: TurnRuntime) -> dict[FixedTextKey, str]:
+    return base.pack.fixed_texts["it"]  # type: ignore[index]
+
+
+def _digits(text: str) -> str:
+    return "".join(char for char in text if char.isdigit())
+
+
+async def test_what_it_does_not_know_it_says_and_the_contact_is_offered_not_written(
+    base: TurnRuntime,
+) -> None:
+    script = Script([_final("Sui prezzi dell'ecografia non ho dettagli.", "no_information")])
+    reply = await Chat(base, script).say("Quanto costa un'ecografia?")
+    offer = _texts(base)[FixedTextKey.CONTACT_OFFER]
+    assert (reply.outcome, reply.text) == (
+        TurnOutcome.HANDOFF,
+        f"Sui prezzi dell'ecografia non ho dettagli. {offer}",
+    )
+    assert "3550000000" not in _digits(reply.text)
+
+
+async def test_no_information_without_words_is_the_pack_s_own(base: TurnRuntime) -> None:
+    reply = await Chat(base, Script([_final("", "no_information")])).say("Avete la piscina?")
+    texts = _texts(base)
+    no_information = texts[FixedTextKey.NO_INFORMATION]
+    assert reply.text == f"{no_information} {texts[FixedTextKey.CONTACT_OFFER]}"
+
+
+async def test_a_model_that_does_not_answer_asks_to_try_again(base: TurnRuntime) -> None:
+    def down(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        raise ModelHTTPError(status_code=529, model_name="claude")
+
+    runtime = replace(base, reception=build_reception(FunctionModel(down), base.pack.profile))
+    reply, _ = await handle_message(
+        "Vorrei sapere una cosa", ConversationState(conversation_id="c1", turns=1), runtime
+    )
+    assert (reply.outcome, reply.trace.rejection) == (TurnOutcome.FIXED, "reception_error")
+    assert reply.text == _texts(base)[FixedTextKey.UNAVAILABLE]
+
+
+async def test_a_first_answer_opens_with_the_brief_disclosure(base: TurnRuntime) -> None:
+    brief = "Ti risponde l'assistente automatico di Klinika Demo."
+    texts = {
+        language: {**texts, FixedTextKey.DISCLOSURE_BRIEF: brief}
+        for language, texts in base.pack.fixed_texts.items()
+    }
+    runtime = replace(base, pack=base.pack.model_copy(update={"fixed_texts": texts}))
+    chat = Chat(runtime, Script([_final("La visita ortopedica costa 40 EUR.")]))
+    chat.state = ConversationState(conversation_id="c1")  # the first message
+    reply = await chat.say("Quanto costa la visita ortopedica?")
+    assert reply.text == f"{brief}\n\nLa visita ortopedica costa 40 EUR."

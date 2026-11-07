@@ -60,6 +60,12 @@ def _handoff(pack: BusinessPack, language: str, *keys: FixedTextKey) -> str:
     return "\n\n".join(_text(pack, language, key) for key in (*keys, FixedTextKey.HANDOFF))
 
 
+def _offer(pack: BusinessPack, language: str) -> str:
+    """What the bot does not know, and the offer of the contact (Albi, 2026-11-07)."""
+    no_information = _text(pack, language, FixedTextKey.NO_INFORMATION)
+    return f"{no_information} {_text(pack, language, FixedTextKey.CONTACT_OFFER)}"
+
+
 def _answering(args: dict[str, Any]) -> FunctionModel:
     """A model that answers every request with these tool-call arguments."""
 
@@ -134,7 +140,7 @@ async def test_the_shop_refuses_an_intent_only_the_clinic_offers(
     )
     assert result.outcome is TurnOutcome.HANDOFF
     assert result.trace.rejection == "intent_not_allowed"
-    assert result.text == _text(shop_pack, "it", FixedTextKey.HANDOFF)
+    assert result.text == _offer(shop_pack, "it")
 
 
 async def test_orientation_can_be_switched_off_in_the_pack(
@@ -149,7 +155,7 @@ async def test_orientation_can_be_switched_off_in_the_pack(
     )
     assert result.outcome is TurnOutcome.HANDOFF
     assert result.trace.rejection == "orientation_disabled"
-    assert result.text == _text(pack, "it", FixedTextKey.HANDOFF)
+    assert result.text == _offer(pack, "it")
 
 
 async def test_order_status_can_be_switched_off_in_the_pack(
@@ -197,7 +203,7 @@ async def test_the_clinic_responder_may_not_ask_for_order_details(
     )
     result, state = await handle_message("Is there parking?", ConversationState(turns=1), runtime)
     assert result.outcome is TurnOutcome.HANDOFF
-    assert result.text == _handoff(clinic_pack, "en", FixedTextKey.NO_INFORMATION)
+    assert result.text == _offer(clinic_pack, "en")
     assert result.trace.check_reasons == ("clarify_not_offered",)
     assert result.trace.clarify is None
     assert state.pending_clarification is None
@@ -215,7 +221,7 @@ async def test_the_shop_responder_may_not_ask_for_anything(
         "How do I return an item?", ConversationState(turns=1), runtime
     )
     assert result.outcome is TurnOutcome.HANDOFF
-    assert result.text == _handoff(shop_pack, "en", FixedTextKey.NO_INFORMATION)
+    assert result.text == _offer(shop_pack, "en")
     assert result.trace.check_reasons == ("clarify_not_offered",)
     assert result.trace.clarify is None
     assert state.pending_clarification is None
@@ -292,7 +298,7 @@ async def test_a_question_that_was_asked_reaches_the_next_classification(
 # Routes the rules and the classifier can take besides the ones test_turn.py follows.
 
 
-async def test_without_active_knowledge_no_model_runs_and_the_person_goes_to_reception(
+async def test_without_active_knowledge_no_model_runs_and_the_person_is_asked_to_try_again(
     app_url: str, clinic_pack: BusinessPack
 ) -> None:
     prompts: list[str] = []
@@ -301,8 +307,8 @@ async def test_without_active_knowledge_no_model_runs_and_the_person_goes_to_rec
         clinic_pack, factory, classifier_model(None, prompts), document_responder()
     )
     result, _ = await handle_message("Is there parking?", ConversationState(turns=1), runtime)
-    assert result.outcome is TurnOutcome.HANDOFF
-    assert result.text == _text(clinic_pack, "en", FixedTextKey.HANDOFF)
+    assert result.outcome is TurnOutcome.FIXED
+    assert result.text == _text(clinic_pack, "en", FixedTextKey.UNAVAILABLE)
     assert result.trace.rejection == "no_active_knowledge"
     assert prompts == []
 
@@ -494,7 +500,7 @@ async def test_a_price_that_is_not_in_the_records_is_reported_as_missing(
         "Quanto costa l'ecografia?", ConversationState(turns=1), runtime
     )
     assert result.outcome is TurnOutcome.HANDOFF
-    assert result.text == _handoff(clinic_pack, "it", FixedTextKey.NO_INFORMATION)
+    assert result.text == _offer(clinic_pack, "it")
     assert result.trace.sources == ()
 
 
@@ -509,7 +515,7 @@ async def test_a_responder_without_an_answer_hands_off(
     )
     result, _ = await handle_message("Is there parking?", ConversationState(turns=1), runtime)
     assert result.outcome is TurnOutcome.HANDOFF
-    assert result.text == _handoff(clinic_pack, "en", FixedTextKey.NO_INFORMATION)
+    assert result.text == _offer(clinic_pack, "en")
     assert result.trace.check_reasons == ()
 
 
@@ -555,7 +561,7 @@ def _classifier_args(category: Category, intent: Intent) -> dict[str, Any]:
     return args
 
 
-async def test_only_general_questions_reach_the_responder_and_every_handoff_ends_with_contact(
+async def test_only_general_questions_reach_the_responder_and_every_handoff_ends_with_contact_or_offer(
     activate_pack: Activate, clinic_pack: BusinessPack
 ) -> None:
     prompts: list[str] = []
@@ -563,7 +569,10 @@ async def test_only_general_questions_reach_the_responder_and_every_handoff_ends
     runtime = make_runtime(
         clinic_pack, activate_pack(clinic_pack), classifier_model(args), document_responder(prompts)
     )
-    contact = _text(clinic_pack, "en", FixedTextKey.HANDOFF)
+    endings = (
+        _text(clinic_pack, "en", FixedTextKey.HANDOFF),
+        _text(clinic_pack, "en", FixedTextKey.CONTACT_OFFER),
+    )
     reached: set[tuple[Category, Intent]] = set()
     for category in Category:
         for intent in Intent:
@@ -575,13 +584,12 @@ async def test_only_general_questions_reach_the_responder_and_every_handoff_ends
             if len(prompts) > asked:
                 reached.add((category, intent))
             if result.outcome is TurnOutcome.HANDOFF:
-                assert result.text.endswith(contact), (category, intent)
+                assert result.text.endswith(endings), (category, intent)
     # Orientation and emergencies never reach it; the rest do only with a general question.
     assert reached == {
         (Category.ADMINISTRATIVE, Intent.GENERAL_QUESTION),
         (Category.CLINICAL, Intent.GENERAL_QUESTION),
-        (Category.UNCERTAIN, Intent.GENERAL_QUESTION),
-    }
+    }  # an uncertain message gets a question back (2026-11-07)
 
 
 async def test_a_price_question_says_which_service_has_no_price(
@@ -602,7 +610,7 @@ async def test_a_price_question_says_which_service_has_no_price(
     assert result.outcome is TurnOutcome.HANDOFF
     assert result.text == (
         f"Fisioterapia: 30 EUR (a seduta)\nOsteopatia: {no_information}\n\n"
-        f"{_text(clinic_pack, 'it', FixedTextKey.HANDOFF)}"
+        f"{_text(clinic_pack, 'it', FixedTextKey.CONTACT_OFFER)}"
     )
     assert result.trace.sources == ("price:physiotherapy",)
 
@@ -694,7 +702,7 @@ async def test_a_doctor_question_says_which_doctor_has_no_record(
     assert result.outcome is TurnOutcome.HANDOFF
     assert result.text == (
         f"Dr. Arben Demo: Visita ortopedica\nElira Shembull: {no_information}\n\n"
-        f"{_text(clinic_pack, 'it', FixedTextKey.HANDOFF)}"
+        f"{_text(clinic_pack, 'it', FixedTextKey.CONTACT_OFFER)}"
     )
     assert result.trace.sources == ("doctor:dr-arben-demo",)
 

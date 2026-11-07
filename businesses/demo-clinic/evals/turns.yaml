@@ -122,7 +122,7 @@
 - id: uncertain-it
   message: "boh"
   current_language: it
-  expect: {behaviour: handoff, outcome: handoff, language: it}
+  expect: {behaviour: clarify, outcome: fixed, language: it}  # it asks, no number (2026-11-07)
 - id: emoji-only
   message: "👍"
   current_language: it

@@ -69,6 +69,9 @@ class FixedTextKey(StrEnum):
     NEXT_STEP = "next_step"
     NO_SLOTS = "no_slots"
     BOOKING_PRIVACY = "booking_privacy"
+    UNAVAILABLE = "unavailable"
+    CONTACT_OFFER = "contact_offer"
+    DISCLOSURE_BRIEF = "disclosure_brief"
 
 
 # A pack may leave these out. The next step (how to book) ends an answer once per conversation;
@@ -77,9 +80,32 @@ class FixedTextKey(StrEnum):
 # `booking_privacy` ends a booking made in the chat: where the privacy notice is, a link (Albi,
 # 2026-10-12: nothing before the name, for a clean conversation). A pack that books from the chat
 # must give it (M5).
+# `disclosure_brief` opens a first reply that answers something: the disclosure without its "how
+# can I help?", which the answer makes redundant; without it, the disclosure itself.
 OPTIONAL_FIXED_TEXTS: Final = frozenset(
-    {FixedTextKey.NEXT_STEP, FixedTextKey.NO_SLOTS, FixedTextKey.BOOKING_PRIVACY}
+    {
+        FixedTextKey.NEXT_STEP,
+        FixedTextKey.NO_SLOTS,
+        FixedTextKey.BOOKING_PRIVACY,
+        FixedTextKey.DISCLOSURE_BRIEF,
+    }
 )
+# What the engine says when a pack leaves these out (Albi, 2026-11-07: a natural conversation, a
+# person's contact only when it is asked for): a failure asks to try again in a moment, and what the
+# bot does not know ends with the offer of a person's contact, never the number itself. Formal in
+# Italian ("Lei") and Albanian ("ju"); a pack that speaks otherwise writes its own.
+DEFAULT_FIXED_TEXTS: Final[dict[FixedTextKey, dict[Language, str]]] = {
+    FixedTextKey.UNAVAILABLE: {
+        "sq": "Nuk mund të përgjigjem tani. Ju lutem provoni përsëri pas pak.",
+        "it": "In questo momento non riesco a rispondere. Riprovi tra poco, per favore.",
+        "en": "I can't answer right now. Please try again in a moment.",
+    },
+    FixedTextKey.CONTACT_OFFER: {
+        "sq": "Nëse dëshironi, ju jap kontaktin e një personi që mund t'ju ndihmojë.",
+        "it": "Se vuole, Le do il contatto di una persona che può aiutarLa.",
+        "en": "If you like, I can give you the contact of a person who can help.",
+    },
+}
 
 
 class Frozen(BaseModel):
@@ -341,6 +367,19 @@ class KnowledgeDocument(Frozen):
         return self
 
 
+def _with_default_texts(
+    fixed_texts: dict[Language, dict[FixedTextKey, str]],
+) -> dict[Language, dict[FixedTextKey, str]]:
+    """Each language's texts with the engine's for the keys the pack leaves out."""
+    return {
+        language: {
+            **{key: by_language[language] for key, by_language in DEFAULT_FIXED_TEXTS.items()},
+            **texts,
+        }
+        for language, texts in fixed_texts.items()
+    }
+
+
 class BusinessPack(Frozen):
     id: str = Field(pattern=_ID)
     name: NonBlankStr
@@ -353,7 +392,9 @@ class BusinessPack(Frozen):
     integrations: Integrations = Integrations()
     channels: Channels = Channels()
     email: EmailChannel | None = None
-    fixed_texts: dict[Language, dict[FixedTextKey, str]]
+    fixed_texts: Annotated[
+        dict[Language, dict[FixedTextKey, str]], AfterValidator(_with_default_texts)
+    ]
     location: Location
     services: list[Service] = Field(default_factory=list)
     departments: list[Department] = Field(default_factory=list)

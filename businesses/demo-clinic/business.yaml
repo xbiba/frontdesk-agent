@@ -24,6 +24,8 @@ fixed_texts:
     no_information: "Nuk e kam këtë informacion."
     clarification: "Mund të më tregoni pak më shumë se çfarë ju nevojitet? Mund t'ju ndihmoj me shërbimet, mjekët, çmimet, oraret ose adresën."
     attachment: "Nuk mund të hap bashkëngjitje. Për të folur me një person, telefononi recepsionin në +355 00 000 0000."
+    contact_offer: "Nëse dëshironi, ju jap kontaktin e recepsionit."
+    unavailable: "Nuk mund të përgjigjem tani. Ju lutem provoni përsëri pas pak."
   it:
     disclosure: "Ciao! Ti risponde l'assistente automatico di Klinika Demo. Se vuoi parlare con una persona, scrivi \"operatore\"."
     greeting: "Come posso aiutarti? Puoi chiedere di servizi, medici, prezzi, orari o indirizzo."
@@ -34,6 +36,8 @@ fixed_texts:
     no_information: "Non ho questa informazione."
     clarification: "Puoi dirmi meglio di cosa hai bisogno? Posso aiutarti con servizi, medici, prezzi, orari o indirizzo."
     attachment: "Non posso aprire allegati. Per parlare con una persona, chiama la reception al +355 00 000 0000."
+    contact_offer: "Se vuoi, ti do il contatto della reception."
+    unavailable: "In questo momento non riesco a rispondere. Riprova tra poco."
   en:
     disclosure: "Hi! You're chatting with Klinika Demo's automated assistant. To talk to a person, write \"operator\"."
     greeting: "How can I help? You can ask about services, doctors, prices, opening hours or our address."
@@ -44,3 +48,5 @@ fixed_texts:
     no_information: "I don't have that information."
     clarification: "Could you tell me a bit more about what you need? I can help with services, doctors, prices, opening hours or our address."
     attachment: "I can't open attachments. To talk to a person, call reception on +355 00 000 0000."
+    contact_offer: "If you like, I can give you reception's contact."
+    unavailable: "I can't answer right now. Please try again in a moment."

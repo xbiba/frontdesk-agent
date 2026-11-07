@@ -19,6 +19,8 @@ fixed_texts:
     no_information: "Non ho questa informazione."
     clarification: "Puoi dirmi meglio di cosa hai bisogno? Posso aiutarti con spedizioni, resi, orari e stato degli ordini."
     attachment: "Non posso aprire allegati. Per parlare con una persona, chiama il negozio al +39 00 0000 0000."
+    contact_offer: "Se vuoi, ti do il contatto del negozio."
+    unavailable: "In questo momento non riesco a rispondere. Riprova tra poco."
   en:
     disclosure: "Hi! You're chatting with Bottega Demo's automated assistant. To talk to a person, write \"operator\"."
     greeting: "How can I help? You can ask about shipping, returns, opening hours or an order's status."
@@ -29,3 +31,5 @@ fixed_texts:
     no_information: "I don't have that information."
     clarification: "Could you tell me a bit more about what you need? I can help with shipping, returns, opening hours and order status."
     attachment: "I can't open attachments. To talk to a person, call the shop on +39 00 0000 0000."
+    contact_offer: "If you like, I can give you the shop's contact."
+    unavailable: "I can't answer right now. Please try again in a moment."

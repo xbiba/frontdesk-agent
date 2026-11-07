@@ -269,7 +269,7 @@ async def test_a_crash_after_the_turn_sends_the_reply_on_the_next_run(
     assert _replies(sender) == ["Risposta: Ciao"]
 
 
-async def test_a_turn_that_keeps_failing_ends_in_the_handoff_text(
+async def test_a_turn_that_keeps_failing_asks_to_try_again_in_a_moment(
     inbox: Inbox, factory: sessionmaker[Session], clock: Clock, clinic_pack: BusinessPack
 ) -> None:
     async def broken(text: str, state: ConversationState) -> tuple[TurnResult, ConversationState]:
@@ -284,8 +284,9 @@ async def test_a_turn_that_keeps_failing_ends_in_the_handoff_text(
         with pytest.raises(RuntimeError, match="model down"):
             await runner.process(KEY)
     assert await runner.process(KEY) is Outcome.FAILED
-    handoff = clinic_pack.fixed_texts[clinic_pack.default_language][FixedTextKey.HANDOFF]
-    assert sender.sent[-1] == (ALICE, handoff)
+    # Albi, 2026-11-07: a failure is not a reason to give the reception's number.
+    unavailable = clinic_pack.fixed_texts[clinic_pack.default_language][FixedTextKey.UNAVAILABLE]
+    assert sender.sent[-1] == (ALICE, unavailable)
     (question,) = [m for m in _messages(factory, "in") if m.external_id == "m1"]
     assert (question.status, question.attempts, question.text) == (InStatus.FAILED, 3, None)
 

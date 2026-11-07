@@ -41,6 +41,12 @@ def _handoff(pack: BusinessPack, language: str, *keys: FixedTextKey) -> str:
     return "\n\n".join(_text(pack, language, key) for key in (*keys, FixedTextKey.HANDOFF))
 
 
+def _offer(pack: BusinessPack, language: str) -> str:
+    """What the bot does not know, and the offer of the contact (Albi, 2026-11-07)."""
+    no_information = _text(pack, language, FixedTextKey.NO_INFORMATION)
+    return f"{no_information} {_text(pack, language, FixedTextKey.CONTACT_OFFER)}"
+
+
 async def test_prices_are_written_from_the_record_without_the_responder(
     activate_pack: Activate, clinic_pack: BusinessPack
 ) -> None:
@@ -223,9 +229,15 @@ async def test_manipulated_classifier_output_goes_to_reception(
         clinic_pack, activate_pack(clinic_pack), classifier_model(args), document_responder()
     )
     result, _ = await handle_message("Ho una domanda", ConversationState(turns=1), runtime)
-    assert result.outcome is TurnOutcome.HANDOFF
     assert result.trace.rejection == reason
-    assert result.text == _text(clinic_pack, "it", FixedTextKey.HANDOFF)
+    # Albi, 2026-11-07: no number unasked. A failed classifier asks to try again; any other
+    # rejection says the bot does not know and offers the contact.
+    if reason == "classifier_error":
+        assert result.outcome is TurnOutcome.FIXED
+        assert result.text == _text(clinic_pack, "it", FixedTextKey.UNAVAILABLE)
+    else:
+        assert result.outcome is TurnOutcome.HANDOFF
+        assert result.text == _offer(clinic_pack, "it")
 
 
 async def test_document_answers_are_quoted_and_checked(
@@ -332,7 +344,7 @@ async def test_plausible_but_wrong_answers_never_reach_the_person(
     )
     result, _ = await handle_message("Is there parking?", ConversationState(turns=1), runtime)
     assert result.outcome is TurnOutcome.HANDOFF
-    assert result.text == _handoff(clinic_pack, "en", FixedTextKey.NO_INFORMATION)
+    assert result.text == _offer(clinic_pack, "en")
     assert reason in result.trace.check_reasons
     assert "D-00000000" not in result.trace.evidence_ids
 
@@ -353,7 +365,7 @@ async def test_clinical_message_with_a_practical_question(
     )
 
 
-async def test_uncertain_messages_go_to_reception(
+async def test_uncertain_messages_get_a_question_back(
     activate_pack: Activate, clinic_pack: BusinessPack
 ) -> None:
     args = {"category": "uncertain", "intent": "other"}
@@ -361,8 +373,8 @@ async def test_uncertain_messages_go_to_reception(
         clinic_pack, activate_pack(clinic_pack), classifier_model(args), document_responder()
     )
     result, _ = await handle_message("boh", ConversationState(turns=1, language="it"), runtime)
-    assert result.outcome is TurnOutcome.HANDOFF
-    assert result.text == _text(clinic_pack, "it", FixedTextKey.HANDOFF)
+    assert result.outcome is TurnOutcome.FIXED
+    assert result.text == _text(clinic_pack, "it", FixedTextKey.CLARIFICATION)
 
 
 async def test_orientation_is_written_from_the_map(
@@ -411,28 +423,36 @@ def _refusing(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
 
 
 @pytest.mark.parametrize(
-    ("stage", "function", "reason"),
+    ("stage", "function", "reason", "answered"),
     [
-        ("responder", _looping, "responder_error"),
-        ("responder", _unavailable, "responder_error"),
-        ("responder", _refusing, "responder_error"),
-        ("classifier", _unavailable, "classifier_error"),
+        ("responder", _looping, "responder_error", True),
+        ("responder", _unavailable, "responder_error", False),
+        ("responder", _refusing, "responder_error", True),
+        ("classifier", _unavailable, "classifier_error", False),
     ],
 )
-async def test_model_failures_hand_off(
-    activate_pack: Activate, clinic_pack: BusinessPack, stage: str, function: Any, reason: str
+async def test_model_failures_say_what_is_missing_or_to_try_again(
+    activate_pack: Activate,
+    clinic_pack: BusinessPack,
+    stage: str,
+    function: Any,
+    reason: str,
+    answered: bool,
 ) -> None:
     failing = FunctionModel(function)
     classifier = failing if stage == "classifier" else classifier_model(PARKING)
     responder = failing if stage == "responder" else document_responder()
     runtime = make_runtime(clinic_pack, activate_pack(clinic_pack), classifier, responder)
     result, _ = await handle_message("Is there parking?", ConversationState(turns=1), runtime)
-    assert result.outcome is TurnOutcome.HANDOFF
-    assert result.text == _text(clinic_pack, "en", FixedTextKey.HANDOFF)
+    if answered:  # the model answered, but nothing usable: as for an answer the bot lacks
+        assert (result.outcome, result.text) == (TurnOutcome.HANDOFF, _offer(clinic_pack, "en"))
+    else:  # the model did not answer: try again in a moment
+        assert result.outcome is TurnOutcome.FIXED
+        assert result.text == _text(clinic_pack, "en", FixedTextKey.UNAVAILABLE)
     assert result.trace.rejection == reason
 
 
-async def test_unexpected_errors_hand_off(
+async def test_unexpected_errors_ask_to_try_again(
     activate_pack: Activate, clinic_pack: BusinessPack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def broken(*args: object, **kwargs: object) -> None:
@@ -445,9 +465,9 @@ async def test_unexpected_errors_hand_off(
     result, _ = await handle_message(
         "Quanto costa la fisioterapia?", ConversationState(turns=1), runtime
     )
-    assert result.outcome is TurnOutcome.HANDOFF
+    assert result.outcome is TurnOutcome.FIXED
     assert result.trace.rule == "error"
-    assert result.text == _text(clinic_pack, "it", FixedTextKey.HANDOFF)
+    assert result.text == _text(clinic_pack, "it", FixedTextKey.UNAVAILABLE)
 
 
 async def test_slow_turns_time_out(activate_pack: Activate, clinic_pack: BusinessPack) -> None:
@@ -463,7 +483,7 @@ async def test_slow_turns_time_out(activate_pack: Activate, clinic_pack: Busines
         timeout_seconds=0.5,
     )
     result, _ = await handle_message("Is there parking?", ConversationState(turns=1), runtime)
-    assert result.outcome is TurnOutcome.HANDOFF
+    assert result.outcome is TurnOutcome.FIXED
     assert result.trace.rule == "timeout"
 
 

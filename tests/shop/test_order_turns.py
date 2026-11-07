@@ -39,7 +39,7 @@ def _runtime(
 
 def _no_information(pack: BusinessPack) -> str:
     texts = pack.fixed_texts["it"]
-    return f"{texts[FixedTextKey.NO_INFORMATION]}\n\n{texts[FixedTextKey.HANDOFF]}"
+    return f"{texts[FixedTextKey.NO_INFORMATION]} {texts[FixedTextKey.CONTACT_OFFER]}"
 
 
 async def test_order_status_is_written_from_the_order(
@@ -259,7 +259,7 @@ async def test_an_error_or_timeout_after_the_attempt_keeps_it_used(
     factory = activate_pack(shop_pack)
     runtime = _runtime(shop_pack, factory)
     result, state = await handle_message(RIGHT, ConversationState(turns=1), runtime)
-    assert result.outcome is TurnOutcome.HANDOFF
+    assert result.outcome is TurnOutcome.FIXED  # try again in a moment (2026-11-07)
     assert result.trace.rule == rule
     assert _used(factory, shop_pack, state) == 1
 

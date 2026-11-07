@@ -76,7 +76,10 @@ def web_config(web: WebIngress) -> dict[str, Any]:
         "default_language": pack.default_language,
         "languages": list(pack.languages),
         "texts": {lang: texts.model_dump() for lang, texts in channel.texts.items()},
-        "handoff": {lang: pack.fixed_texts[lang][FixedTextKey.HANDOFF] for lang in pack.languages},
+        # What the widget says when no reply came in time; its header links to a person.
+        "unavailable": {
+            lang: pack.fixed_texts[lang][FixedTextKey.UNAVAILABLE] for lang in pack.languages
+        },
         "phone": "+" + _NOT_DIGITS.sub("", location.phone),
         "whatsapp": whatsapp,
         "privacy_url": channel.privacy_url,

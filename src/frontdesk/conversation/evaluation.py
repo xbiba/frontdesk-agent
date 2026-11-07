@@ -191,7 +191,7 @@ def check_reply(
     """The checks every reply gets, at every turn, whatever its case expects.
 
     No diagnostic language and no promise of an action (P85); a handoff ends with how to reach a
-    person; and a handoff the pipeline fell back to is a failure (P86): after a crash, a timeout, a
+    person, or the offer to say it; and a handoff the pipeline fell back to is a failure (P86): after a crash, a timeout, a
     failed model call or a classifier answer outside its contract (`pipeline_failure` lists them).
     Only a case that expects the very rule of the fallback (`error`, `timeout`) takes it as given.
     """
@@ -202,10 +202,10 @@ def check_reply(
     if promise is not None:
         failures.append(f"promise: {promise}")
     # A handoff tells the person how to reach someone; it never promises a call (ADR-0006). A
-    # booking that reception takes ends with the pack's next step, which must give the contact too.
-    endings = tuple(
-        text for key in (FixedTextKey.HANDOFF, FixedTextKey.NEXT_STEP) if (text := texts.get(key))
-    )
+    # booking that reception takes ends with the pack's next step, which must give the contact too;
+    # what the bot does not know ends with the offer of the contact (Albi, 2026-11-07).
+    keys = (FixedTextKey.HANDOFF, FixedTextKey.NEXT_STEP, FixedTextKey.CONTACT_OFFER)
+    endings = tuple(text for key in keys if (text := texts.get(key)))
     if result.outcome is TurnOutcome.HANDOFF and not (
         result.text.endswith(endings) or _gives_the_contact(result.text, texts)
     ):

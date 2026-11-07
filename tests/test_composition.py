@@ -43,7 +43,13 @@ from frontdesk.model_gateway.routes import (
 from frontdesk.model_gateway.second_try import SecondTryModel
 from frontdesk.settings import CalendarBackend, EmbeddingBackend, Settings
 from frontdesk.shop.orders import OrderStore
-from frontdesk.tenancy.pack import BusinessPack, CalendarIntegration, Integrations, Profile
+from frontdesk.tenancy.pack import (
+    BusinessPack,
+    CalendarIntegration,
+    FixedTextKey,
+    Integrations,
+    Profile,
+)
 from tests.conversation.helpers import first_prompt
 from tests.model_gateway.budget_helpers import write_budget
 
@@ -771,3 +777,19 @@ def test_the_haiku_route_without_a_key_is_refused_by_name() -> None:
 
 def test_a_vertex_route_needs_no_anthropic_key() -> None:
     assert model_api_key(Settings(), ROUTES["vertex-eu-gemini-flash"]) is None
+
+
+@pytest.mark.db
+async def test_offline_the_agent_s_stand_in_greets_a_first_greeting_and_hands_off_the_rest(
+    activate_pack: Activate, app_url: str, clinic_pack: BusinessPack
+) -> None:
+    """`web serve` on the offline model (Albi, 2026-11-07: "ciao" got reception's number)."""
+    deployment = _deployment(
+        clinic_pack, activate_pack(clinic_pack), app_url=app_url, conversation="agent"
+    )
+    runtime = build_turn_runtime(deployment, data_class=DataClass.EVALUATION)
+    texts = clinic_pack.fixed_texts["it"]
+    hello, state = await handle_message("Ciao", ConversationState(conversation_id="c1"), runtime)
+    assert hello.text == texts[FixedTextKey.DISCLOSURE]
+    other, _ = await handle_message("Avete la piscina?", state, runtime)
+    assert other.outcome is TurnOutcome.HANDOFF

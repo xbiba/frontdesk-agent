@@ -53,7 +53,8 @@ class ReplyKind(StrEnum):
     GREETING = "greeting"  # only a greeting or small talk
     ANSWER = "answer"
     CLARIFY = "clarify"  # it cannot answer before the patient says what they mean
-    HANDOFF = "handoff"
+    HANDOFF = "handoff"  # it gave reception's contact
+    NO_INFORMATION = "no_information"  # it said it does not know; the system offers the contact
     NOTICE = "notice"  # an answer to the practical part of a message that describes symptoms
     EMERGENCY = "emergency"
     CLINICAL = "clinical"
@@ -66,7 +67,9 @@ class ReceptionReply(BaseModel):
     kind: ReplyKind = Field(
         description="greeting (only a greeting or small talk), answer (you answered, showed "
         "times or asked for the next booking step), clarify (you cannot answer before they say what "
-        "they mean), handoff (you send them to reception), notice (you answered the practical part of "
+        "they mean), handoff (you gave reception's contact), no_information (you said you do not "
+        "have that information; the system offers reception's contact), notice (you answered the "
+        "practical part of "
         "a message that describes symptoms), clinical (they ask for medical advice) or emergency"
     )
     language: Language | None = Field(
@@ -242,10 +245,10 @@ def build_reception(
         if output.kind in {ReplyKind.EMERGENCY, ReplyKind.CLINICAL}:
             return output  # the pack's fixed text answers
         if not output.text.strip() and (
-            output.kind is ReplyKind.HANDOFF
+            output.kind in {ReplyKind.HANDOFF, ReplyKind.NO_INFORMATION}
             or (output.kind is ReplyKind.GREETING and desk.first_turn)
         ):
-            return output  # the handoff text, or the introduction, says it all
+            return output  # the pack's own text, or the introduction, says it all
         known = "\n".join([desk.facts, desk.documents, *desk.seen, desk.conversation, desk.message])
         times = booking.shown_times(desk)
         # A booking this conversation made in an earlier turn may be told again; the calendar is

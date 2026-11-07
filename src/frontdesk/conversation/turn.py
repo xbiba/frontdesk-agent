@@ -2,8 +2,14 @@
 
 precheck → deterministic rules → classifier → validation → facts written by
 code, or document evidence → responder → claim checks. Model failures, other
-errors and timeouts end in fixed texts and a handoff; only the type of an
-error is logged.
+errors and timeouts end in the pack's text that asks to try again in a moment;
+only the type of an error is logged.
+
+Reception's contact (the handoff text) comes only when it is needed (Albi,
+2026-11-07): the person asks for a person, an emergency or a medical question,
+a booking or an action only the staff can take, the switch that turns the model
+off, or a channel's limit. What the bot does not know it says, then offers the
+contact without writing it (`contact_offer`).
 """
 
 from __future__ import annotations
@@ -17,7 +23,7 @@ from enum import StrEnum
 from typing import Final
 
 from pydantic_ai import Agent
-from pydantic_ai.exceptions import AgentRunError
+from pydantic_ai.exceptions import AgentRunError, UnexpectedModelBehavior, UsageLimitExceeded
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.agent.answer_check import check_answer
@@ -85,10 +91,7 @@ from frontdesk.tenancy.pack import BusinessPack, FixedTextKey, Language, Profile
 logger = logging.getLogger(__name__)
 MAX_MESSAGE_CHARS: Final = 2000
 TURN_TIMEOUT_SECONDS: Final = 45.0
-_NOTICES: Final = {
-    Category.CLINICAL: FixedTextKey.CLINICAL,
-    Category.UNCERTAIN: FixedTextKey.HANDOFF,
-}
+_NOTICES: Final = {Category.CLINICAL: FixedTextKey.CLINICAL}
 _SMALL_TALK: Final = frozenset({Intent.GREETING, Intent.OTHER})
 # The part of a turn's time the reception agent may take: the rest answers when it runs out.
 RECEPTION_SHARE: Final = 0.8
@@ -261,12 +264,12 @@ async def _run_turn(text: str, state: ConversationState, runtime: TurnRuntime) -
         async with asyncio.timeout(runtime.timeout_seconds):
             result = await _decide(text, language, state, runtime)
     except TimeoutError:
-        result = _handoff(pack, language, FixedTextKey.HANDOFF, TurnTrace(rule="timeout"))
-    except SpendCapReachedError:  # today's model spend reached its cap: reception's contact
-        result = _handoff(pack, language, FixedTextKey.HANDOFF, TurnTrace(rule="spend_cap"))
-    except Exception as error:  # any failure becomes a handoff; only its type is logged
+        result = _unavailable(pack, language, TurnTrace(rule="timeout"))
+    except SpendCapReachedError:  # today's model spend reached its cap: try again later
+        result = _unavailable(pack, language, TurnTrace(rule="spend_cap"))
+    except Exception as error:  # any failure asks to try again; only its type is logged
         log_event(logger, "turn.failed", business_id=pack.id, reason=type(error).__name__)
-        result = _handoff(pack, language, FixedTextKey.HANDOFF, TurnTrace(rule="error"))
+        result = _unavailable(pack, language, TurnTrace(rule="error"))
     if state.turns == 0:
         result = _with_disclosure(pack, result.language, result)
     return result
@@ -304,11 +307,14 @@ async def _decide(
     catalog = await asyncio.to_thread(_load_catalog, runtime)
     if catalog is None:
         trace = TurnTrace(rule="pass", rejection="no_active_knowledge")
-        return _handoff(pack, language, FixedTextKey.HANDOFF, trace)
+        return _unavailable(pack, language, trace)
     classified = await _classify(stripped, language, state, catalog, runtime)
     if isinstance(classified, Rejection):
         trace = TurnTrace(rule="pass", rejection=classified.reason)
-        return _handoff(pack, language, FixedTextKey.HANDOFF, trace)
+        if classified.reason == "classifier_error":
+            return _unavailable(pack, language, trace)
+        # What the classifier read but the business does not answer here: say so, offer a person.
+        return _offer(pack, language, trace)
     return await _route(classified, state, catalog, runtime)
 
 
@@ -323,7 +329,7 @@ async def _reception(
     catalog = await asyncio.to_thread(_load_catalog, runtime)
     if catalog is None:
         trace = TurnTrace(rule="pass", rejection="no_active_knowledge")
-        return _handoff(pack, language, FixedTextKey.HANDOFF, trace)
+        return _unavailable(pack, language, trace)
     desk = await asyncio.to_thread(_desk, text, language, state, catalog, runtime)
     try:
         # Within the turn's own limit, so that what the tools did is still known when it runs out.
@@ -350,7 +356,7 @@ async def _reception(
             # The booking waits for a yes to this summary: the patient reads it, so that their next
             # yes answers a summary they saw (run agent-24: a handoff, then "sì" booked).
             return TurnResult(desk.summary, TurnOutcome.REPLIED, language, failed)
-        return _handoff(pack, language, FixedTextKey.HANDOFF, failed)
+        return _model_failed(pack, language, failed, error)
     reply = run.output
     # The model reads the language of a short message better than the word lists: "Fate
     # trattamenti osteopatici?" was taken for Albanian, and the reply came in Albanian (run of
@@ -391,11 +397,18 @@ async def _reception(
         parts.append(privacy)  # the link to the clinic's privacy page ends every booking
     if reply.kind is ReplyKind.HANDOFF and not _names_the_phone(reply.text, pack):
         parts.append(texts[FixedTextKey.HANDOFF])
+    if reply.kind is ReplyKind.NO_INFORMATION:
+        # What it does not know, in its words, then the offer of the contact: the number only when
+        # the patient asks for it (Albi, 2026-11-07).
+        offer = texts[FixedTextKey.CONTACT_OFFER]
+        words = parts or [texts[FixedTextKey.NO_INFORMATION]]
+        parts = [" ".join([*words, offer])] if offer not in said else parts
     outcome = {
         ReplyKind.GREETING: TurnOutcome.REPLIED,
         ReplyKind.ANSWER: TurnOutcome.REPLIED,
         ReplyKind.CLARIFY: TurnOutcome.ASKED,
         ReplyKind.HANDOFF: TurnOutcome.HANDOFF,
+        ReplyKind.NO_INFORMATION: TurnOutcome.HANDOFF,
     }[reply.kind]
     return TurnResult("\n\n".join(parts), outcome, language, trace)
 
@@ -509,8 +522,13 @@ async def _route(
     if fields.intent in {Intent.HUMAN, Intent.BOOKING}:
         # A booking with symptoms goes to reception with the clinical notice.
         return _handoff(pack, language, notice or FixedTextKey.HANDOFF, trace)
+    if fields.category is Category.UNCERTAIN:
+        # It cannot tell what they need: it asks, as a person would, instead of a phone number.
+        return _fixed(pack, language, FixedTextKey.CLARIFICATION, trace)
     if notice is None:
         if fields.category is Category.ADMINISTRATIVE and fields.intent in _SMALL_TALK:
+            if state.turns == 0:  # the introduction greets and asks how it can help
+                return TurnResult("", TurnOutcome.FIXED, language, trace)
             return _fixed(pack, language, FixedTextKey.GREETING, trace)
         return await _answer(fields, state, catalog, runtime, trace)
     if fields.intent not in ADMINISTRATIVE_INTENTS:
@@ -590,22 +608,19 @@ async def _answer(
     *,
     with_closing: bool = True,
 ) -> TurnResult:
+    """The answer, and nothing after it: the pack's next step (how to book, with the contact) ends
+    a booking question only, not every first answer (Albi, 2026-11-07: no tail)."""
     pack = runtime.pack
     language = fields.language
-    next_step = _next_step(pack, fields, state) if with_closing else None
     if fields.intent is Intent.ORDER_STATUS:
-        return await _order_reply(
-            fields, state, catalog, runtime, trace, with_closing=with_closing, next_step=next_step
-        )
+        return await _order_reply(fields, state, catalog, runtime, trace, with_closing=with_closing)
     if fields.category is Category.ORIENTATION or fields.intent in FACT_INTENTS:
         missing = _missing_field(fields)
         if missing is not None:
             return _clarify(catalog, language, missing, trace)
         facts = await asyncio.to_thread(_facts, fields, runtime)
-        return _facts_reply(
-            pack, fields, facts, catalog, trace, with_closing=with_closing, next_step=next_step
-        )
-    return await _document_answer(fields, catalog, runtime, trace, next_step=next_step)
+        return _facts_reply(pack, fields, facts, catalog, trace, with_closing=with_closing)
+    return await _document_answer(fields, catalog, runtime, trace)
 
 
 def _next_step(pack: BusinessPack, fields: ValidatedFields, state: ConversationState) -> str | None:
@@ -624,7 +639,6 @@ async def _order_reply(
     trace: TurnTrace,
     *,
     with_closing: bool,
-    next_step: str | None,
 ) -> TurnResult:
     pack = runtime.pack
     language = fields.language
@@ -641,9 +655,7 @@ async def _order_reply(
         return _handoff(pack, language, FixedTextKey.HANDOFF, exhausted)
     found = runtime.orders.lookup(reference, postal_code, language=language, now=now)
     facts = [found] if found is not None else []
-    return _facts_reply(
-        pack, fields, facts, catalog, trace, with_closing=with_closing, next_step=next_step
-    )
+    return _facts_reply(pack, fields, facts, catalog, trace, with_closing=with_closing)
 
 
 def _order_details(fields: ValidatedFields) -> tuple[str, str] | None:
@@ -678,7 +690,6 @@ def _facts_reply(
     trace: TurnTrace,
     *,
     with_closing: bool,
-    next_step: str | None,
 ) -> TurnResult:
     language = fields.language
     listed = [item for item in facts if item.kind is not EvidenceKind.LIVE]
@@ -693,14 +704,12 @@ def _facts_reply(
         f"{_asked_name(catalog, fields, item)}: {no_information}"
         for item in unanswered(fields, facts)
     ]
-    text = compose_facts(
-        fields, facts, with_closing=with_closing and not absent, next_step=next_step, missing=absent
-    )
+    text = compose_facts(fields, facts, with_closing=with_closing and not absent, missing=absent)
     if text is None:
-        return _handoff(pack, language, FixedTextKey.NO_INFORMATION, checked)
+        return _offer(pack, language, checked)
     if absent:
-        # Part of the question has no record: say which part, then how to reach a person.
-        return _handoff(pack, language, FixedTextKey.HANDOFF, checked, prefix=text)
+        # Part of the question has no record: say which part, then offer a person's contact.
+        return _offer(pack, language, checked, prefix=text, said=True)
     return TurnResult(text, TurnOutcome.REPLIED, language, checked)
 
 
@@ -715,8 +724,6 @@ async def _document_answer(
     catalog: Catalog,
     runtime: TurnRuntime,
     trace: TurnTrace,
-    *,
-    next_step: str | None,
 ) -> TurnResult:
     pack = runtime.pack
     language = fields.language
@@ -730,9 +737,7 @@ async def _document_answer(
         )
     except AgentRunError as error:
         log_event(logger, "responder.failed", business_id=pack.id, reason=type(error).__name__)
-        return _handoff(
-            pack, language, FixedTextKey.HANDOFF, replace(trace, rejection="responder_error")
-        )
+        return _model_failed(pack, language, replace(trace, rejection="responder_error"), error)
     output = run.output
     check = await asyncio.to_thread(
         check_answer,
@@ -751,7 +756,7 @@ async def _document_answer(
     draft = _draft(output) if runtime.keep_drafts else None
     if not check.ok or output.action is AnswerAction.HANDOFF:
         refused = draft if not check.ok else None
-        return _handoff(pack, language, FixedTextKey.NO_INFORMATION, checked, draft=refused)
+        return _offer(pack, language, checked, draft=refused)
     if output.action is AnswerAction.CLARIFY:
         return _responder_clarify(pack, catalog, language, output.clarify, checked, draft=draft)
     text = check.text
@@ -759,8 +764,6 @@ async def _document_answer(
         # The passage sends the person to the business: the system writes the contact from the
         # pack, as it writes every contact; the model was told never to (live review, 2026-10-11).
         text = f"{text}\n\n{_fixed_text(pack, language, FixedTextKey.HANDOFF)}"
-    elif next_step:
-        text = f"{text}\n\n{next_step}"
     return TurnResult(text, TurnOutcome.REPLIED, language, checked)
 
 
@@ -789,7 +792,7 @@ def _responder_clarify(
         # Any other question is a rejected answer: it fails like a bad claim.
         reasons = (*trace.check_reasons, "clarify_not_offered")
         rejected = replace(trace, check_reasons=reasons)
-        return _handoff(pack, language, FixedTextKey.NO_INFORMATION, rejected, draft=draft)
+        return _offer(pack, language, rejected, draft=draft)
     return _clarify(catalog, language, field, trace)
 
 
@@ -912,6 +915,39 @@ def _handoff(
     return TurnResult("\n\n".join(parts), TurnOutcome.HANDOFF, language, trace, draft)
 
 
+def _offer(
+    pack: BusinessPack,
+    language: Language,
+    trace: TurnTrace,
+    *,
+    prefix: str | None = None,
+    said: bool = False,
+    draft: RejectedDraft | None = None,
+) -> TurnResult:
+    """What the bot does not know: it says so (unless `prefix` already did, `said`), then offers a
+    person's contact without writing it. A handoff still: the person is sent on, when they want."""
+    offer = _fixed_text(pack, language, FixedTextKey.CONTACT_OFFER)
+    last = offer if said else f"{_fixed_text(pack, language, FixedTextKey.NO_INFORMATION)} {offer}"
+    text = "\n\n".join([*([prefix] if prefix else []), last])
+    return TurnResult(text, TurnOutcome.HANDOFF, language, trace, draft)
+
+
+def _model_failed(
+    pack: BusinessPack, language: Language, trace: TurnTrace, error: BaseException
+) -> TurnResult:
+    """A model run that failed. It answered, but nothing it wrote passed the checks or it went on
+    calling tools: what the bot does not know, said as a person would. It did not answer (an HTTP
+    error, no network, out of time): try again in a moment."""
+    if isinstance(error, (UnexpectedModelBehavior, UsageLimitExceeded)):
+        return _offer(pack, language, trace)
+    return _unavailable(pack, language, trace)
+
+
+def _unavailable(pack: BusinessPack, language: Language, trace: TurnTrace) -> TurnResult:
+    """A turn that failed, ran out of time or of today's spend: try again in a moment."""
+    return _fixed(pack, language, FixedTextKey.UNAVAILABLE, trace)
+
+
 def _emergency(pack: BusinessPack, language: Language, rule: str) -> TurnResult:
     # The category lets the next state drop the topic, as for an emergency the classifier found.
     trace = TurnTrace(rule=rule, category=Category.EMERGENCY)
@@ -919,13 +955,18 @@ def _emergency(pack: BusinessPack, language: Language, rule: str) -> TurnResult:
 
 
 def _with_disclosure(pack: BusinessPack, language: Language, result: TurnResult) -> TurnResult:
-    """The first reply says the assistant is automatic (ADR-0006). An emergency still reads first."""
+    """The first reply says the assistant is automatic (ADR-0006). An emergency still reads first.
+    A greeting gets the whole introduction; a reply with words of its own the brief one, when the
+    pack has it, so that "how can I help?" does not come before the help."""
     disclosure = _fixed_text(pack, language, FixedTextKey.DISCLOSURE)
+    if not result.text:
+        return replace(result, text=disclosure)
+    brief = pack.fixed_texts[language].get(FixedTextKey.DISCLOSURE_BRIEF) or disclosure
     emergency = _fixed_text(pack, language, FixedTextKey.EMERGENCY)
     if result.trace.category is Category.EMERGENCY and result.text.startswith(emergency):
         contact = result.text.removeprefix(emergency)  # "\n\n" and the contact text
-        return replace(result, text=f"{emergency}\n\n{disclosure}{contact}")
-    return replace(result, text=f"{disclosure}\n\n{result.text}" if result.text else disclosure)
+        return replace(result, text=f"{emergency}\n\n{brief}{contact}")
+    return replace(result, text=f"{brief}\n\n{result.text}")
 
 
 def _expected_fields(state: ConversationState, runtime: TurnRuntime) -> frozenset[PersonalField]:

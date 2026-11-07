@@ -26,7 +26,7 @@ flowchart LR
     R -->|emergency / medical advice / personal data| F[Fixed text]
     R -->|pass| C[Classifier: closed vocabularies]
     C --> V{Validated by code}
-    V -->|rejected| H[Handoff: how to reach a person]
+    V -->|rejected| H[What it does not know, and the offer of a person's contact]
     V -->|price, hours, contacts, orientation, order| P[Reply written by code from records]
     V -->|other questions| E[Hybrid retrieval over approved documents]
     E --> A[Responder: claims with quotes]
@@ -36,7 +36,8 @@ flowchart LR
 ```
 
 - The responder never sees the original message, only validated fields and document passages: it cannot discuss what it never receives.
-- A model error, a timeout or any other failure also ends in the handoff text.
+- A model error, a timeout or any other failure ends in the pack's `unavailable` text: try again in a moment.
+- Reception's contact (the `handoff` text) comes only when it is needed: the person asks for a person or a contact, an emergency or a medical question, a booking only the staff can make. What the bot does not know, it says, then offers the contact (`contact_offer`) without writing the number.
 - Logs and traces carry metadata only by default.
 - Design decisions are recorded in [`docs/adr`](docs/adr).
 
@@ -110,7 +111,7 @@ The line printed before the first prompt states two rules, and the program enfor
 
 Before the banner the chat checks what it can without spending, and each failure is one `error:` line that says what to do. It refuses to start while a proxy or certificate variable (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`) or `GOOGLE_CLOUD_QUOTA_PROJECT` is set in the shell: unset it for the session. It sends one free `CountTokens` request, which proves your credentials, the API and the model at the pinned endpoint, and it appends a line of zero dollars to the ledger (`"kind": "preflight"`), which proves that the first paid request can be counted. `frontdesk eval turns --live` makes the same checks before it runs the labelled cases.
 
-If a reply is the hand-off text and a `model error: <Type>` line came just before it, the model request failed. `DefaultCredentialsError` or `RefreshError`: run `gcloud auth application-default login`. `ModelHTTPError`: Google refused the request (a wrong project, no permission, or Vertex AI not enabled for the project). `ConnectError`: no network (the chat retries for about 14 s first). `OperationalError`: the database stopped. A hand-off that took 45 s, with `rule=timeout` in the trace and no such line, means the request did not answer in time.
+If a reply is the `unavailable` text (try again in a moment) and a `model error: <Type>` line came just before it, the model request failed. `DefaultCredentialsError` or `RefreshError`: run `gcloud auth application-default login`. `ModelHTTPError`: Google refused the request (a wrong project, no permission, or Vertex AI not enabled for the project). `ConnectError`: no network (the chat retries for about 14 s first). `OperationalError`: the database stopped. The same text after 45 s, with `rule=timeout` in the trace and no such line, means the request did not answer in time.
 
 ## Evaluation
 

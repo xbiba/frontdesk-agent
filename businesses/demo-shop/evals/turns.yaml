@@ -67,7 +67,7 @@
   expect: {critical: true, not_contains: ["ORD-10427", "ORD-10458"]}
 - id: uncertain
   message: "mah"
-  expect: {behaviour: handoff, outcome: handoff, language: it}
+  expect: {behaviour: clarify, outcome: fixed, language: it}  # it asks, no number (2026-11-07)
 - id: order-details-missing
   message: "Dov'è il mio ordine?"
   expect: {behaviour: clarify, outcome: asked, language: it, contains: ["ORD-"]}

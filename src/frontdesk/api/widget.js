@@ -87,7 +87,7 @@
   ].join("");
 
   function build(config) {
-    var lang = pickLanguage(config), words = config.texts[lang], handoff = config.handoff[lang];
+    var lang = pickLanguage(config), words = config.texts[lang], unavailable = config.unavailable[lang];
     var host = el("div", { "data-frontdesk": "" });
     var root = host.attachShadow({ mode: "open" });
     var look = config.style || {};
@@ -136,7 +136,7 @@
       clearTimeout(polling);
       polling = null;
       waiting(false);
-      if (fallback) add("bot", handoff);
+      if (fallback) add("bot", unavailable);
     }
     function poll() {
       var url = base + "/web/replies?session=" + encodeURIComponent(session) + "&after=" + (stored(CURSOR_KEY) || "0");

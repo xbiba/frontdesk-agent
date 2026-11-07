@@ -251,7 +251,9 @@ def test_the_config_gives_the_widget_its_words_and_numbers(
     assert config["style"] is None  # neutral: the widget's own plain look
     assert config["default_language"] == "sq"
     assert config["texts"]["it"]["send"] == "Send it"
-    assert config["handoff"]["en"] == pack.fixed_texts["en"][FixedTextKey.HANDOFF]
+    # Shown when no reply came in time: try again; the header's link reaches a person.
+    assert config["unavailable"]["en"] == pack.fixed_texts["en"][FixedTextKey.UNAVAILABLE]
+    assert "handoff" not in config
     assert config["phone"] == "+355000000000"
     assert config["whatsapp"] == "355690000000"
     assert config["privacy_url"] == "https://clinic.example/privacy"

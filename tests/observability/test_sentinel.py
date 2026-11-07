@@ -174,7 +174,7 @@ async def test_provoked_errors_leave_no_content(
         result, _ = await handle_message(
             f"Is there parking? {MESSAGE_SENTINEL}", ConversationState(turns=1), runtime
         )
-    assert result.outcome is TurnOutcome.HANDOFF
+    assert result.outcome is TurnOutcome.FIXED  # try again in a moment
     exported = _exported(span_exporter)
     logs = _logs(caplog)
     assert '"reason": "ModelHTTPError"' in logs
@@ -203,7 +203,7 @@ async def test_unexpected_errors_leave_no_content(
         result, _ = await handle_message(
             "Quanto costa la fisioterapia?", ConversationState(turns=1), runtime
         )
-    assert result.outcome is TurnOutcome.HANDOFF
+    assert result.outcome is TurnOutcome.FIXED  # try again in a moment
     logs = _logs(caplog)
     assert '"reason": "RuntimeError"' in logs
     assert MESSAGE_SENTINEL not in logs

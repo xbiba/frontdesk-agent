@@ -232,12 +232,35 @@ def _request_fields(prompt: str) -> dict[str, str]:
 
 
 def demo_reception_model() -> FunctionModel:
-    """The reception agent offline (CI and the demo): no model reads the message, so whatever the
+    """The reception agent offline (CI and the demo): no model reads the message, so a first
+    message that only greets gets the introduction (kind greeting, no text), and whatever else the
     rules let through goes to reception, in the pack's own handoff text. The offline cases are the
     rules' (an emergency, medical advice, personal data), which answer before the agent: offline,
     they take the path a live deployment with the agent takes."""
 
     def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        first = FIRST_MESSAGE in (info.instructions or "")
+        if first and _only_greets(_last_prompt(messages)):
+            return _output(info, {"text": "", "kind": "greeting"})
         return _output(info, {"text": "", "kind": "handoff"})
 
     return FunctionModel(respond)
+
+
+# What the reception agent's situation says on a patient's first message
+# (frontdesk.conversation.reception.render_situation).
+FIRST_MESSAGE: Final = "This is the patient's first message"
+
+
+def _only_greets(text: str) -> bool:
+    words = tokens(text)
+    return bool(words) and _intent(words) is Intent.GREETING and len(words) <= 3
+
+
+def _last_prompt(messages: Sequence[ModelMessage]) -> str:
+    for message in reversed(messages):
+        if isinstance(message, ModelRequest):
+            for part in message.parts:
+                if isinstance(part, UserPromptPart) and isinstance(part.content, str):
+                    return part.content
+    return ""
