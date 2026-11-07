@@ -410,6 +410,10 @@ async def _reception(
         ReplyKind.HANDOFF: TurnOutcome.HANDOFF,
         ReplyKind.NO_INFORMATION: TurnOutcome.HANDOFF,
     }[reply.kind]
+    if desk.booked or desk.summary:
+        outcome = (
+            TurnOutcome.REPLIED
+        )  # a booking that goes on or is made, whatever kind it was given
     return TurnResult("\n\n".join(parts), outcome, language, trace)
 
 

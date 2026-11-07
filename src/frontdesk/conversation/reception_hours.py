@@ -81,13 +81,13 @@ def _on(desk: Desk, asked: date, doctors: list[_Doctor]) -> str:
     if not doctors:
         return (
             f"No doctor receives patients on {_day(desk, asked)}: say no visits are received that "
-            "day, and give reception's phone and WhatsApp."
+            "day, and ask whether they would like the next days with free times; no phone number."
         )
     if not any(doctor.free for doctor in doctors):
         return (
             f"On {_day(desk, asked)} the doctor receives patients, but no free time is left: "
             f'{_doctors(desk, doctors)}. Say so ("riceve, ma non ci sono più posti liberi"), and '
-            "give reception's phone and WhatsApp."
+            "ask whether they would like other days; no phone number."
         )
     return (
         f"On {_day(desk, asked)} the clinic receives patients: {_doctors(desk, doctors)}. Offer a "

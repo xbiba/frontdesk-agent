@@ -806,7 +806,8 @@ async def test_a_day_after_the_calendar_s_reach_is_said_to_be_unknown(base: Turn
         pytest.param(
             {"day": "2026-10-24"},
             "No doctor receives patients on 2026-10-24 (sabato 24 ottobre): say no visits are "
-            "received that day, and give reception's phone and WhatsApp.",
+            "received that day, and ask whether they would like the next days with free times; no "
+            "phone number.",
             id="a-day-nobody-is-in",
         ),
         pytest.param(
@@ -912,7 +913,8 @@ async def test_a_full_day_is_no_closed_day_and_a_full_morning_keeps_its_start(
     assert saturday == (
         "On 2026-10-24 (sabato 24 ottobre) the doctor receives patients, but no free time is "
         'left: Dr. Arben Demo, from 09:00 to 10:00 (no free time left). Say so ("riceve, ma non '
-        "ci sono più posti liberi\"), and give reception's phone and WhatsApp."
+        'ci sono più posti liberi"), and ask whether they would like other days; no phone '
+        "number."
     )
 
 
@@ -1217,3 +1219,27 @@ async def test_a_first_answer_opens_with_the_brief_disclosure(base: TurnRuntime)
     chat.state = ConversationState(conversation_id="c1")  # the first message
     reply = await chat.say("Quanto costa la visita ortopedica?")
     assert reply.text == f"{brief}\n\nLa visita ortopedica costa 40 EUR."
+
+
+async def test_a_booking_made_is_a_reply_even_when_the_model_calls_it_a_handoff(
+    base: TurnRuntime, calendar: FixtureCalendar
+) -> None:
+    # Run agent-32: the confirmation names reception's phone, and the model gave it kind handoff.
+    script = Script(
+        [
+            [("free_times", {})],
+            _final(f"{LIST}\nQuale preferisce?"),
+            [("hold_time", {"day": "2026-10-23", "time": "09:00"})],
+            _final("Nome, cognome e telefono?"),
+            [("prepare_booking", {"name": "Mario Rossi", "phone": "+355 69 123 4567"})],
+            _final(SUMMARY, "handoff"),
+            [("confirm_booking", {})],
+            _final(BOOKED, "handoff"),
+        ]
+    )
+    chat = Chat(base, script)
+    for message in ("Vorrei prenotare", "il primo"):
+        await chat.say(message)
+    summary = await chat.say("Mario Rossi, +355 69 123 4567")
+    booked = await chat.say("sì")
+    assert (summary.outcome, booked.outcome) == (TurnOutcome.REPLIED, TurnOutcome.REPLIED)
