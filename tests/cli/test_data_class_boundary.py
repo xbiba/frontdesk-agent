@@ -83,13 +83,16 @@ def test_only_the_route_table_declares_evaluation_data() -> None:
     embedder experiment, which sends the pack's approved public text and the labelled retrieval
     questions to the embedding models it compares. And so does the Instagram channel in testers
     mode (M4 design D4): only the people who sent the pairing code reach the model, and they write
-    test messages; in live mode the channel's messages are patient data."""
+    test messages; in live mode the channel's messages are patient data. The site's chat does too,
+    in tester mode, and so does its try on this computer (`web serve`), which runs the offline
+    model only and says the messages are test messages (2026-11-07)."""
     declaring = declaring_modules(SOURCE)
     assert declaring == [
         "channels/wiring.py",
         "cli/experiment.py",
         "cli/live.py",
         "cli/live_chat.py",
+        "cli/web.py",
         "model_gateway/routes.py",
     ]
 
