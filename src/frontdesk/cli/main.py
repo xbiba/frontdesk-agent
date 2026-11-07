@@ -620,9 +620,22 @@ def web_serve(
     port: Annotated[
         int, typer.Option("--port", min=1, max=65535, help="Port on 127.0.0.1.")
     ] = 8000,
+    live: Annotated[
+        bool,
+        typer.Option("--live", help="Answer with the real model: test messages only, and paid."),
+    ] = False,
+    budget: Annotated[
+        Path | None,
+        typer.Option("--budget", help="The budget file that pays for --live (required with it)."),
+    ] = None,
 ) -> None:
     """Try the site's chat on this computer: the routes, the worker and a test page at
-    http://localhost:PORT/, on the offline model. Migrates the env file's database first."""
+    http://localhost:PORT/. Migrates the env file's database first.
+
+    Offline by default. With --live the widget is answered on the deployment's live route, as
+    `chat --live` answers: every request is paid from --budget, which the server holds while it
+    runs, and only made-up test messages may be typed, never a real patient's data.
+    """
     from frontdesk.cli.web import serve
 
-    raise typer.Exit(serve(env_file, port))
+    raise typer.Exit(serve(env_file, port, live=live, budget_path=budget))

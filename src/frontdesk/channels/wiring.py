@@ -31,7 +31,7 @@ from frontdesk.tenancy.pack import BusinessPack, ChannelPolicy, WebChannel
 if TYPE_CHECKING:
     from frontdesk.channels.requests import Requests
     from frontdesk.channels.runner import Runner
-    from frontdesk.composition import Deployment
+    from frontdesk.composition import Deployment, ModelWrapper
     from frontdesk.conversation.state import ConversationState
     from frontdesk.conversation.turn import TurnResult
 
@@ -157,17 +157,22 @@ def build_ingresses(settings: Settings) -> tuple[Ingress, ...]:
 
 
 def build_web_ingress(
-    settings: Settings, *, dispatcher: Dispatcher | None = None
+    settings: Settings,
+    *,
+    dispatcher: Dispatcher | None = None,
+    data_class: DataClass | None = None,
 ) -> WebIngress | None:
     """The site's ingress when the pack lists the channel (`channels.web`). In tester mode it
     answers only the sessions that wrote the site's own pairing code (design §4), and misses at the
-    code lock a session, then the process, out of pairing (security review of 2026-11-07)."""
+    code lock a session, then the process, out of pairing (security review of 2026-11-07).
+    Everyone's messages are patient data, unless the caller says otherwise (a try on this
+    computer): the route must be approved for them."""
     pack = load_pack(settings.require_business_pack())
     if pack.channels.web is None:
         return None
     testers = settings.web_mode is InstagramMode.TESTERS
-    if not testers:
-        require_route(settings.model_route, DataClass.PATIENT_DERIVED)
+    if data_class is not None or not testers:
+        require_route(settings.model_route, data_class or DataClass.PATIENT_DERIVED)
     factory = make_session_factory(make_engine(settings.database_url))
     inbox = Inbox(
         factory,
@@ -225,11 +230,13 @@ def build_web_worker(
     *,
     data_class: DataClass | None = None,
     key: bytes | None = None,
+    wrap_model: ModelWrapper | None = None,
 ) -> tuple[Runner, Inbox]:
     """The site's runner and inbox: the pack narrowed by the web policy (no booking, no order),
     the web Sender, the limits of design §3. Testers write test messages; everyone else's are
     patient data, unless the caller says otherwise (a try on this computer). `key`: the digests'
-    secret, read from the settings when not given."""
+    secret, read from the settings when not given. `wrap_model`: the meter of a paid try on this
+    computer (`web serve --live`)."""
     from frontdesk.channels.policy import narrow
     from frontdesk.channels.runner import ChannelLimits, Runner
     from frontdesk.channels.web import MESSAGES_PER_SESSION, REPEATS, TURNS_A_DAY, WebSender
@@ -245,7 +252,9 @@ def build_web_worker(
     if data_class is None:
         data_class = DataClass.EVALUATION if testers else DataClass.PATIENT_DERIVED
     pack = narrow(deployment.pack, web.policy())
-    runtime = build_turn_runtime(replace(deployment, pack=pack), data_class=data_class)
+    runtime = build_turn_runtime(
+        replace(deployment, pack=pack), data_class=data_class, wrap_model=wrap_model
+    )
 
     async def turn(text: str, state: ConversationState) -> tuple[TurnResult, ConversationState]:
         return await handle_message(text, state, runtime)

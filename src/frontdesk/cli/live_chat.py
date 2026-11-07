@@ -161,7 +161,7 @@ def run_live_chat(
     if budget_path is None:
         raise fail("--live needs --budget: every live request is counted against it")
     settings = load_settings(env_file)
-    route = _live_route(settings.model_route, env_file)
+    route = live_route(settings.model_route, env_file)
     refuse_environment_overrides()
     try:
         budget = load_budget(budget_path)
@@ -177,7 +177,7 @@ def run_live_chat(
         raise typer.Exit(1)
 
 
-def _live_route(route_id: str, env_file: Path) -> ModelRoute:
+def live_route(route_id: str, env_file: Path) -> ModelRoute:
     """The route to chat on: one that evaluation data may reach, that calls a live model, and that
     Google has not retired."""
     try:
