@@ -162,6 +162,9 @@ class ChannelConversation(Base):
     active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     paused_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     slowed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Migration 0010: a keyed digest of the last turn's text and how many turns in a row had it.
+    last_digest: Mapped[str | None] = mapped_column(String(64))
+    repeats: Mapped[int] = mapped_column(SmallInteger, default=0, server_default="0")
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     lease_owner: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
 

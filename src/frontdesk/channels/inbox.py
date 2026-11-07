@@ -340,7 +340,7 @@ class Inbox:
                 update(ChannelConversation)
                 .where(*talks, ChannelConversation.state.is_not(None))
                 .where(ChannelConversation.last_message_at < now - FORGET_STATE)
-                .values(state=None)
+                .values(state=None, last_digest=None, repeats=0)
             )
             gone = session.scalars(
                 delete(ChannelConversation)

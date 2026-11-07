@@ -10,6 +10,7 @@ it is sent, and a reply that went out without an answer is never sent again.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
@@ -65,6 +66,22 @@ class Outcome(StrEnum):
     OFF = "off"  # the switch is off: no turn, the messages wait for it to come back on
 
 
+@dataclass(frozen=True)
+class ChannelLimits:
+    """The limits of a channel anyone may write to without a login (the site's chat, design of
+    2026-11-07 §3). Past any of them a message gets the handoff text, and no model is called."""
+
+    per_conversation: int  # messages one conversation may send
+    repeats: int  # turns in a row with the same text the model answers
+    turns_a_day: int  # model turns of the whole channel in 24 hours
+
+
+def text_digest(key: str, text: str) -> str:
+    """The digest a repeat is recognised by, keyed by the conversation: never the text."""
+    normal = " ".join(text.split()).casefold()
+    return hashlib.sha256(f"{key}\x1f{normal}".encode()).hexdigest()
+
+
 class _LeaseLostError(Exception):
     """Another worker took the conversation while this one ran its turn: it keeps nothing."""
 
@@ -77,6 +94,8 @@ class _Conversation:
     active_at: datetime | None
     paused_until: datetime | None
     slowed_at: datetime | None
+    last_digest: str | None = None
+    repeats: int = 0
 
 
 @dataclass(frozen=True)
@@ -110,10 +129,12 @@ class Runner:
         off: bool = False,
         buttons: Callable[[str, str], Awaitable[Decision]] | None = None,
         fixed_reply: str | None = None,
+        limits: ChannelLimits | None = None,
     ) -> None:
         """`buttons` decides the taps on the buttons the business sent (WhatsApp W1), by code and
         never by the turn. With `fixed_reply`, texts and attachments get that one reply and the
-        turn is never called (the staff's thread in W1)."""
+        turn is never called (the staff's thread in W1). With `limits`, a message past them gets
+        the handoff text and no turn (the site's chat)."""
         self._factory = session_factory
         self._pack = pack
         self._channel = channel
@@ -123,6 +144,7 @@ class Runner:
         self._off = off
         self._buttons = buttons
         self._fixed_reply = fixed_reply
+        self._limits = limits
 
     async def process(self, conversation_id: str) -> Outcome:
         """One run for a conversation: its waiting messages become a turn, then every reply
@@ -170,6 +192,8 @@ class Runner:
                     ChannelConversation.active_at,
                     ChannelConversation.paused_until,
                     ChannelConversation.slowed_at,
+                    ChannelConversation.last_digest,
+                    ChannelConversation.repeats,
                 )
             ).first()
             if row is not None:
@@ -228,10 +252,35 @@ class Runner:
             )
             await asyncio.to_thread(self._mark_all, pending, InStatus.READ, now)
             return Outcome.DONE
-        # Committed first: a turn that crashes still counts.
-        await asyncio.to_thread(self._count_attempt, pending, now)
         state = self._state(key, conversation, now)
         texts = [m.text for m in pending if m.kind == InboundKind.TEXT and m.text]
+        repeat = None
+        if self._limits is not None and texts:
+            repeat = self._repeat(key, "\n".join(texts), conversation)
+            limit = await asyncio.to_thread(self._limited, key, self._limits, repeat[1], now)
+            if limit is not None:
+                log_event(
+                    logger,
+                    "channel.limited",
+                    channel=self._channel,
+                    conversation_id=key,
+                    reason=limit,
+                )
+                handoff = [("fixed", self._fixed(state, FixedTextKey.HANDOFF))]
+                await asyncio.to_thread(
+                    self._finish,
+                    key,
+                    conversation.token,
+                    pending,
+                    state,
+                    handoff,
+                    conversation.slowed_at,
+                    now,
+                    repeat,
+                )
+                return Outcome.DONE
+        # Committed first: a turn that crashes still counts.
+        await asyncio.to_thread(self._count_attempt, pending, now)
         replies: list[tuple[str, str]] = []
         for tap in [m.text for m in pending if m.kind == InboundKind.BUTTON and m.text]:
             if self._buttons is not None:
@@ -252,9 +301,43 @@ class Runner:
         if attachments and self._fixed_reply is None:
             replies.append(("fixed", self._fixed(following, FixedTextKey.ATTACHMENT)))
         await asyncio.to_thread(
-            self._finish, key, conversation.token, pending, following, replies, slowed, now
+            self._finish, key, conversation.token, pending, following, replies, slowed, now, repeat
         )
         return Outcome.DONE
+
+    @staticmethod
+    def _repeat(key: str, text: str, conversation: _Conversation) -> tuple[str, int]:
+        """The turn's digest and how many turns in a row, this one included, had it."""
+        digest = text_digest(key, text)
+        if digest == conversation.last_digest:
+            return digest, conversation.repeats + 1
+        return digest, 1
+
+    def _limited(self, key: str, limits: ChannelLimits, repeats: int, now: datetime) -> str | None:
+        """Which limit the conversation is past, or None."""
+        if repeats > limits.repeats:
+            return "repeated"
+        mine = (
+            ChannelMessage.business_id == self._pack.id,
+            ChannelMessage.channel == self._channel,
+        )
+        with self._session() as session:
+            sent = session.scalar(
+                select(func.count())
+                .select_from(ChannelMessage)
+                .where(*mine, ChannelMessage.conversation_id == key)
+                .where(ChannelMessage.direction == IN)
+            )
+            if (sent or 0) > limits.per_conversation:
+                return "conversation_cap"
+            turns = session.scalar(
+                select(func.count())
+                .select_from(ChannelMessage)
+                .where(*mine, ChannelMessage.direction == OUT)
+                .where(ChannelMessage.kind == "reply")
+                .where(ChannelMessage.created_at >= now - timedelta(days=1))
+            )
+        return "daily_cap" if (turns or 0) >= limits.turns_a_day else None
 
     def _mark_all(self, pending: Sequence[_Pending], status: InStatus, now: datetime) -> None:
         with self._session() as session:
@@ -329,8 +412,12 @@ class Runner:
         replies: Sequence[tuple[str, str]],
         slowed: datetime | None,
         now: datetime,
+        repeat: tuple[str, int] | None = None,
     ) -> None:
         size = self._sender.max_message_bytes
+        remembered: dict[str, Any] = {}
+        if repeat is not None:
+            remembered = {"last_digest": repeat[0], "repeats": repeat[1]}
         parts = [(kind, part) for kind, text in replies for part in split_message(text, size)]
         with self._session() as session:
             if not self._held(session, key, token):
@@ -349,6 +436,7 @@ class Runner:
                         else_=None,
                     ),
                     slowed_at=slowed,
+                    **remembered,
                 )
             )
             _mark(session, pending, InStatus.READ, now)
