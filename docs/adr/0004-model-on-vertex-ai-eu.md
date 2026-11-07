@@ -64,3 +64,17 @@ Albi asked for these before Instagram:
   - The logs carry `spend.alert` at 80% of the cap and `spend.cap_reached` at the cap, for an alert policy.
 - **A switch.** `FRONTDESK_MODEL_OFF` turns the model off: the rules still answer, and every other message gets reception's contact (rule `model_off`).
 - **Ten messages a minute per conversation at most.** Past them, a short reply and no model call (rule `rate_limit`). A conversation holds one time at a time, for 15 minutes at most (`booking/holds.py`).
+
+## Amendment, 2026-11-07: Claude Haiku 5.5 on Anthropic's own API
+
+The email reply drafts and the site widget run on Claude Haiku 5.5, through Anthropic's own API: route `anthropic-haiku-5-5`, provider `anthropic`, model `claude-haiku-5-5`, host `https://api.anthropic.com` pinned in `frontdesk.model_gateway.factory`. A deployment chooses it with `FRONTDESK_MODEL_ROUTE`, as it chooses Gemini; the default stays `offline-demo`.
+
+- **Approved for `evaluation` and `patient_derived`** (Albi, 2026-11-07), on Anthropic's "API and data retention" page, read that day:
+  - conversation content is not retained by default, except for the Covered Models (Fable, Mythos); Haiku is not one;
+  - zero data retention is an agreement with Anthropic, not a setting;
+  - `inference_geo` is only `us` or `global`: the text may be processed outside the EU, so the business's privacy notice must name Anthropic as processor, with the transfer outside the EU, before real messages reach the route. The all-EU alternative stays Claude on Vertex AI `eu`.
+- **The key** is `frontdesk-anthropic-api-key` in Secret Manager in production and `ANTHROPIC_API_KEY` in development (`frontdesk.secrets`); the client is given it explicitly, so neither `ANTHROPIC_API_KEY` nor `ANTHROPIC_BASE_URL` in the environment moves it, and it is never in an error or a log.
+- **Thinking:** adaptive, at Haiku's default effort (`medium`), named explicitly; no sampling settings and no thinking budget, which Haiku 5.5 refuses. The SDK makes one attempt; the engine retries and meters each one.
+- **No fallback and no second try** for now: a failed request ends the turn with the handoff text. No prompt caching: the daily cap and the live runs price input and output tokens only.
+- **Access check:** a live run proves the key and the model with Anthropic's free CountTokens request.
+- Prices are the business's prices file (`FRONTDESK_PRICES_FILE`, the live runs' budget format): 0.10 and 0.50 USD per million input and output tokens for prompts up to 100K tokens.
