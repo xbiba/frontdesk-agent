@@ -92,3 +92,16 @@ def test_the_shipped_prompts_are_not_blank(profile: Profile, name: str) -> None:
     text, version = read_prompt(profile, name)
     assert text.strip()
     assert len(version) == 12
+
+
+def test_the_reception_prompt_says_its_examples_are_translated_not_copied() -> None:
+    # Run agent-28 on Haiku 5.5 (2026-11-07): English and Albanian bookings went on in Italian,
+    # the examples' words copied as they are written here.
+    text = read_prompt(Profile.RECEPTIONIST, "reception").text
+    assert "never copy an Italian example" in text
+
+
+def test_the_reception_prompt_says_the_clinic_s_own_contact_is_an_answer() -> None:
+    # Run agent-28: "what's your phone number?" got the right number, labelled handoff.
+    text = read_prompt(Profile.RECEPTIONIST, "reception").text
+    assert "Asked for the clinic's phone, email or address" in text
