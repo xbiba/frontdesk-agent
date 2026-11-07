@@ -1,6 +1,7 @@
 """Handing a conversation to the worker (ADR-0011): a Cloud Tasks task that calls the private
 worker after the burst window, with the invoker's identity."""
 
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -8,7 +9,12 @@ from typing import Any
 import httpx2
 import pytest
 
-from frontdesk.channels.dispatch import TASKS_API, CloudTasksDispatcher, DispatchError
+from frontdesk.channels.dispatch import (
+    TASKS_API,
+    CloudTasksDispatcher,
+    DispatchError,
+    InProcessDispatcher,
+)
 
 QUEUE = "projects/demo-clinic/locations/europe-west1/queues/frontdesk-demo"
 WORKER = "https://frontdesk-demo-worker-123456789.europe-west1.run.app"
@@ -81,3 +87,19 @@ def test_a_queue_must_be_a_queue_path() -> None:
             client=httpx2.AsyncClient(),
             now=lambda: NOW,
         )
+
+
+async def test_the_in_process_dispatcher_runs_the_work_after_the_delay() -> None:
+    dispatcher = InProcessDispatcher()
+    with pytest.raises(DispatchError, match="no worker"):
+        await dispatcher.dispatch("web-" + "0" * 40, delay=timedelta(0))
+    done: list[str] = []
+
+    async def work(key: str) -> None:
+        done.append(key)
+
+    dispatcher.bind(work)
+    await dispatcher.dispatch("web-" + "0" * 40, delay=timedelta(milliseconds=10))
+    assert done == []
+    await asyncio.sleep(0.05)
+    assert done == ["web-" + "0" * 40]

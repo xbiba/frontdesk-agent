@@ -81,6 +81,7 @@ bookings_app = typer.Typer(no_args_is_help=True, help="Bookings from the chat.")
 instagram_app = typer.Typer(no_args_is_help=True, help="The Instagram channel (M4).")
 whatsapp_app = typer.Typer(no_args_is_help=True, help="WhatsApp for the reception (W1).")
 email_app = typer.Typer(no_args_is_help=True, help="Reply drafts for the mailbox (never sent).")
+web_app = typer.Typer(no_args_is_help=True, help="The chat on the business's site.")
 app.add_typer(db_app, name="db")
 app.add_typer(knowledge_app, name="knowledge")
 app.add_typer(eval_app, name="eval")
@@ -89,6 +90,7 @@ app.add_typer(bookings_app, name="bookings")
 app.add_typer(instagram_app, name="instagram")
 app.add_typer(whatsapp_app, name="whatsapp")
 app.add_typer(email_app, name="email")
+app.add_typer(web_app, name="web")
 
 EnvFile = Annotated[
     Path, typer.Option("--env-file", exists=True, dir_okay=False, help="The deployment's env file.")
@@ -610,3 +612,17 @@ def email_login_command(
 ) -> None:
     """Development only: allow gmail.modify on your own Gmail and write the token file."""
     raise typer.Exit(email_login(client_file, token_file))
+
+
+@web_app.command("serve")
+def web_serve(
+    env_file: EnvFile,
+    port: Annotated[
+        int, typer.Option("--port", min=1, max=65535, help="Port on 127.0.0.1.")
+    ] = 8000,
+) -> None:
+    """Try the site's chat on this computer: the routes, the worker and a test page at
+    http://localhost:PORT/, on the offline model. Migrates the env file's database first."""
+    from frontdesk.cli.web import serve
+
+    raise typer.Exit(serve(env_file, port))

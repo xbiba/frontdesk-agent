@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Final, Protocol
 
@@ -70,3 +70,29 @@ class CloudTasksDispatcher:
             raise DispatchError(type(error).__name__) from None
         if response.status_code != 200:
             raise DispatchError(f"Cloud Tasks answered {response.status_code}")
+
+
+class InProcessDispatcher:
+    """For a try on this computer (`frontdesk web serve`): the worker's run happens in this
+    process after the delay, with no Cloud Tasks. Never used in production."""
+
+    def __init__(self) -> None:
+        self._work: Callable[[str], Awaitable[None]] | None = None
+        self._tasks: set[asyncio.Task[None]] = set()
+
+    def bind(self, work: Callable[[str], Awaitable[None]]) -> None:
+        self._work = work
+
+    async def dispatch(self, conversation_id: str, *, delay: timedelta) -> None:
+        if self._work is None:
+            raise DispatchError("no worker is bound to the in-process dispatcher")
+        task = asyncio.create_task(self._later(self._work, conversation_id, delay))
+        self._tasks.add(task)  # held until done: the loop keeps only a weak reference
+        task.add_done_callback(self._tasks.discard)
+
+    @staticmethod
+    async def _later(
+        work: Callable[[str], Awaitable[None]], conversation_id: str, delay: timedelta
+    ) -> None:
+        await asyncio.sleep(delay.total_seconds())
+        await work(conversation_id)
