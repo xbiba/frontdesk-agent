@@ -33,6 +33,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
 from frontdesk.channels.messages import Inbound, InboundKind
+from frontdesk.channels.pairing import PairingGuard
 from frontdesk.channels.whatsapp import TEMPLATE
 from frontdesk.db.engine import business_session
 from frontdesk.db.models import ChannelConversation, ChannelMessage, ChannelTester
@@ -50,6 +51,7 @@ STALE: Final = timedelta(minutes=2)  # work older than this lost its task, a sen
 KEEP_IDS: Final = timedelta(days=7)  # D8: Meta retries for 36 hours
 KEEP_SENT_TEXT: Final = timedelta(days=1)  # D8: the text of a reply, for its echo
 FORGET_CONVERSATION: Final = timedelta(days=30)  # D8
+KEEP_DIGEST: Final = timedelta(days=1)  # the keyed digest of the last turn, for its repeats
 REPLY_WINDOW: Final = timedelta(hours=24)  # Meta's window after the person's last message
 TESTER_WELCOME: Final = (
     "Modalità di prova attiva: l'assistente risponde a questo account. "
@@ -149,7 +151,10 @@ class Inbox:
         pairing_code: str | None,
         now: Callable[[], datetime],
         allowed_users: frozenset[str] | None = None,
+        pairing_guard: PairingGuard | None = None,
     ) -> None:
+        """`pairing_guard`: on a channel anyone may write to, misses at the code lock a session,
+        then the process, out of pairing (the site's chat)."""
         self._factory = session_factory
         self._business = business_id
         self._channel = channel
@@ -158,6 +163,7 @@ class Inbox:
         self._pairing = pairing_code
         self._now = now
         self._allowed = allowed_users
+        self._guard = pairing_guard
 
     def accept(self, events: Sequence[Inbound]) -> Accepted:
         now = self._now()
@@ -338,9 +344,15 @@ class Inbox:
             )
             session.execute(
                 update(ChannelConversation)
+                .where(*talks, ChannelConversation.last_digest.is_not(None))
+                .where(ChannelConversation.last_message_at < now - KEEP_DIGEST)
+                .values(last_digest=None, repeats=0)
+            )
+            session.execute(
+                update(ChannelConversation)
                 .where(*talks, ChannelConversation.state.is_not(None))
                 .where(ChannelConversation.last_message_at < now - FORGET_STATE)
-                .values(state=None, last_digest=None, repeats=0)
+                .values(state=None)
             )
             gone = session.scalars(
                 delete(ChannelConversation)
@@ -361,7 +373,12 @@ class Inbox:
 
     def _pair(self, session: Session, event: Inbound, now: datetime) -> str | None:
         """Someone who is not a tester: dropped, unless the message is the pairing code (D4)."""
+        guard = self._guard
+        if guard is not None and guard.locked(event.user_id):
+            return None
         if not self._is_code(event):
+            if guard is not None and event.kind is InboundKind.TEXT:
+                guard.miss(event.user_id)
             return None
         session.execute(
             insert(ChannelTester)

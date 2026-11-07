@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import logging
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, Final
@@ -74,12 +75,23 @@ class ChannelLimits:
     per_conversation: int  # messages one conversation may send
     repeats: int  # turns in a row with the same text the model answers
     turns_a_day: int  # model turns of the whole channel in 24 hours
+    # The server-side secret of opaque keys (frontdesk-email-sender-key): without it a short
+    # message cannot be guessed from its digest.
+    digest_key: bytes = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if len(self.digest_key) < MIN_DIGEST_KEY_BYTES:
+            raise ValueError(f"the digest key needs at least {MIN_DIGEST_KEY_BYTES} bytes")
 
 
-def text_digest(key: str, text: str) -> str:
-    """The digest a repeat is recognised by, keyed by the conversation: never the text."""
+MIN_DIGEST_KEY_BYTES: Final = 16
+
+
+def text_digest(secret: bytes, key: str, text: str) -> str:
+    """The HMAC a repeat is recognised by, with the server's secret, per conversation: never the
+    text. The purge drops it a day after the conversation's last message."""
     normal = " ".join(text.split()).casefold()
-    return hashlib.sha256(f"{key}\x1f{normal}".encode()).hexdigest()
+    return hmac.new(secret, f"{key}\x1f{normal}".encode(), hashlib.sha256).hexdigest()
 
 
 class _LeaseLostError(Exception):
@@ -256,7 +268,7 @@ class Runner:
         texts = [m.text for m in pending if m.kind == InboundKind.TEXT and m.text]
         repeat = None
         if self._limits is not None and texts:
-            repeat = self._repeat(key, "\n".join(texts), conversation)
+            repeat = self._repeat(self._limits.digest_key, key, "\n".join(texts), conversation)
             limit = await asyncio.to_thread(self._limited, key, self._limits, repeat[1], now)
             if limit is not None:
                 log_event(
@@ -306,9 +318,9 @@ class Runner:
         return Outcome.DONE
 
     @staticmethod
-    def _repeat(key: str, text: str, conversation: _Conversation) -> tuple[str, int]:
+    def _repeat(secret: bytes, key: str, text: str, conversation: _Conversation) -> tuple[str, int]:
         """The turn's digest and how many turns in a row, this one included, had it."""
-        digest = text_digest(key, text)
+        digest = text_digest(secret, key, text)
         if digest == conversation.last_digest:
             return digest, conversation.repeats + 1
         return digest, 1

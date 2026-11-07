@@ -29,6 +29,7 @@ SECRET_IDS: Final = {
     "instagram_app_secret": "frontdesk-instagram-app-secret",
     "instagram_verify_token": "frontdesk-instagram-verify-token",
     "instagram_pairing_code": "frontdesk-instagram-pairing-code",
+    "web_pairing_code": "frontdesk-web-pairing-code",
     "whatsapp_token": "frontdesk-whatsapp-token",
     "whatsapp_app_secret": "frontdesk-whatsapp-app-secret",
     "whatsapp_verify_token": "frontdesk-whatsapp-verify-token",

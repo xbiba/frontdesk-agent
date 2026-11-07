@@ -2,6 +2,8 @@
 messages of a conversation, at the third identical message in a row, past the channel's turns of
 the day, the handoff text goes out and the turn is never called."""
 
+import hashlib
+import hmac
 import logging
 
 import pytest
@@ -21,7 +23,8 @@ BUSINESS = "demo-clinic"
 CHANNEL = "web"
 SESSION = "5f0c6a1e-2b7d-4c59-9d2e-0123456789ab"
 KEY = conversation_key(BUSINESS, CHANNEL, SESSION)
-LIMITS = ChannelLimits(per_conversation=4, repeats=2, turns_a_day=5)
+SECRET = b"a-server-side-secret-of-32-bytes"
+LIMITS = ChannelLimits(per_conversation=4, repeats=2, turns_a_day=5, digest_key=SECRET)
 
 
 @pytest.fixture
@@ -99,9 +102,41 @@ async def test_the_digest_keeps_no_text(
     with business_session(factory, BUSINESS) as session:
         conversation = session.get(ChannelConversation, (BUSINESS, KEY))
     assert conversation is not None
-    assert conversation.last_digest == text_digest(KEY, "quanto costa?")
+    assert conversation.last_digest == text_digest(SECRET, KEY, "quanto costa?")
     assert conversation.repeats == 1
-    assert text_digest(KEY, "x") != text_digest(conversation_key(BUSINESS, CHANNEL, "other"), "x")
+    other = conversation_key(BUSINESS, CHANNEL, "other")
+    assert text_digest(SECRET, KEY, "x") != text_digest(SECRET, other, "x")
+    # Keyed: without the server's secret a short message cannot be guessed from its digest.
+    expected = hmac.new(SECRET, f"{KEY}\x1fquanto costa?".encode(), hashlib.sha256).hexdigest()
+    assert conversation.last_digest == expected
+    assert text_digest(b"another-secret-of-enough-bytes!!", KEY, "x") != text_digest(
+        SECRET, KEY, "x"
+    )
+    plain = hashlib.sha256(f"{KEY}\x1fquanto costa?".encode()).hexdigest()
+    assert conversation.last_digest != plain
+
+
+def test_a_short_digest_key_is_refused() -> None:
+    with pytest.raises(ValueError, match="16 bytes"):
+        ChannelLimits(per_conversation=1, repeats=1, turns_a_day=1, digest_key=b"short")
+
+
+async def test_the_digest_is_forgotten_after_a_day(
+    inbox: Inbox, factory: sessionmaker[Session], clock: Clock, clinic_pack: BusinessPack
+) -> None:
+    runner, _ = _runner(factory, clock, clinic_pack, FakeTurn())
+    await _say(inbox, runner, clock, "m1", "Quanto costa?")
+    clock.advance(hours=12)
+    inbox.purge()
+    with business_session(factory, BUSINESS) as session:
+        assert session.scalar(select(ChannelConversation.last_digest)) is not None
+    clock.advance(hours=13)
+    inbox.purge()
+    with business_session(factory, BUSINESS) as session:
+        row = session.execute(
+            select(ChannelConversation.last_digest, ChannelConversation.repeats)
+        ).one()
+    assert tuple(row) == (None, 0)
 
 
 async def test_a_conversation_past_its_messages_gets_the_handoff(

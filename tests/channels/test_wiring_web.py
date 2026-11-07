@@ -19,6 +19,7 @@ from tests.tenancy.helpers import CLINIC, copy_pack, edit_yaml, web_section
 QUEUE = "projects/demo-clinic/locations/europe-west1/queues/frontdesk-demo"
 WORKER = "https://frontdesk-demo-worker-123456789.europe-west1.run.app"
 INVOKER = "frontdesk-demo-invoker@demo-clinic.iam.gserviceaccount.com"
+WEB_CODE = "a-long-web-pairing-code-2026"
 
 
 @pytest.fixture
@@ -31,7 +32,8 @@ def web_dir(tmp_path: Path, businesses_dir: Path) -> Path:
 def _settings(pack: Path, **fields: Any) -> Settings:
     values: dict[str, Any] = {
         "business_pack": pack,
-        "instagram_pairing_code": SecretStr("demo-prova-1234"),
+        "web_pairing_code": SecretStr(WEB_CODE),
+        "email_sender_key": SecretStr("a-server-side-secret-of-32-bytes"),
         "tasks_queue": QUEUE,
         "worker_url": WORKER,
         "tasks_invoker": INVOKER,
@@ -51,15 +53,24 @@ def test_a_pack_without_the_site_has_no_ingress(businesses_dir: Path) -> None:
     assert build_web_ingress(_settings(businesses_dir / CLINIC)) is None
 
 
-def test_tester_mode_needs_the_pairing_code(web_dir: Path) -> None:
-    with pytest.raises(ValueError, match="frontdesk-instagram-pairing-code"):
-        build_web_ingress(_settings(web_dir, instagram_pairing_code=None))
+def test_tester_mode_needs_a_pairing_code_of_its_own(web_dir: Path) -> None:
+    # Instagram's code never opens the site: the site's endpoint is public (security review).
+    settings = _settings(
+        web_dir, web_pairing_code=None, instagram_pairing_code=SecretStr("demo-prova-1234")
+    )
+    with pytest.raises(ValueError, match="frontdesk-web-pairing-code"):
+        build_web_ingress(settings)
+
+
+def test_a_short_pairing_code_is_refused(web_dir: Path) -> None:
+    with pytest.raises(ValueError, match="at least 20 characters"):
+        build_web_ingress(_settings(web_dir, web_pairing_code=SecretStr("1234")))
 
 
 def test_everyone_mode_needs_no_code_and_a_route_for_patient_data(web_dir: Path) -> None:
     dispatcher = RecordingDispatcher()
     web = build_web_ingress(
-        _settings(web_dir, web_mode=InstagramMode.LIVE, instagram_pairing_code=None),
+        _settings(web_dir, web_mode=InstagramMode.LIVE, web_pairing_code=None),
         dispatcher=dispatcher,
     )
     assert web is not None
@@ -81,3 +92,12 @@ def test_the_worker_answers_the_site_without_booking(
     assert set(worker.inbox) == {WEB}
     deployment = open_deployment(settings)
     assert deployment.pack.channels.web is not None
+
+
+@pytest.mark.db
+def test_the_worker_needs_the_key_of_the_digests(
+    web_dir: Path, app_url: str, activate_pack: Any
+) -> None:
+    activate_pack(load_pack(web_dir))
+    with pytest.raises(ValueError, match="frontdesk-email-sender-key"):
+        build_worker(_settings(web_dir, database_url=app_url, email_sender_key=None))

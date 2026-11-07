@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import httpx2
 
@@ -16,6 +16,7 @@ from frontdesk.channels.dispatch import CloudTasksDispatcher, Dispatcher
 from frontdesk.channels.inbox import Inbox
 from frontdesk.channels.instagram import INSTAGRAM, InstagramWebhook
 from frontdesk.channels.messages import WebhookReader
+from frontdesk.channels.pairing import PairingGuard
 from frontdesk.channels.staff import Staff, read_staff
 from frontdesk.channels.web import WEB, WebReplies
 from frontdesk.channels.whatsapp import WHATSAPP, WhatsAppWebhook
@@ -33,6 +34,9 @@ if TYPE_CHECKING:
     from frontdesk.composition import Deployment
     from frontdesk.conversation.state import ConversationState
     from frontdesk.conversation.turn import TurnResult
+
+
+MIN_WEB_CODE_CHARS: Final = 20
 
 
 def _utc_now() -> datetime:
@@ -156,7 +160,8 @@ def build_web_ingress(
     settings: Settings, *, dispatcher: Dispatcher | None = None
 ) -> WebIngress | None:
     """The site's ingress when the pack lists the channel (`channels.web`). In tester mode it
-    answers only the sessions that wrote Instagram's pairing code (design §4)."""
+    answers only the sessions that wrote the site's own pairing code (design §4), and misses at the
+    code lock a session, then the process, out of pairing (security review of 2026-11-07)."""
     pack = load_pack(settings.require_business_pack())
     if pack.channels.web is None:
         return None
@@ -170,8 +175,9 @@ def build_web_ingress(
         channel=WEB,
         account_id=pack.id,
         testers_only=testers,
-        pairing_code=channel_secret(settings, "instagram_pairing_code") if testers else None,
+        pairing_code=web_pairing_code(settings) if testers else None,
         now=_utc_now,
+        pairing_guard=PairingGuard() if testers else None,
     )
     return WebIngress(
         channel=pack.channels.web,
@@ -183,12 +189,47 @@ def build_web_ingress(
     )
 
 
+def web_pairing_code(settings: Settings) -> str:
+    """The site's pairing code: anyone may try it, so it must be long."""
+    code = channel_secret(settings, "web_pairing_code")
+    if len(code) < MIN_WEB_CODE_CHARS:
+        raise ValueError(
+            f"the secret {SECRET_IDS['web_pairing_code']} needs at least {MIN_WEB_CODE_CHARS} "
+            "characters: anyone may try it on the site"
+        )
+    return code
+
+
+def digest_key(settings: Settings) -> bytes:
+    """The server-side secret of opaque keys (the email ledger's), for the repeats' digests."""
+    from frontdesk.channels.runner import MIN_DIGEST_KEY_BYTES
+
+    with httpx2.Client(timeout=10.0) as client:
+        key = read_secret(
+            settings,
+            "email_sender_key",
+            token=google_token_source([CLOUD_SCOPE], impersonate=None),
+            client=client,
+        )
+    if not key or len(key.encode()) < MIN_DIGEST_KEY_BYTES:
+        raise ValueError(
+            f"the site's digests need the secret {SECRET_IDS['email_sender_key']} "
+            f"(FRONTDESK_EMAIL_SENDER_KEY in development), at least {MIN_DIGEST_KEY_BYTES} bytes"
+        )
+    return key.encode()
+
+
 def build_web_worker(
-    settings: Settings, deployment: Deployment, *, data_class: DataClass | None = None
+    settings: Settings,
+    deployment: Deployment,
+    *,
+    data_class: DataClass | None = None,
+    key: bytes | None = None,
 ) -> tuple[Runner, Inbox]:
     """The site's runner and inbox: the pack narrowed by the web policy (no booking, no order),
     the web Sender, the limits of design §3. Testers write test messages; everyone else's are
-    patient data, unless the caller says otherwise (a try on this computer)."""
+    patient data, unless the caller says otherwise (a try on this computer). `key`: the digests'
+    secret, read from the settings when not given."""
     from frontdesk.channels.policy import narrow
     from frontdesk.channels.runner import ChannelLimits, Runner
     from frontdesk.channels.web import MESSAGES_PER_SESSION, REPEATS, TURNS_A_DAY, WebSender
@@ -218,7 +259,10 @@ def build_web_worker(
         now=deployment.now,
         off=settings.web_off,
         limits=ChannelLimits(
-            per_conversation=MESSAGES_PER_SESSION, repeats=REPEATS, turns_a_day=TURNS_A_DAY
+            per_conversation=MESSAGES_PER_SESSION,
+            repeats=REPEATS,
+            turns_a_day=TURNS_A_DAY,
+            digest_key=key or digest_key(settings),
         ),
     )
     inbox = Inbox(
