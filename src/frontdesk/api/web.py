@@ -2,7 +2,8 @@
 
 - POST /web/messages stores the widget's message in the inbox and gives its conversation a task.
 - GET /web/replies gives the session's replies after a cursor, and whether more are coming.
-- GET /web/config gives the widget its name, colour, words and the reception's numbers.
+- GET /web/config gives the widget its name, words, the reception's numbers and the client's
+  style, if its pack has one (else the widget keeps its plain, neutral look).
 - GET /web/widget.js is the widget, the same file for every business.
 
 Only the sites the pack lists may call them from a browser: CORS answers those, and a request with
@@ -71,7 +72,7 @@ def web_config(web: WebIngress) -> dict[str, Any]:
     whatsapp = _NOT_DIGITS.sub("", location.whatsapp) if location.whatsapp else None
     return {
         "name": channel.name,
-        "colour": channel.colour,
+        "style": channel.style.model_dump() if channel.style else None,
         "default_language": pack.default_language,
         "languages": list(pack.languages),
         "texts": {lang: texts.model_dump() for lang, texts in channel.texts.items()},

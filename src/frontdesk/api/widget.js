@@ -1,5 +1,6 @@
-/* The site's chat (frontdesk, design of 2026-11-07). One file for every business: the name, the
-   colour and the words come from GET /web/config. Plain text only: no reply is ever parsed as HTML.
+/* The site's chat (frontdesk, design of 2026-11-07). One file for every business, plain and neutral:
+   the name, the words and, if the client's pack has one, its style come from GET /web/config, as
+   CSS custom properties inside the Shadow DOM. Plain text only: no reply is ever parsed as HTML.
    <script src="https://<service>/web/widget.js" data-lang="sq" defer></script> */
 (function () {
   "use strict";
@@ -9,7 +10,7 @@
   var base = script.src.replace(/\/web\/widget\.js(\?.*)?$/, "");
   var POLL_MS = 1500, POLL_FOR_MS = 60000, MAX_CHARS = 500, RETRIES = 2;
   var SESSION_KEY = "frontdesk-web-session", CURSOR_KEY = "frontdesk-web-cursor";
-  var PHONE = /(\+|\b0)\d[\d ]{5,}\d/g;  // +355 69 ... or 069 ...: not a price
+  var PHONE = /(?:\+|\b0)\d[\d ]{5,}\d/g;  // +355 69 ... or 069 ...: not a price
   var memory = {};
 
   function stored(key, make) {
@@ -37,6 +38,17 @@
     if (text) node.textContent = text;
     return node;
   }
+  function linked(node, text) {  // text nodes, and each phone number a tel: link
+    var last = 0;
+    text.replace(PHONE, function (number, at) {
+      node.append(document.createTextNode(text.slice(last, at)));
+      node.append(el("a", { href: "tel:" + number.replace(/ /g, "") }, number));
+      last = at + number.length;
+      return number;
+    });
+    node.append(document.createTextNode(text.slice(last)));
+    return node;
+  }
   function pickLanguage(config) {
     var wanted = [script.getAttribute("data-lang"), (document.documentElement.lang || "").slice(0, 2)];
     for (var i = 0; i < wanted.length; i++) {
@@ -48,17 +60,20 @@
 
   var CSS = [
     ":host{all:initial}",
-    "*{box-sizing:border-box;font-family:system-ui,-apple-system,'Segoe UI',sans-serif}",
-    ".launch{position:fixed;right:20px;bottom:20px;z-index:2147483000;border:0;border-radius:28px;padding:14px 20px;background:var(--fd);color:#fff;font-size:16px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.25)}",
+    "*{box-sizing:border-box;font-family:var(--fd-font,system-ui,-apple-system,'Segoe UI',sans-serif)}",
+    ".launch{position:fixed;right:20px;bottom:20px;z-index:2147483000;border:0;border-radius:28px;padding:14px 20px;background:var(--fd-accent,#2b2b2b);color:var(--fd-on,#fff);font-size:16px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.25)}",
     ".panel{position:fixed;right:20px;bottom:20px;z-index:2147483001;width:min(380px,calc(100vw - 32px));height:min(560px,calc(100vh - 40px));display:flex;flex-direction:column;background:#fff;color:#1b1b1b;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.3);overflow:hidden}",
     ".panel[hidden],.launch[hidden]{display:none}",
-    "header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:var(--fd);color:#fff}",
+    ".left{right:auto;left:20px}",
+    ".logo{height:24px;width:auto;margin-right:8px}",
+    "h2{flex:1}",
+    "header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:var(--fd-accent,#2b2b2b);color:var(--fd-on,#fff)}",
     "h2{margin:0;font-size:16px;font-weight:600}",
-    "header button{border:0;background:transparent;color:#fff;font-size:22px;line-height:1;cursor:pointer;padding:4px 8px}",
-    ".person{display:block;margin:8px 12px 0;padding:8px;text-align:center;border:1px solid var(--fd);border-radius:8px;color:var(--fd);text-decoration:none;font-size:14px}",
+    "header button{border:0;background:transparent;color:inherit;font-size:22px;line-height:1;cursor:pointer;padding:4px 8px}",
+    ".person{display:block;margin:8px 12px 0;padding:8px;text-align:center;border:1px solid var(--fd-accent,#2b2b2b);border-radius:8px;color:var(--fd-accent,#2b2b2b);text-decoration:none;font-size:14px}",
     ".log{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;font-size:15px;line-height:1.4}",
     ".msg{max-width:85%;padding:8px 11px;border-radius:12px;white-space:pre-wrap;overflow-wrap:anywhere}",
-    ".me{align-self:flex-end;background:var(--fd);color:#fff}",
+    ".me{align-self:flex-end;background:var(--fd-accent,#2b2b2b);color:var(--fd-on,#fff)}",
     ".bot{align-self:flex-start;background:#f0f1f3}",
     ".bot a{color:inherit}",
     ".wait{align-self:flex-start;color:#666;font-size:14px}",
@@ -66,7 +81,7 @@
     ".notice a{color:#1b1b1b}",
     "form{display:flex;gap:8px;padding:10px 12px;border-top:1px solid #e3e3e3}",
     "textarea{flex:1;resize:none;height:44px;padding:10px;border:1px solid #bbb;border-radius:8px;font-size:15px;color:#1b1b1b;background:#fff}",
-    "form button{border:0;border-radius:8px;padding:0 14px;background:var(--fd);color:#fff;font-size:15px;cursor:pointer}",
+    "form button{border:0;border-radius:8px;padding:0 14px;background:var(--fd-accent,#2b2b2b);color:var(--fd-on,#fff);font-size:15px;cursor:pointer}",
     "button:focus-visible,a:focus-visible,textarea:focus-visible{outline:3px solid #ffbf47;outline-offset:2px}",
     ".hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}"
   ].join("");
@@ -75,17 +90,22 @@
     var lang = pickLanguage(config), words = config.texts[lang], handoff = config.handoff[lang];
     var host = el("div", { "data-frontdesk": "" });
     var root = host.attachShadow({ mode: "open" });
-    host.style.setProperty("--fd", config.colour);
+    var look = config.style || {};
+    if (look.accent) host.style.setProperty("--fd-accent", look.accent);
+    if (look.on_accent) host.style.setProperty("--fd-on", look.on_accent);
+    if (look.font) host.style.setProperty("--fd-font", look.font);
+    var side = look.position === "left" ? " left" : "";
     var style = el("style");
     style.textContent = CSS;
-    var launch = el("button", { "class": "launch", type: "button", "aria-expanded": "false", "aria-controls": "fd-panel" }, words.open);
-    var panel = el("section", { "class": "panel", id: "fd-panel", role: "dialog", "aria-label": words.title, hidden: "" });
+    var launch = el("button", { "class": "launch" + side, type: "button", "aria-expanded": "false", "aria-controls": "fd-panel" }, words.open);
+    var panel = el("section", { "class": "panel" + side, id: "fd-panel", role: "dialog", "aria-label": words.title, hidden: "" });
     var header = el("header");
     var close = el("button", { type: "button", "aria-label": words.close }, "×");
+    if (look.logo_url) header.append(el("img", { "class": "logo", src: look.logo_url, alt: "" }));
     header.append(el("h2", {}, words.title), close);
     var person = el("a", { "class": "person", href: config.whatsapp ? "https://wa.me/" + config.whatsapp : "tel:" + config.phone, target: "_blank", rel: "noopener" }, words.person);
     var log = el("div", { "class": "log", role: "log", "aria-live": "polite", tabindex: "0" });
-    var notice = el("p", { "class": "notice" }, words.notice + " ");
+    var notice = linked(el("p", { "class": "notice" }), words.notice + " ");
     if (config.privacy_url) notice.append(el("a", { href: config.privacy_url, target: "_blank", rel: "noopener" }, words.privacy));
     var form = el("form");
     var label = el("label", { "for": "fd-input", "class": "hidden" }, words.placeholder);
@@ -104,15 +124,7 @@
       (open ? input : launch).focus();
     }
     function add(who, text) {
-      var bubble = el("div", { "class": "msg " + who });
-      var last = 0;
-      text.replace(PHONE, function (number, at) {
-        bubble.append(document.createTextNode(text.slice(last, at)));
-        bubble.append(el("a", { href: "tel:" + number.replace(/ /g, "") }, number));
-        last = at + number.length;
-        return number;
-      });
-      bubble.append(document.createTextNode(text.slice(last)));
+      var bubble = linked(el("div", { "class": "msg " + who }), text);
       log.insertBefore(bubble, waitNode);
       log.scrollTop = log.scrollHeight;
     }

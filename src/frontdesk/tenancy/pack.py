@@ -158,6 +158,22 @@ class WebTexts(Frozen):
     privacy: NonBlankStr  # the privacy link's words
 
 
+_COLOUR: Final = r"^#[0-9a-fA-F]{6}$"
+
+
+class WebStyle(Frozen):
+    """A client's look for the widget, from its own pack (Albi, 2026-11-07): the engine's widget is
+    plain and neutral until the client styles it. Each value becomes a CSS custom property inside
+    the widget's Shadow DOM, so it can change the widget and nothing else of the site."""
+
+    accent: str | None = Field(default=None, pattern=_COLOUR)  # header, buttons, own messages
+    on_accent: str | None = Field(default=None, pattern=_COLOUR)  # text on the accent
+    # A font-family list of names only: no url(), no braces, nothing CSS could run.
+    font: str | None = Field(default=None, pattern=r"^[A-Za-z0-9 ,'\"-]{1,120}$")
+    position: Literal["right", "left"] = "right"
+    logo_url: HttpsUrl | None = None
+
+
 class WebChannel(Frozen):
     """The chat on the business's site (design of 2026-11-07). Only the listed sites may embed it
     (CORS and the Origin check). No login, so no booking and no order lookup: its policy turns
@@ -165,9 +181,9 @@ class WebChannel(Frozen):
 
     origins: list[Origin] = Field(min_length=1)
     name: NonBlankStr
-    colour: str = Field(default="#1f5f8b", pattern=r"^#[0-9a-fA-F]{6}$")
     privacy_url: HttpsUrl | None = None
     texts: dict[Language, WebTexts]
+    style: WebStyle | None = None
 
     def allows(self, origin: str | None) -> bool:
         return origin is not None and origin in self.origins

@@ -248,7 +248,7 @@ def test_the_config_gives_the_widget_its_words_and_numbers(
     assert response.status_code == 200
     config = response.json()
     assert config["name"] == "Klinika Demo"
-    assert config["colour"] == "#0a7d5a"
+    assert config["style"] is None  # neutral: the widget's own plain look
     assert config["default_language"] == "sq"
     assert config["texts"]["it"]["send"] == "Send it"
     assert config["handoff"]["en"] == pack.fixed_texts["en"][FixedTextKey.HANDOFF]
@@ -267,3 +267,14 @@ def test_the_widget_is_the_same_file_for_every_business(app_url: str, pack: Busi
     assert "innerHTML" not in script  # plain text only: a reply is never parsed as HTML
     assert "sessionStorage" in script
     assert "attachShadow" in script
+    # The phone pattern captures nothing: String.replace's callback then gets the offset second.
+    assert "var PHONE = /(?:" in script
+
+
+def test_the_config_carries_the_client_s_style(app_url: str, clinic_pack: BusinessPack) -> None:
+    pack = web_pack(clinic_pack, style={"accent": "#0a7d5a", "position": "left"})
+    site = Site(app_url, pack)
+    style = site.client.get("/web/config").json()["style"]
+    assert style["accent"] == "#0a7d5a"
+    assert style["position"] == "left"
+    assert style["logo_url"] is None

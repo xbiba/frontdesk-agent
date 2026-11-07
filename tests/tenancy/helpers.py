@@ -31,7 +31,6 @@ def web_section(**changes: Any) -> dict[str, Any]:
     section: dict[str, Any] = {
         "origins": ["https://clinic.example", "http://localhost:8000"],
         "name": "Klinika Demo",
-        "colour": "#0a7d5a",
         "privacy_url": "https://clinic.example/privacy",
         "texts": {language: web_texts(language) for language in ("sq", "it", "en")},
     }
