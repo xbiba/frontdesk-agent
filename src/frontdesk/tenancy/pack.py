@@ -122,12 +122,68 @@ class ChannelPolicy(Frozen):
     orientation: bool = True
 
 
+_ORIGIN: Final = re.compile(r"^(https://[a-z0-9.-]+|http://(localhost|127\.0\.0\.1))(:\d{1,5})?$")
+_HTTPS_URL: Final = re.compile(r"^https://[^\s\"'<>]+$")
+
+
+def _origin(value: str) -> str:
+    """A site's origin as a browser sends it: https, or plain http on this computer only."""
+    if _ORIGIN.fullmatch(value) is None:
+        raise ValueError(f"not an origin (https://host[:port]): {value!r}")
+    return value
+
+
+def _https_url(value: str) -> str:
+    if _HTTPS_URL.fullmatch(value) is None:
+        raise ValueError(f"privacy link must be an https URL: {value!r}")
+    return value
+
+
+Origin = Annotated[str, AfterValidator(_origin)]
+HttpsUrl = Annotated[str, AfterValidator(_https_url)]
+
+
+class WebTexts(Frozen):
+    """The widget's own words in one language. The replies are the engine's."""
+
+    title: NonBlankStr
+    open: NonBlankStr  # the label of the button that opens the chat
+    close: NonBlankStr
+    placeholder: NonBlankStr
+    send: NonBlankStr
+    # Always above the input (design §4): automatic assistant, no personal or health data, the
+    # reception's number. The widget adds the privacy link.
+    notice: NonBlankStr
+    person: NonBlankStr  # "Talk to a person": the reception's phone or WhatsApp
+    privacy: NonBlankStr  # the privacy link's words
+
+
+class WebChannel(Frozen):
+    """The chat on the business's site (design of 2026-11-07). Only the listed sites may embed it
+    (CORS and the Origin check). No login, so no booking and no order lookup: its policy turns
+    both off. The privacy link may wait while the widget runs in tester mode."""
+
+    origins: list[Origin] = Field(min_length=1)
+    name: NonBlankStr
+    colour: str = Field(default="#1f5f8b", pattern=r"^#[0-9a-fA-F]{6}$")
+    privacy_url: HttpsUrl | None = None
+    texts: dict[Language, WebTexts]
+
+    def allows(self, origin: str | None) -> bool:
+        return origin is not None and origin in self.origins
+
+    def policy(self) -> ChannelPolicy:
+        return ChannelPolicy(chat_booking=False, order_status=False)
+
+
 class Channels(Frozen):
     """The channels the business answers on, each with its policy (M4: Instagram). WhatsApp (W1)
-    is the reception's: booking requests to decide, no model."""
+    is the reception's: booking requests to decide, no model. The web chat (2026-11-07) has its
+    fixed policy."""
 
     instagram: ChannelPolicy | None = None
     whatsapp: ChannelPolicy | None = None
+    web: WebChannel | None = None
 
 
 _ADDRESS: Final = re.compile(r"[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+")
@@ -333,6 +389,7 @@ def _language_problems(pack: BusinessPack) -> list[str]:
             if (key is FixedTextKey.HANDOFF or key in texts)
             and not _gives_a_contact(texts.get(key, ""), pack.location)
         ]
+    problems += _web_problems(pack)
     problems += [
         f"service '{service.id}' has no name in '{language}'"
         for service in pack.services
@@ -362,6 +419,23 @@ def _language_problems(pack: BusinessPack) -> list[str]:
         if price.conditions  # a price with no conditions at all stays valid
         for language in pack.languages
         if not price.conditions.get(language, "").strip()
+    ]
+    return problems
+
+
+def _web_problems(pack: BusinessPack) -> list[str]:
+    web = pack.channels.web
+    if web is None:
+        return []
+    problems = [
+        f"web channel has no texts in '{language}'"
+        for language in pack.languages
+        if language not in web.texts
+    ]
+    problems += [
+        f"web notice in '{language}' must contain the location phone or email"
+        for language, texts in web.texts.items()
+        if not _gives_a_contact(texts.notice, pack.location)
     ]
     return problems
 

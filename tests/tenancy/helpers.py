@@ -10,6 +10,35 @@ import yaml
 CLINIC = "demo-clinic"
 SHOP = "demo-shop"
 
+
+PHONE = "+355 00 000 0000"  # the demo clinic's reception
+
+
+def web_texts(language: str) -> dict[str, str]:
+    return {
+        "title": f"Chat {language}",
+        "open": f"Open {language}",
+        "close": f"Close {language}",
+        "placeholder": f"Write {language}",
+        "send": f"Send {language}",
+        "notice": f"Automatic assistant {language}. Reception: {PHONE}.",
+        "person": f"Talk to a person {language}",
+        "privacy": f"Privacy {language}",
+    }
+
+
+def web_section(**changes: Any) -> dict[str, Any]:
+    section: dict[str, Any] = {
+        "origins": ["https://clinic.example", "http://localhost:8000"],
+        "name": "Klinika Demo",
+        "colour": "#0a7d5a",
+        "privacy_url": "https://clinic.example/privacy",
+        "texts": {language: web_texts(language) for language in ("sq", "it", "en")},
+    }
+    section.update(changes)
+    return section
+
+
 Change = Callable[[Any], None]
 
 
