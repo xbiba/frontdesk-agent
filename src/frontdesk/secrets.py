@@ -1,10 +1,10 @@
-"""Secrets (Albi, 2026-10-13, before Instagram): cal.com's API key, and Instagram's token and app
-secret when M4 brings them.
+"""Secrets (Albi, 2026-10-13, before Instagram): cal.com's API key, Instagram's and WhatsApp's
+tokens and app secrets, and Anthropic's API key for the Haiku route (2026-11-07).
 
 In production (FRONTDESK_SECRETS_BACKEND=gcp) they come from Google Secret Manager, read at start
 with the service's own identity, never from a file: a key also found in the environment is refused,
 since an env file is where it would come from. In development they come from the environment
-(FRONTDESK_CALCOM_API_KEY, kept outside the repositories). A secret that cannot be read is named in
+(FRONTDESK_CALCOM_API_KEY, kept outside the repositories; Anthropic's key is ANTHROPIC_API_KEY). A secret that cannot be read is named in
 the error, never its value.
 """
 
@@ -23,6 +23,7 @@ from frontdesk.settings import SecretsBackend, Settings
 CLOUD_SCOPE: Final = "https://www.googleapis.com/auth/cloud-platform"
 SECRET_IDS: Final = {
     "calcom_api_key": "frontdesk-calcom-api-key",
+    "anthropic_api_key": "frontdesk-anthropic-api-key",
     "instagram_token": "frontdesk-instagram-token",
     "instagram_app_secret": "frontdesk-instagram-app-secret",
     "instagram_verify_token": "frontdesk-instagram-verify-token",

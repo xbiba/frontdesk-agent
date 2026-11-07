@@ -27,8 +27,11 @@ models.ALLOW_MODEL_REQUESTS = False
 @pytest.fixture(autouse=True)
 def _no_frontdesk_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     """Settings let the environment override an env file, so a developer's exported variables
-    (a real database URL, a route) would win over the env file a test writes for itself."""
-    for name in [name for name in os.environ if name.startswith("FRONTDESK_")]:
+    (a real database URL, a route, Anthropic's key) would win over the env file a test writes for
+    itself."""
+    for name in [
+        name for name in os.environ if name.startswith("FRONTDESK_") or name == "ANTHROPIC_API_KEY"
+    ]:
         monkeypatch.delenv(name)
 
 

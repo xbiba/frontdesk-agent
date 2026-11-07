@@ -123,13 +123,12 @@ def _agent_model(
     route's fallback, when it names one (Albi, 2026-10-13), and a reply a check sent back goes to
     its second try, when it names one, with the rest of the turn (Albi, 2026-10-16). The second try
     has no fallback: a failure there ends the turn with the handoff, as a second refusal does."""
-    project = deployment.settings.gcp_project
     if route.fallback is None:
         first = HedgedModel(wrap(model, "agent"))
     else:
         spare_route = require_route(route.fallback, data_class)
         spare = wrap(
-            build_live_model(spare_route, gcp_project=project),
+            _live_model(spare_route, deployment.settings),
             "agent",
             route_id=spare_route.route_id,
         )
@@ -137,7 +136,7 @@ def _agent_model(
     if route.second_try is None:
         return first
     second_route = require_route(route.second_try, data_class)
-    second = build_live_model(second_route, gcp_project=project)
+    second = _live_model(second_route, deployment.settings)
     wrapped = wrap(second, "agent", route_id=second_route.route_id)
     return SecondTryModel(first, second=HedgedModel(wrapped))
 
@@ -241,7 +240,7 @@ def build_turn_runtime(
             )
             reception_version = reception_prompt.version
     else:
-        model = build_live_model(route, gcp_project=deployment.settings.gcp_project)
+        model = _live_model(route, deployment.settings)
         wrap = wrap_model or _capped(deployment, route) or _unwrapped
         classifier = build_classifier(
             wrap(model, "classifier"),
@@ -290,6 +289,35 @@ def build_turn_runtime(
             else None
         ),
     )
+
+
+def model_api_key(settings: Settings, route: ModelRoute) -> str | None:
+    """Anthropic's API key for a route on Anthropic's own API, read as the other secrets are
+    (ANTHROPIC_API_KEY in development, frontdesk-anthropic-api-key in production); None for any
+    other route. A missing key is named, never shown."""
+    if route.provider != "anthropic":
+        return None
+    key = read_secret(
+        settings,
+        "anthropic_api_key",
+        token=google_token_source([CLOUD_SCOPE], impersonate=None),
+        client=calendar_http_client(),
+    )
+    if key is None or not key.strip():
+        raise ValueError(
+            f"route '{route.route_id}' needs Anthropic's API key: ANTHROPIC_API_KEY in development, "
+            "frontdesk-anthropic-api-key in Secret Manager in production"
+        )
+    return key
+
+
+def _live_model(route: ModelRoute, settings: Settings) -> Model:
+    """The route's live model; only a route on Anthropic's own API is given a key."""
+    if route.provider == "anthropic":
+        return build_live_model(
+            route, gcp_project=settings.gcp_project, api_key=model_api_key(settings, route)
+        )
+    return build_live_model(route, gcp_project=settings.gcp_project)
 
 
 def _documents_in_prompt(deployment: Deployment, size: int) -> bool:

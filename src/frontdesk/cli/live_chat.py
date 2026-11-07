@@ -31,13 +31,14 @@ from frontdesk.cli.live_common import (
     eur_left,
     refuse_environment_overrides,
     refuse_retired,
+    route_api_key,
     spent_usd,
 )
 from frontdesk.cli.runtime import build_runtime, fail
 from frontdesk.composition import open_deployment
 from frontdesk.conversation import turn
 from frontdesk.model_gateway.costs import Budget, BudgetError, load_budget
-from frontdesk.model_gateway.factory import pinned_location
+from frontdesk.model_gateway.factory import endpoint_name
 from frontdesk.model_gateway.metering import Meter
 from frontdesk.model_gateway.routes import (
     CHAT_PROVIDERS,
@@ -105,7 +106,7 @@ def chat_run_id(now: datetime) -> str:
 def live_banner(route: ModelRoute, budget: Budget, *, spent_usd: float) -> str:
     """The line before the first prompt: where the messages go, who pays, and the rule."""
     return (
-        f"Live: {route.model_name} on Vertex AI {pinned_location(route)}, "
+        f"Live: {route.model_name} on {endpoint_name(route)}, "
         f"metered against {budget.path} ({eur_left(budget, spent_usd):.2f} EUR left of "
         f"{budget.config.cap_eur:.2f} EUR). {NOTICE}"
     )
@@ -205,7 +206,7 @@ def _converse(
     runtime = build_runtime(
         deployment, env_file, data_class=DataClass.EVALUATION, wrap_model=meter.wrap
     )
-    check_access(route, settings.gcp_project)
+    check_access(route, settings.gcp_project, route_api_key(settings, route))
     meter.check_ledger()  # the last gate before the first paid request
     typer.echo(live_banner(route, budget, spent_usd=costs.spent_before_usd))
     typer.echo(f"{deployment.pack.name} ({deployment.pack.profile}) — type 'exit' to quit")

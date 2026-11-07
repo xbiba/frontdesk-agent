@@ -6,7 +6,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -72,6 +72,15 @@ class Settings(BaseSettings):
     calendar_impersonate: str | None = None
     # cal.com's API key: in the environment only, never in a committed env file.
     calcom_api_key: SecretStr | None = None
+    # Anthropic's API key for the `anthropic` routes: in the environment in development only
+    # (ANTHROPIC_API_KEY, or FRONTDESK_ANTHROPIC_API_KEY), never in a committed file; from Secret
+    # Manager (frontdesk-anthropic-api-key) in production.
+    anthropic_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "FRONTDESK_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY", "anthropic_api_key"
+        ),
+    )
     secrets_backend: SecretsBackend = SecretsBackend.ENV
     secrets_project: str | None = None  # the project of Secret Manager; else gcp_project
     calcom_base_url: str = "https://api.cal.com"

@@ -61,3 +61,25 @@ def test_a_secret_that_cannot_be_read_names_itself_and_never_a_value() -> None:
     client = _client(httpx2.Response(403, json={"error": "denied"}), [])
     with pytest.raises(SecretUnavailableError, match="frontdesk-calcom-api-key: status 403"):
         read_secret(settings, "calcom_api_key", token=lambda: "t0ken", client=client)
+
+
+def test_in_development_the_anthropic_key_comes_from_anthropic_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-dev")
+    assert read_secret(_settings(), "anthropic_api_key") == "sk-ant-dev"
+
+
+def test_in_production_the_anthropic_key_is_frontdesk_anthropic_api_key() -> None:
+    seen: list[httpx2.Request] = []
+    data = base64.b64encode(b"sk-ant-prod").decode()
+    client = _client(httpx2.Response(200, json={"payload": {"data": data}}), seen)
+    settings = _settings(secrets_backend=SecretsBackend.GCP, gcp_project="demo-clinic")
+    value = read_secret(settings, "anthropic_api_key", token=lambda: "t0ken", client=client)
+    assert value == "sk-ant-prod"
+    assert seen[0].url.path.endswith("/secrets/frontdesk-anthropic-api-key/versions/latest:access")
+
+
+def test_the_anthropic_key_is_never_shown_with_the_settings() -> None:
+    settings = _settings(anthropic_api_key=SecretStr("sk-ant-hidden"))
+    assert "sk-ant-hidden" not in repr(settings)

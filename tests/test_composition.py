@@ -21,7 +21,13 @@ from frontdesk.booking.calcom import CalcomScheduler
 from frontdesk.booking.calendar import FixtureCalendar
 from frontdesk.booking.google_calendar import GoogleCalendar
 from frontdesk.booking.scheduler import CalendarScheduler
-from frontdesk.composition import Deployment, build_scheduler, build_turn_runtime, open_deployment
+from frontdesk.composition import (
+    Deployment,
+    build_scheduler,
+    build_turn_runtime,
+    model_api_key,
+    open_deployment,
+)
 from frontdesk.conversation.state import ConversationState
 from frontdesk.conversation.turn import TurnOutcome, handle_message
 from frontdesk.knowledge.embedders import HashEmbedder, NoEmbedder
@@ -726,3 +732,42 @@ def test_a_deployment_without_an_embedder_never_has_documents_to_search(
     )
     with pytest.raises(ValueError, match="no embedder to search them"):
         build_turn_runtime(deployment, data_class=DataClass.EVALUATION)
+
+
+@pytest.mark.db
+def test_the_haiku_route_builds_its_model_with_anthropics_key(
+    activate_pack: Activate,
+    app_url: str,
+    clinic_pack: BusinessPack,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Haiku on Anthropic's API (2026-11-07): the key is read as the deployment's other secrets are,
+    # and the route has no fallback and no second try: one model for the whole turn.
+    built: list[tuple[str, str | None]] = []
+
+    def build(route: ModelRoute, *, gcp_project: str | None, api_key: str | None = None) -> Model:
+        built.append((route.route_id, api_key))
+        return FunctionModel(lambda messages, info: ModelResponse(parts=[]))
+
+    monkeypatch.setattr("frontdesk.composition.build_live_model", build)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-dev")
+    deployment = _deployment(
+        clinic_pack,
+        activate_pack(clinic_pack),
+        app_url=app_url,
+        model_route="anthropic-haiku-5-5",
+        conversation="agent",
+    )
+    runtime = build_turn_runtime(deployment)
+    assert runtime.reception is not None
+    assert built == [("anthropic-haiku-5-5", "sk-ant-dev")]
+
+
+def test_the_haiku_route_without_a_key_is_refused_by_name() -> None:
+    settings = Settings(model_route="anthropic-haiku-5-5")
+    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
+        model_api_key(settings, ROUTES["anthropic-haiku-5-5"])
+
+
+def test_a_vertex_route_needs_no_anthropic_key() -> None:
+    assert model_api_key(Settings(), ROUTES["vertex-eu-gemini-flash"]) is None

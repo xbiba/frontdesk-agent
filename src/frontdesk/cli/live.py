@@ -30,6 +30,7 @@ from frontdesk.cli.live_common import (
     eur_left,
     refuse_environment_overrides,
     refuse_retired,
+    route_api_key,
     spent_usd,
 )
 from frontdesk.cli.runtime import build_runtime, fail
@@ -52,7 +53,7 @@ from frontdesk.live_eval.records import (
 from frontdesk.live_eval.report import criteria, summarize, write_run_reports
 from frontdesk.live_eval.runner import RunProgress, run_live_eval
 from frontdesk.model_gateway.costs import Budget, BudgetError, load_budget
-from frontdesk.model_gateway.factory import pinned_location
+from frontdesk.model_gateway.factory import require_pinned
 from frontdesk.model_gateway.metering import (
     BREAKER_ATTEMPTS,
     STOP_BUDGET,
@@ -127,7 +128,7 @@ def evaluation_route(route_id: str) -> ModelRoute:
                     f"model route '{route_id}' cannot answer messages: its provider is "
                     f"{route.provider}"
                 )
-            pinned_location(route)
+            require_pinned(route)
     except UnapprovedRouteError as error:
         raise fail(str(error)) from error
     refuse_retired(route)
@@ -292,7 +293,7 @@ def _start(run: _Run, *, limit: int | None, yes: bool) -> RunProgress:
     """The checks that need the network, the plan and the question, then the run itself."""
     pending = _pending(run, limit)
     if pending and run.meter is not None:
-        check_access(run.route, run.settings.gcp_project)
+        check_access(run.route, run.settings.gcp_project, route_api_key(run.settings, run.route))
     _show_plan(run, pending)
     if pending:
         if not yes and not typer.confirm("Start the run?", default=False):

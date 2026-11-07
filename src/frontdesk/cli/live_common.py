@@ -13,14 +13,18 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 
 from frontdesk.cli.runtime import fail
+from frontdesk.composition import model_api_key
 from frontdesk.model_gateway.access import (
     RouteAccessError,
+    check_anthropic_access,
     check_route_access,
     environment_overrides,
 )
 from frontdesk.model_gateway.costs import Budget, BudgetError
 from frontdesk.model_gateway.metering import PREFLIGHT_KIND
 from frontdesk.model_gateway.routes import ModelRoute, UnapprovedRouteError
+from frontdesk.secrets import SecretUnavailableError
+from frontdesk.settings import Settings
 
 
 def refuse_environment_overrides(environ: Mapping[str, str] | None = None) -> None:
@@ -43,14 +47,30 @@ def refuse_retired(route: ModelRoute) -> None:
         )
 
 
-def check_access(route: ModelRoute, gcp_project: str | None) -> None:
+def check_access(route: ModelRoute, gcp_project: str | None, api_key: str | None = None) -> None:
     """Send the free request that proves the credentials, the API and the model at the route's
-    pinned endpoint; a failure is an `error:` line that says what to do."""
+    pinned endpoint; a failure is an `error:` line that says what to do. A route on Anthropic's own
+    API is proved with its key (`api_key`), and needs no Google project."""
+    if route.provider == "anthropic":
+        try:
+            asyncio.run(check_anthropic_access(route, api_key=api_key))
+        except (RouteAccessError, ValueError) as error:
+            raise fail(str(error)) from error
+        return
     if gcp_project is None or not gcp_project.strip():
         raise fail(f"FRONTDESK_GCP_PROJECT is required for the {route.route_id} route")
     try:
         asyncio.run(check_route_access(route, gcp_project=gcp_project))
     except (RouteAccessError, UnapprovedRouteError) as error:
+        raise fail(str(error)) from error
+
+
+def route_api_key(settings: Settings, route: ModelRoute) -> str | None:
+    """The key a route on Anthropic's own API is proved with; None for any other route. A key that
+    cannot be read is an `error:` line that names it, never its value."""
+    try:
+        return model_api_key(settings, route)
+    except (ValueError, SecretUnavailableError) as error:
         raise fail(str(error)) from error
 
 
